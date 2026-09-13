@@ -1,0 +1,1354 @@
+{
+  "t2-EXAMPLE-ust-curve-1m": {
+    "card_id": "t2-EXAMPLE-ust-curve-1m",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.88
+  },
+  "t2-F1-ai-mom-2024": {
+    "card_id": "t2-F1-ai-mom-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.86
+  },
+  "t2-F1-aud-on-hold-2016": {
+    "card_id": "t2-F1-aud-on-hold-2016",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F1-cad-boc-2017": {
+    "card_id": "t2-F1-cad-boc-2017",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.9
+  },
+  "t2-F1-chf-highly-valued-2021": {
+    "card_id": "t2-F1-chf-highly-valued-2021",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.05
+  },
+  "t2-F1-conflicting-texts-2024": {
+    "card_id": "t2-F1-conflicting-texts-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.79
+  },
+  "t2-F1-considerable-period-2003": {
+    "card_id": "t2-F1-considerable-period-2003",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.92
+  },
+  "t2-F1-conundrum-2005": {
+    "card_id": "t2-F1-conundrum-2005",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.79
+  },
+  "t2-F1-cpi-glidepath-2023": {
+    "card_id": "t2-F1-cpi-glidepath-2023",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.75
+  },
+  "t2-F1-dkk-peg-2019": {
+    "card_id": "t2-F1-dkk-peg-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F1-eur-range-2017": {
+    "card_id": "t2-F1-eur-range-2017",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F1-fed-put-2019": {
+    "card_id": "t2-F1-fed-put-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.95
+  },
+  "t2-F1-greater-confidence-2024": {
+    "card_id": "t2-F1-greater-confidence-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.95
+  },
+  "t2-F1-hawkish-cut-2024": {
+    "card_id": "t2-F1-hawkish-cut-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.92
+  },
+  "t2-F1-jpy-ycc-flex-2018": {
+    "card_id": "t2-F1-jpy-ycc-flex-2018",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F1-liftoff-telegraph-2015": {
+    "card_id": "t2-F1-liftoff-telegraph-2015",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.92
+  },
+  "t2-F1-measured-pace-2004": {
+    "card_id": "t2-F1-measured-pace-2004",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.78
+  },
+  "t2-F1-normalization-2017": {
+    "card_id": "t2-F1-normalization-2017",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.86
+  },
+  "t2-F1-patient-dropped-2015": {
+    "card_id": "t2-F1-patient-dropped-2015",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.87
+  },
+  "t2-F1-pause-2006": {
+    "card_id": "t2-F1-pause-2006",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.98
+  },
+  "t2-F1-qe3-end-2014": {
+    "card_id": "t2-F1-qe3-end-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.9
+  },
+  "t2-F1-sahm-watch-2024": {
+    "card_id": "t2-F1-sahm-watch-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.81
+  },
+  "t2-F1-third-cut-2019": {
+    "card_id": "t2-F1-third-cut-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.92
+  },
+  "t2-F1-ust-positioning-2018": {
+    "card_id": "t2-F1-ust-positioning-2018",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.88
+  },
+  "t2-F2-abenomics-2012": {
+    "card_id": "t2-F2-abenomics-2012",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.99
+  },
+  "t2-F2-act-as-appropriate-2019": {
+    "card_id": "t2-F2-act-as-appropriate-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F2-aud-taper-2013": {
+    "card_id": "t2-F2-aud-taper-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.88
+  },
+  "t2-F2-boj-thin-signal-2014": {
+    "card_id": "t2-F2-boj-thin-signal-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.96
+  },
+  "t2-F2-cnh-stress-2015": {
+    "card_id": "t2-F2-cnh-stress-2015",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F2-cnh-tradewar-2018": {
+    "card_id": "t2-F2-cnh-tradewar-2018",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F2-considerable-removal-2004": {
+    "card_id": "t2-F2-considerable-removal-2004",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.83
+  },
+  "t2-F2-credit-crunch-2007": {
+    "card_id": "t2-F2-credit-crunch-2007",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F2-cut-sizing-2024": {
+    "card_id": "t2-F2-cut-sizing-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.03
+  },
+  "t2-F2-draghi-precommit-2014": {
+    "card_id": "t2-F2-draghi-precommit-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F2-ecb-qe-telegraph-2014": {
+    "card_id": "t2-F2-ecb-qe-telegraph-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F2-eur-parity-2022": {
+    "card_id": "t2-F2-eur-parity-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.01
+  },
+  "t2-F2-fragile-five-brl-2013": {
+    "card_id": "t2-F2-fragile-five-brl-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F2-fragile-five-inr-2013": {
+    "card_id": "t2-F2-fragile-five-inr-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F2-higher-for-longer-2023": {
+    "card_id": "t2-F2-higher-for-longer-2023",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F2-nirp-paradox-2016": {
+    "card_id": "t2-F2-nirp-paradox-2016",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.82
+  },
+  "t2-F2-opec-cad-2014": {
+    "card_id": "t2-F2-opec-cad-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F2-powell-pivot-2019": {
+    "card_id": "t2-F2-powell-pivot-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F2-qe2-jackson-hole-2010": {
+    "card_id": "t2-F2-qe2-jackson-hole-2010",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F2-shunto-nirp-exit-2024": {
+    "card_id": "t2-F2-shunto-nirp-exit-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F2-some-pain-2022": {
+    "card_id": "t2-F2-some-pain-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F2-taper-begins-2013": {
+    "card_id": "t2-F2-taper-begins-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.01
+  },
+  "t2-F2-taper-testimony-2013": {
+    "card_id": "t2-F2-taper-testimony-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F2-time-has-come-2024": {
+    "card_id": "t2-F2-time-has-come-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.88
+  },
+  "t2-F2-trade-war-escalation-2019": {
+    "card_id": "t2-F2-trade-war-escalation-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.87
+  },
+  "t2-F2-trichet-alertness-2008": {
+    "card_id": "t2-F2-trichet-alertness-2008",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.82
+  },
+  "t2-F2-whatever-it-takes-2012": {
+    "card_id": "t2-F2-whatever-it-takes-2012",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.81
+  },
+  "t2-F3-bear-flattener-2022": {
+    "card_id": "t2-F3-bear-flattener-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F3-boj-ust-channel-2023": {
+    "card_id": "t2-F3-boj-ust-channel-2023",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.98
+  },
+  "t2-F3-brexit-joint-2016": {
+    "card_id": "t2-F3-brexit-joint-2016",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.95
+  },
+  "t2-F3-conundrum-joint-2005": {
+    "card_id": "t2-F3-conundrum-joint-2005",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.97
+  },
+  "t2-F3-covid-curve-2020": {
+    "card_id": "t2-F3-covid-curve-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.87
+  },
+  "t2-F3-cpi-shock-cross-2022": {
+    "card_id": "t2-F3-cpi-shock-cross-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F3-divergence-2014": {
+    "card_id": "t2-F3-divergence-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.86
+  },
+  "t2-F3-dollar-squeeze-2020": {
+    "card_id": "t2-F3-dollar-squeeze-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.88
+  },
+  "t2-F3-dollar-vortex-2022": {
+    "card_id": "t2-F3-dollar-vortex-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.02
+  },
+  "t2-F3-dots-vs-oil-2014": {
+    "card_id": "t2-F3-dots-vs-oil-2014",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.9
+  },
+  "t2-F3-election-2024-joint": {
+    "card_id": "t2-F3-election-2024-joint",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.9
+  },
+  "t2-F3-fragile-five-joint-2013": {
+    "card_id": "t2-F3-fragile-five-joint-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.06
+  },
+  "t2-F3-funding-flip-2024": {
+    "card_id": "t2-F3-funding-flip-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.02
+  },
+  "t2-F3-hiking-year-curve-2018": {
+    "card_id": "t2-F3-hiking-year-curve-2018",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.97
+  },
+  "t2-F3-inversion-persistence-2019": {
+    "card_id": "t2-F3-inversion-persistence-2019",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F3-oil-fx-split-2022": {
+    "card_id": "t2-F3-oil-fx-split-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F3-rates-into-factors-2022": {
+    "card_id": "t2-F3-rates-into-factors-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F3-safe-haven-paradox-2011": {
+    "card_id": "t2-F3-safe-haven-paradox-2011",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.95
+  },
+  "t2-F3-scandies-stress-2022": {
+    "card_id": "t2-F3-scandies-stress-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.0
+  },
+  "t2-F3-taper-steepener-2013": {
+    "card_id": "t2-F3-taper-steepener-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.96
+  },
+  "t2-F3-term-premium-steepener-2023": {
+    "card_id": "t2-F3-term-premium-steepener-2023",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.9
+  },
+  "t2-F3-vaccine-rotation-2020": {
+    "card_id": "t2-F3-vaccine-rotation-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.87
+  },
+  "t2-F4-aud-gfc-2008": {
+    "card_id": "t2-F4-aud-gfc-2008",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F4-chf-floor-strain-2015": {
+    "card_id": "t2-F4-chf-floor-strain-2015",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F4-china-panic-2016": {
+    "card_id": "t2-F4-china-panic-2016",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.87
+  },
+  "t2-F4-china-stress-mkt-2015": {
+    "card_id": "t2-F4-china-stress-mkt-2015",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.84
+  },
+  "t2-F4-covid-mkt-2020": {
+    "card_id": "t2-F4-covid-mkt-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F4-covid-nfp-2020": {
+    "card_id": "t2-F4-covid-nfp-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.96
+  },
+  "t2-F4-covid-rates-2020": {
+    "card_id": "t2-F4-covid-rates-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.95
+  },
+  "t2-F4-cpi-friday-2022": {
+    "card_id": "t2-F4-cpi-friday-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.84
+  },
+  "t2-F4-cpi-vintage-2022": {
+    "card_id": "t2-F4-cpi-vintage-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.94
+  },
+  "t2-F4-eur-warnings-2022": {
+    "card_id": "t2-F4-eur-warnings-2022",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.96
+  },
+  "t2-F4-factor-stress-2008": {
+    "card_id": "t2-F4-factor-stress-2008",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.96
+  },
+  "t2-F4-funding-stress-10y-2008": {
+    "card_id": "t2-F4-funding-stress-10y-2008",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F4-funding-stress-2y-2008": {
+    "card_id": "t2-F4-funding-stress-2y-2008",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.97
+  },
+  "t2-F4-gbp-brexit-2016": {
+    "card_id": "t2-F4-gbp-brexit-2016",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.01
+  },
+  "t2-F4-gbp-conference-2016": {
+    "card_id": "t2-F4-gbp-conference-2016",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.81
+  },
+  "t2-F4-hike-cycle-2021Q4b": {
+    "card_id": "t2-F4-hike-cycle-2021Q4b",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.02
+  },
+  "t2-F4-hml-covid-2020": {
+    "card_id": "t2-F4-hml-covid-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.93
+  },
+  "t2-F4-jpy-carry-2007": {
+    "card_id": "t2-F4-jpy-carry-2007",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F4-jpy-crowding-2024": {
+    "card_id": "t2-F4-jpy-crowding-2024",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F4-mkt-selloff-2011": {
+    "card_id": "t2-F4-mkt-selloff-2011",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.86
+  },
+  "t2-F4-momentum-reversal-2009": {
+    "card_id": "t2-F4-momentum-reversal-2009",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.93
+  },
+  "t2-F4-nok-covid-2020": {
+    "card_id": "t2-F4-nok-covid-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.96
+  },
+  "t2-F4-powell-december-2018": {
+    "card_id": "t2-F4-powell-december-2018",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.91
+  },
+  "t2-F4-qe1-expansion-2009": {
+    "card_id": "t2-F4-qe1-expansion-2009",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.83
+  },
+  "t2-F4-quant-crowding-2007": {
+    "card_id": "t2-F4-quant-crowding-2007",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.85
+  },
+  "t2-F4-short-vol-2018": {
+    "card_id": "t2-F4-short-vol-2018",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.79
+  },
+  "t2-F4-svb-whiplash-2023": {
+    "card_id": "t2-F4-svb-whiplash-2023",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.89
+  },
+  "t2-F4-taper-warning-2013": {
+    "card_id": "t2-F4-taper-warning-2013",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.99
+  },
+  "t2-F4-ust-downgrade-watch-2011": {
+    "card_id": "t2-F4-ust-downgrade-watch-2011",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.88
+  },
+  "t2-F4-ust10y-supply-2023": {
+    "card_id": "t2-F4-ust10y-supply-2023",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 2.98
+  },
+  "t2-F4-vaccine-timeline-2020": {
+    "card_id": "t2-F4-vaccine-timeline-2020",
+    "admissible": true,
+    "gates": {
+      "g0_integrity": "pass",
+      "g1_schema": "pass",
+      "g2_cutoff_resource": "pass",
+      "g3_domain_semantics": "pass"
+    },
+    "scored": false,
+    "note": "no --realized supplied: gates only, no score",
+    "elapsed_s": 3.05
+  }
+}

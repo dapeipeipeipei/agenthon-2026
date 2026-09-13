@@ -1,0 +1,27 @@
+# Cloned upstream competition repos — not ours, re-clone from github.com/Agenthon-2026
+Agenthon2026-public/
+track1-coding-public/
+track2-forecasting-public/
+track3-simulation-public/
+track4-analysis-public/
+
+# Local environment
+.venv/
+__pycache__/
+*.pyc
+
+# Generated forecast outputs (regenerate with run_all_gates.py; ~7 MB each)
+t2-work/out/
+t2-work/out_*/
+
+# Derived realized values (regenerate with realized.py)
+t2-work/realized/
+
+# Sweep logs
+t2-work/*_log*.txt
+t2-work/grid_log_*.txt
+
+# Per-variant sweep bookkeeping (every run was 104/104; the summary tables carry the findings).
+# Per-unit ratios are kept as .csv — the .json duplicates them.
+t2-work/gates_out_*.json
+t2-work/scores_*.json
