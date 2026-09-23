@@ -10,6 +10,9 @@ Quantitative Analysts）和 Stony Brook 大学的 CEWIT 主办，NVIDIA 白金�
 **时间线**：注册截止 2026-09-28 23:59 UTC · 最终评测 09-29 至 10-12 · 复现审核 10-13 至 10-25 ·
 NeurIPS Atlanta 12-09 至 12-13 获奖队展示。
 
+> **当前进度和下一步看 [STATUS.md](STATUS.md)**，它是每次开工的入口。本 README 讲的是
+> 「这是什么、怎么跑、为什么这么设计」。
+
 > 本仓库**只包含我们自己写的东西**。四个上游赛道工具包（约 900 MB）作为同级目录存在但已 gitignore，
 > 需要时从 `github.com/Agenthon-2026` 重新克隆到本仓库的**父目录**下。
 
