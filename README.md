@@ -12,15 +12,17 @@
 按 CRPS 打分并**除以一个不读文本的官方基线（M0）**，1.0 = 打平，越低越好。**副攻 Track 4**（带证据引用的表格预测）。
 提交物是一个 Docker 镜像，主办方在离线沙盒里跑；上传的是用官方工具 `qfbench2 submission pack` 打出来的 zip。
 
-### 现在的状态（2026-10-06）
+### 现在的状态（2026-10-06 晚）
 
-- **T2 引擎 v3 已完成并冻结**（09-13）：纯统计 + 确定性关键词事件检测，不调大模型；104/104 道公开题全部可接纳、零回退；
-  本地相对官方参考 CLI 的 ratio **0.900**（F1 0.804 / F2 1.002 / F3 0.872 / F4 0.907）。
-  ⚠ 这个分母不是排行榜的 M0，按 M0 重新评估是 v4 线在做的事（见 WORKLOG §9、§11.2）。
-- **截止已延期到 10-12**：Dev 在 **10-12 23:59 AoE** 关闭，但**新的 Dev 运行在 10-12 20:00 UTC 之后不再启动**；Final + Verification 10-13 → 10-25，每赛道**只交一份**。
-- **还从没真正上传过一次。** 镜像打包、提交描述文件、zip 打包正在 10-06 冲刺里做。
-- **10-06 起五条线并行**：T2 规则合规、T2 模型 v4、Docker 打包、Track 4、F4 事件表核对 —— 全部进行中，见 [WORKLOG.md §11](WORKLOG.md#11-2026-10-06-冲刺进行中)。
-- 上游规则 09-16 之后变了很多（BYO 撤销、模型预算改为每题 25 次请求、工具包钉 v2.6.0、Dev 榜只是练习板……），见 [WORKLOG.md §8](WORKLOG.md#8-09-16--10-02-上游规则变化很多很重要)。
+- **T2 默认引擎是 v4**（`t2-work/engine/v4.py`）：以 M0 同样的信息（最近 300 行的均值和协方差）为骨架，按题卡上印的题族加一行常数
+  （F1 宽度 1.0；F2 = 基线；F3 漂移 ×0.5；F4 宽度 1.1 + 20% 路径 ×1.5 倍波动并往压力方向偏 1 个标准差）。不调大模型。
+  **按榜单口径 5 种子样本内 0.939**（F1 0.969 / F2 1.007 / F3 0.932 / F4 0.870），选参流程严格留出 0.937（留一时代）/ 0.993（前向），
+  独立审计确认度量与官方源码逐卡一致。
+- **旧的「v3 = 0.900」作废**：那是除以参考 CLI 的内部数字；按榜单口径 v3 = **1.139**，比基线还差。来龙去脉见 [WORKLOG §9、§11.2](WORKLOG.md#112-t2-模型-v4--完成默认-profile)。
+- **两个赛道的镜像都已构建并测试**（在 GitHub Actions 里，本机 Docker 起不来）：T2 镜像内 104/104、T4 镜像内 11/11，digest 已填进提交描述文件。
+  **但还从没上传过**——剩下的全是只有人能做的步骤（见下表）。
+- **截止**：新的 Dev 运行在 **10-12 20:00 UTC 之后不再启动**（Dev 10-12 23:59 AoE 关闭）；Final + Verification 10-13 → 10-25，每赛道**只交一份**。
+- **Track 4** 用确定性、不调模型的程序：11/11 可接纳、0 条虚假引用，近似本地分 0.68 vs 官方基线 0.46。10-06 五条线全部完成，见 [WORKLOG §11](WORKLOG.md#11-2026-10-06-冲刺已完成)。
 
 ### 东西在哪
 
@@ -31,14 +33,17 @@ agenthon/
 ├── STATUS.md        ← 倒计时、当前状态、下一步、阻塞项（每次开工的入口）
 ├── research/        ← 09-08 四个赛道的调研报告（英文）+ F4 危机事件表（中文）
 ├── t2-work/         ← Track 2 全部代码
-│   ├── engine/      ←   预测引擎（v1/v2/v3，v4 在做）
+│   ├── engine/      ←   预测引擎（默认 v4；v1–v3 保留作回退和对照）
 │   ├── Dockerfile   ←   提交镜像
 │   ├── pack/        ←   打包、本地验收、填 digest、校验 zip 的脚本（pack/README.md 是操作手册）
-│   ├── submission/  ←   submission.json（提交描述文件；不含任何密钥）
+│   ├── submission/  ←   submission.json / submission.final.json（已填 digest；不含任何密钥）、CHECKLIST.md（规则逐条对照）
 │   ├── run_all_gates.py / realized.py / score_local.py   ← 本地打分台
-│   ├── v4_eval.py   ←   按排行榜方式（除以 M0）快速评估
+│   ├── V4_NOTES.md / AUDIT_T2.md / v4_experiments.csv  ← v4 的方法、独立审计、全部实验
+│   ├── v4_eval.py / audit_metric.py  ←   按排行榜方式（除以 M0）打分
 │   └── grid_v2.py / ablate_v3.py / *_table.csv / scores_*.csv / ablation_*_log.txt  ← 实验与证据
-├── t4-work/         ← Track 4 参赛代码（agent/、harness/、submission/，STATUS.md）
+├── t4-work/         ← Track 4 参赛代码（PLAN.md、STATUS.md、agent/、harness/、submission/）
+├── .github/workflows/  ← t2-image.yml、t4-image.yml：云端构建镜像 + 平台同等限制下全量测试 + 推 GHCR
+├── LICENSE          ← Apache-2.0（与描述文件一致）
 └── Agenthon2026-public/  track1…track4-*-public/   ← 上游官方仓（gitignore，见「环境搭建」）
 ```
 
@@ -47,20 +52,21 @@ agenthon/
 1. **README**（本节就够了，后面按需查）
 2. **[WORKLOG.md](WORKLOG.md)** —— 完整来龙去脉
 3. **[STATUS.md](STATUS.md)** —— 现在做到哪、下一步
-4. **`t2-work/pack/README.md`** —— 怎么 build 镜像、怎么验收、怎么打 zip（Docker 线完成后就位）
-5. **`t4-work/STATUS.md`** —— Track 4 的状态（T4 线完成后就位）
+4. **`t2-work/pack/README.md`** —— 从 CI 构建到上传 zip 的逐步操作手册（中文，每步写了正常输出和出错怎么办）
+5. **`t4-work/STATUS.md`** —— Track 4 的状态与成绩（其中 CI 一节的 digest 已过时，以 `t4-work/submission/submission.json` 为准）
 
-### 截止前必须由「人」来做的事
+### 截止前必须由「人」来做的事（按顺序）
 
-这些事 agent 不能、也不应该代做：
+这些事 agent 不能、也不应该代做。T2 的每一步在 `t2-work/pack/README.md` 第 3–8 步有详细说明。
 
-| # | 事项 | 谁 | 说明 |
+| # | 事项 | 谁 | 怎么做 |
 |---|---|---|---|
-| 1 | **批准 Wenshuo 的入队申请** | 队长 Yuren | 网站上操作。上次检查（09-22）还是 Pending Approval。**不入队就不算参赛、不能上榜、不能获奖** |
-| 2 | **确认队伍编号**（team number） | 任一队员 | `pack` 需要 `--team-number`。我们记录的是 299，打包前请在网站上再核对一次 |
-| 3 | **在隐藏提示符里输入 Team Key** | 持有 Team Key 的人 | 运行 `qfbench2 submission pack ...` 时它会在隐藏提示符里要（也可用 `--team-key-file`）。**Team Key 等同密码：不要写进任何文件、不要贴到聊天里、不要告诉任何 agent，agent 也不会问** |
-| 4 | **在 CodaBench 上传 zip** | 队伍指定的 CodaBench 账号持有人 | 赛道 CodaBench 页面链接在 agenthon.net 参赛公告里（需登录）。T2 每天最多 5 次、Dev 共 20 次；**最晚在 10-12 20:00 UTC 前让最后一次 Dev 运行启动** |
-| 5 | **Final 阶段（10-13 → 10-25）指定唯一一份 final 提交** | 同上 | 每赛道只能一份；同分时先上传者胜 |
+| 1 | **把两个 GHCR 镜像包改成公开** | dapeipeipeipei GitHub 账号 | <https://github.com/users/dapeipeipeipei/packages/container/package/jinpei-t2> 和 `.../jinpei-t4` → Package settings → Danger Zone → Change visibility → Public。主办方不带账号拉镜像，私有包 = 整次提交白费 |
+| 2 | **验证不登录也能拉到** | 同上 | `bash t2-work/pack/verify_anonymous_pull.sh --digest sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74`；T4：`bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t4 --digest sha256:bf2a164756244a4ede12e5ea92bf164b60f47c2ba664f9cd955c117f8c68e01c`。最后一行要是 `PASS` |
+| 3 | **队长批准 Wenshuo 的入队申请，并确认队伍编号** | 队长 Yuren | 网站上操作。上次检查（09-22）还是 Pending Approval。**不入队就不算参赛、不能上榜、不能获奖**。`pack` 需要 `--team-number`，记录是 299，以网站为准 |
+| 4 | **打包，在隐藏提示符里输入 Team Key** | 持有 Team Key 的人 | T2：`bash t2-work/pack/pack.sh --team-number <N> --digest sha256:c558843f…7d74`（完整 digest 见第 2 行），出现 `Team Key (hidden):` 时输入，最后一行 `READY: ... t2-work/pack/dist/submission.zip`。T4：`t2-work/pack/.venv-docker/Scripts/qfbench2 submission pack --descriptor t4-work/submission/submission.json --team-number <N> --out <T4 的 zip 路径>`，同样在隐藏提示符输入。**Team Key 等同密码：不进命令行、不进文件、不贴聊天、不告诉任何 agent，agent 也不会问** |
+| 5 | **在 CodaBench 上传两个 zip** | 队伍指定的 CodaBench 账号持有人 | 各赛道 CodaBench 页面（链接在 agenthon.net 参赛公告里），阶段选 Development。每赛道先用 **1–2 次** Dev 上传确认线上能跑、逐题全部可接纳（每天 5 次、共 20 次；平台标 `Failed` 的不扣）。**最后一次 Dev 运行必须在 10-12 20:00 UTC 前启动** |
+| 6 | **Final 阶段（10-13 → 10-25）指定唯一一份 final 提交** | 同上 | 只交 Dev 上真实跑过且逐题可接纳的版本。T2：`bash t2-work/pack/pack.sh --team-number <N> --digest sha256:c558843f…7d74 --descriptor t2-work/submission/submission.final.json --out t2-work/pack/dist/submission-final.zip`；T4 目前只有 Dev 描述文件，需要先准备一份 `competition_id` 为 `agenthon2026-analysis-final` 的。同分时先上传者胜 |
 
 ---
 
@@ -277,7 +283,7 @@ S = 0.5 × CRPS_marginal + 0.3 × variogram(p=0.5) + 0.2 × pinball_tail
 | 归一化 | 三个分量**分别**除以 M0 的同一分量再加权 | 整个复合分相除 |
 | 跨题聚合 | **算术**平均，裁剪到 [0, 4] | **几何**平均 |
 
-所以 README 里 v1/v2/v3 的 0.9xx 只是内部指标，不等于榜单分数——按 M0 口径，v1–v3 在平静的 F1 题上反而输给基线（v4 线的发现）。按榜单口径评估用 `t2-work/v4_eval.py`。
+所以 README 里 v1/v2/v3 的 0.9xx 只是内部指标，不等于榜单分数——按 M0 口径，v1–v3 在平静的 F1 题上反而输给基线（v3 = 1.139）。按榜单口径评估用 `t2-work/v4_eval.py`。
 
 ### 第四层：聚合
 
@@ -293,19 +299,22 @@ S = 0.5 × CRPS_marginal + 0.3 × variogram(p=0.5) + 0.2 × pinball_tail
 
 ## 我们的引擎
 
-代码在 `t2-work/engine/`，只依赖 numpy / pandas / pyarrow（v3 冻结时约 1300 行；10-06 起合规线和 v4 线正在改，行数以代码为准）。
+代码在 `t2-work/engine/`，只依赖 numpy / pandas / pyarrow。
 
 ```
 engine/
 ├── io.py         读面板、题卡、forecast_spec.json（月度目标期），写三个输出文件、rationale 账本
-├── model.py      模拟核心：块自助采样、尺度混合、情景混合
+├── v4.py         v4：M0 式骨架 + 按题族的常数（默认）
+├── cardinfo.py   从题卡读题族、目标类型、月度观测月（不读题号、不读任何结果）
+├── model.py      模拟核心与 profile 表：v1–v3 的块自助采样、尺度混合、情景混合；v4 → v3 → v2 回退
 ├── events.py     确定性语料事件检测器
 ├── assets.py     资产 → 压力方向映射表
-├── house.py      （v4 线新增，进行中）House 模型调用层，端点不可用时必须无损退化
-└── forecast.py   CLI、profile 选择、回退链
+├── house.py      House 模型调用层，默认关闭（`JINPEI_USE_HOUSE=1` 且注入 MODEL_* 才导入）
+└── forecast.py   CLI、profile 选择、回退链、600 秒看门狗
 ```
 
-三档 profile，用 `--profile` 选，**默认 v3**。
+四档 profile，用 `--profile` 选，**默认 v4**。下面先按历史顺序讲 v1–v3（09-13 的工作），最后讲为什么换成 v4。
+⚠ v1–v3 小节里的分数都是旧的内部口径（除以参考 CLI），按榜单口径它们都输给基线。
 
 ### v1 — 统计骨架
 
@@ -337,7 +346,7 @@ v2 加了两件事：
 参数从 18 组网格里选（`t2-work/grid_v2_table.csv`）。选的不是总分最好的那组，而是**四个题族全部
 不超过 1.0** 的那组，因为封存题集的危机题比例未知，不能押一头。
 
-### v3 — 事件感知（当前默认）
+### v3 — 事件感知（09-13 默认，10-06 被 v4 取代）
 
 v2 解决了危机题不输，但还是赢不了。根本矛盾：**统一放宽无法同时服务 F1 和 F4**。同一个设置下
 F4 仍然偏窄（|z|>1.64 占 47%）而 F1 已经偏宽（占 3%）。
@@ -374,9 +383,30 @@ v3 的思路：**只在语料说有事的时候才放宽**。这是一个**确�
 事件响应按 `1/sqrt(n_cells)` 衰减。加上这一条之后，v2 的全局宽度 1.15 可以退回 1.0 —— 放宽完全
 由事件层按需提供。
 
+### v4 — 对齐 M0 的骨架 + 按题族校准（当前默认）
+
+10-06 发现排行榜的分母是 M0（最近 300 行均值和协方差的联合高斯随机游走），不是参考 CLI。按这个口径 v3 = 1.139，
+输在三处：M0 带漂移而 v3 没有；v3 的尺度混合和事件放宽让平静题过宽；单资产两期限题的联合项只有一个平方差，
+跨期限离散度的任何系统偏差都会让比值爆炸（3 道 F1 题撞到 4.0 截断）。
+
+v4 的思路：**先和 M0 用同样的信息，只在按题族交叉验证证明有用的地方偏离它。**
+
+| 题族 | 宽度 | 尾部混合 | 往压力方向的位移 | 漂移比例 |
+|---|---|---|---|---|
+| F1 | 1.0 | 关 | 0 | 1.0 |
+| F2 | 1.0 | 关 | 0 | 1.0 |
+| F3 | 1.0 | 关 | 0 | **0.5** |
+| F4 | **1.1** | **20% 路径 ×1.5 倍波动** | **1 个标准差**（方向来自 `assets.py`） | 1.0 |
+| 未知题族 | 1.0 | 关 | 0 | 1.0 |
+
+题族从题卡上印的 family 读；`log_return` 目标在 ln(1+r) 上建模；月度题按观测月数步数。
+F1 原选 0.9、F4 原选 1.25，独立审计（`t2-work/AUDIT_T2.md`）的压力测试显示它们是在押「公开卡是事后挑过的」，于是往 1.0 拉。
+F4 的剩余风险：如果封存的 F4 卡完全没有冲击，F4 会输给 M0（k=0 时 1.294）。
+方法、全部实验、试过没用的东西见 `t2-work/V4_NOTES.md` 和 `v4_experiments.csv`。
+
 ### 永不崩溃
 
-回退链 **v3 → v2 → 高斯随机游走**。任何一层抛异常，下一层接手，并把原因写进 rationale 和
+回退链 **v4 → v3 → v2 → 高斯随机游走 → 紧急 N(0, 0.01)**，另有 600 秒 SIGALRM 看门狗强制走快速回退。任何一层抛异常，下一层接手，并把原因写进 rationale 和
 `forecast_meta.json` 的 `engine.fallback_reason`。最坏情况仍然写出三个格式合法的文件并 `exit 0`。
 
 实测过：传一个不存在的资产 id 进去，exit 0，三个文件齐全，`"fallback": true`。
@@ -385,8 +415,27 @@ v3 的思路：**只在语料说有事的时候才放宽**。这是一个**确�
 
 ## 成绩与消融结论
 
-ratio = 我们的复合分 ÷ **官方参考 CLI**（text-blind 随机游走）的复合分，几何均值，**越低越好，1.0 是打平**。
-样本是 90 道能在本地还原出真实值的题。（口径与排行榜不同，见上文「第三层：归一化」；按 M0 的新数字由 v4 线回填。）
+### 榜单口径（10-06 起以这个为准）
+
+每张卡的复合分 ÷ M0 的复合分（三个分量先各自除以 M0 再加权），单卡裁剪到 [0, 4]，90 张可本地还原真实值的卡**算术**平均，越低越好，
+1.000 = M0。由 `t2-work/v4_eval.py` 计算，并被 `t2-work/audit_metric.py`（直接调官方 verifier）独立复核为逐卡零差。
+
+| profile | 总体 | F1 | F2 | F3 | F4 |
+|---|---|---|---|---|---|
+| M0（自检） | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
+| v1 | 1.038 | 1.053 | 1.038 | 1.011 | 1.048 |
+| v2 | 1.173 | 1.783 | 1.084 | 1.065 | 0.940 |
+| v3 | 1.139 | 1.719 | 1.089 | 1.056 | 0.876 |
+| **v4（默认，5 种子平均）** | **0.939** | **0.969** | **1.007** | **0.932** | **0.870** |
+
+v4 的诚实估计：选参流程严格留出 **0.937**（留一时代）/ **0.993**（前向，≤2018 选、≥2019 测）；as-of ≥ 2019 的卡 0.949；
+cluster bootstrap 下 v4 − M0 = −0.078，95% CI [−0.112, −0.044]（审计对首版）。真实期望大概在 0.94 到 0.99 之间。
+F2 仍是 1.00 左右——没有能过验证的确定性文本方向信号。
+
+### 旧的内部口径（09-13，仅作历史记录）
+
+ratio = 我们的复合分 ÷ **官方参考 CLI**（text-blind 随机游走）的复合分，几何均值。样本同为 90 道题。
+**这张表不能当榜单分数看**：同样的 v3 按榜单口径是 1.139。
 
 | profile | 总体 | F1 宏观 | F2 汇率 | F3 多资产 | F4 危机 | 真实值出 90% 区间的比例 |
 |---|---|---|---|---|---|---|
@@ -395,9 +444,9 @@ ratio = 我们的复合分 ÷ **官方参考 CLI**（text-blind 随机游走）�
 | v2 加校准 | 0.939 | 0.842 | 1.006 | 0.874 | 0.999 | 11.4% |
 | **v3 事件感知** | **0.900** | **0.804** | **1.002** | **0.872** | **0.907** | **13.1%** |
 
-理想的「出区间比例」是 10%。v1 总分好看但严重过度自信；v2 用 0.014 的分数换校准；**v3 两样都拿到了**。
+理想的「出区间比例」是 10%。当时的结论是 v3 两样都拿到了——但那是在错误的分母下。
 
-**三档 profile 全部 104/104 可接纳，零回退。**
+**四档 profile 全部 104/104 可接纳，零回退**（v4 在 `--platform-env` 下复核过）。
 
 ### 消融跑出来的三条结论
 
@@ -518,14 +567,15 @@ cd t2-work && ../.venv/Scripts/python -m engine.forecast \
   --asof <题卡里的 data_cutoff> --out out_one/forecast.parquet
 ```
 
-约 0.03 秒。加 `--profile v1|v2|v3` 换档，加 `--help` 看全部旋钮。
+约 2–3 秒（含进程启动）。默认 v4；加 `--profile v1|v2|v3|v4` 换档，加 `--help` 看全部旋钮。
 
 ### 跑遍 104 题并检查四道门（约 5 分钟）
 
 ```bash
-.venv/Scripts/python t2-work/run_all_gates.py --engine engine --out-root t2-work/out_engine_v3
+.venv/Scripts/python t2-work/run_all_gates.py --engine engine --platform-env --out-root t2-work/out_engine_v4
 ```
 
+`--platform-env` 模拟平台的受限网络（`QFBENCH_NETWORK=restricted`、去掉所有 `MODEL_*`），并检查输出目录规则。
 **期望输出：`admissible 104/104  fallbacks 0`。** 这是任何改动的底线，低于这个就是退步。
 
 跑 text-blind 参考实现（生成 baseline 那一列）：
@@ -546,7 +596,17 @@ cd t2-work && ../.venv/Scripts/python -m engine.forecast \
 结果写进 `t2-work/realized/`，覆盖情况写进 `realized_coverage.json`。**90/104 题能覆盖**，
 剩下 14 道是 EM transfer 题、月度宏观题和最晚的两个 as-of，只检查门槛不打分。
 
-### 打分（约 4 秒）
+### 按榜单口径打分（以这个为准）
+
+```bash
+.venv/Scripts/python t2-work/v4_eval.py --out-dir t2-work/out_engine_v4   # 对 CLI 产出打分（除以重建的 M0、算术平均）
+.venv/Scripts/python t2-work/v4_eval.py --profile v4                     # 进程内直接跑某个 profile
+.venv/Scripts/python t2-work/v4_final_eval.py                            # v4 的 5 种子平均与压力测试
+```
+
+默认种子期望 0.9441，5 种子平均 0.9386。独立复核：`t2-work/audit_metric.py score|compare|noise|boot|variants|check-realized`。
+
+### 旧口径打分（除以参考 CLI，约 4 秒，仅作历史对照）
 
 ```bash
 .venv/Scripts/python t2-work/score_local.py \
@@ -600,12 +660,11 @@ ratio、按题族的几何均值，写进 `scores_v3.csv`。
 ### 难但价值最高
 
 7. **F2 的方向判断。** 27 道题，现在全是 1.00。需要从文本里读出「这个货币未来一个月倾向升还是贬」。
-   这是唯一需要大模型的地方：House 模型每题只有 25 次请求，v4 线在评估值不值得用。注意官方警告：文本对中心的影响只敢是
+   这是唯一需要大模型的地方：House 模型每题只有 25 次请求。`engine/house.py` 已写好但默认关闭（没有端点可测）。注意官方警告：文本对中心的影响只敢是
    **标准差的几分之一**，不是几倍；乱加漂移会让分数比不读文本还差。
-8. **镜像化与提交。** 10-06 由 Docker 线在做（`t2-work/Dockerfile`、`t2-work/pack/`）：
-   build `linux/amd64` 镜像、推到公开 registry、用匿名 token 验证真的可拉取（`docker pull` 用的是
-   你自己的凭证，验证不了任何东西）、把 digest 填进 `submission.json` 并封印 descriptor digest、
-   最后由人运行 `qfbench2 submission pack` 打 zip 上传。
+8. **镜像化与提交。** 10-06 已完成到「digest 已填」（`t2-work/Dockerfile`、`t2-work/pack/`、GitHub Actions）。剩下的人工步骤：
+   把 GHCR 包改公开、用匿名 token 验证真的可拉取（`docker pull` 用的是你自己的凭证，验证不了任何东西）、
+   由人运行 `pack.sh` / `qfbench2 submission pack` 打 zip 并上传。见本文开头「截止前必须由人来做的事」。
 
 ---
 
@@ -633,15 +692,19 @@ ratio、按题族的几何均值，写进 `scores_v3.csv`。
 
 ## 未决事项
 
-| 事项 | 状态（2026-10-06） |
+| 事项 | 状态（2026-10-06 晚） |
 |---|---|
-| Yuren 批准入队申请 | **人工待办**，网站上操作（09-22 时 Pending Approval） |
-| 核对 `research/F4-events.md` | 进行中（第五条线） |
-| build 提交镜像、本地容器验收、匿名拉取验证 | 进行中（Docker 线），见 `t2-work/pack/README.md` |
-| 打 zip 并在 CodaBench 上传 | 流程已明确（见「这个比赛在比什么」），**需人工**输入 Team Key 并用队伍指定账号上传 |
-| 按 M0 口径重新评估 + 引擎 v4 | 进行中（v4 线） |
-| F2 的文本方向层 | House 端点已有合约（每题 25 次请求），v4 线评估中 |
-| Track 4（副攻赛道） | 进行中（`t4-work/`）。报告在 `research/T4-analysis.md` |
+| 规则合规（v2.6.0）、月度步数、rationale、看门狗 | **完成**，`t2-work/submission/CHECKLIST.md` |
+| 引擎 v4 + 独立审计 | **完成**，默认 profile |
+| 镜像构建与平台同等限制测试 | **完成**（GitHub Actions），T2 104/104、T4 11/11，digest 已填 |
+| Track 4 | **完成**，`t4-work/STATUS.md` |
+| 核对 `research/F4-events.md` | **完成**，31/31 行改写 |
+| GHCR 包改公开 + 匿名拉取验证 | **人工待办** |
+| 队长批准入队、确认队伍编号 | **人工待办** |
+| 打包（Team Key）并在 CodaBench 上传 | **人工待办**，10-12 20:00 UTC 前 |
+| T4 的 Final 描述文件 | 待准备（仿照 `t2-work/submission/submission.final.json`） |
+| 本机 Docker | 起不来（WSL2 `HCS_E_SERVICE_NOT_AVAILABLE`），不影响提交 |
+| F2 的文本方向层 / House 模型 | 未采用：没有过验证的信号，House 默认关 |
 | 14/104 题无法本地打分 | EM transfer 题、月度宏观题、最晚两个 as-of。只检查门槛 |
 
 ---
