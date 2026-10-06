@@ -9,33 +9,76 @@ from .corpus import Unit, task_table_text
 from .explain import build_claims, build_reasons, _task_row_claim
 from .predict import Pred
 
-AGENT_VERSION = "t4-agent 0.1.0"
+AGENT_VERSION = "t4-agent 0.2.0"
+
+#: The reasoning grader's cap on the per-entity answer it reads (entity_id + declared answer
+#: fields, compact JSON UTF-8 bytes). Over it, the unit's reasoning is not judged at all.
+ANSWER_BYTES_CAP = 3000
 
 
-def _r(x: float) -> float:
+def _r(x: float, sig: int = 6, mode: str = "near") -> float:
+    """`x` at `sig` significant digits; `mode` "down"/"up" rounds toward -inf/+inf so a rounded
+    interval still contains the rounded point."""
     if not isinstance(x, (int, float)) or not math.isfinite(x):
         return 0.0
-    return float(f"{float(x):.6g}")
+    x = float(x)
+    near = float(f"{x:.{sig}g}")
+    if mode == "near" or near == x or x == 0:
+        return near
+    step = 10.0 ** (math.floor(math.log10(abs(x))) - sig + 1)
+    out = (math.floor(x / step) if mode == "down" else math.ceil(x / step)) * step
+    out = float(f"{out:.{sig}g}")
+    if (mode == "down" and out > x) or (mode == "up" and out < x):
+        out = float(f"{(out - step) if mode == 'down' else (out + step):.{sig + 1}g}")
+    return out
+
+
+def _numbers(pr: Pred, sig: int) -> tuple[float, float, float]:
+    point = _r(pr.point, sig)
+    lo, hi = _r(pr.lo, sig, "down"), _r(pr.hi, sig, "up")
+    return point, min(lo, point, hi), max(hi, point, lo)
+
+
+def _compact_numbers(pr: Pred) -> tuple[float, float, float]:
+    """The fewest significant digits (>= 2) whose rounding moves the point by at most 0.5% of the
+    band and widens the band by at most 1%, so shortening never costs measurable score."""
+    p6, lo6, hi6 = _numbers(pr, 6)
+    width = hi6 - lo6
+    out = (p6, lo6, hi6)
+    for sig in (2, 3, 4, 5):
+        p, lo, hi = _numbers(pr, sig)
+        if width > 0 and abs(p - p6) <= 0.005 * width and (hi - lo) <= 1.01 * width:
+            out = (p, lo, hi)
+            break
+    # a whole number is written without ".0" (JSON number either way)
+    return tuple(int(x) if x == int(x) and abs(x) < 1e15 else x for x in out)  # type: ignore[return-value]
+
+
+def _judge_answer_bytes(rows: list[dict]) -> int:
+    """The per-entity answer as the reasoning grader measures it (an upper bound: it keeps only
+    the fields the unit declares)."""
+    proj = [{"entity_id": r["entity_id"], **{k: r[k] for k in ("label", "point_forecast", "interval") if k in r}} for r in rows]
+    return len(json.dumps(proj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")) - 2
 
 
 def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_notes: dict | None = None) -> dict:
     rows = []
-    for pr in preds:
-        point = _r(pr.point)
-        lo, hi = _r(pr.lo), _r(pr.hi)
-        lo, hi = min(lo, point, hi), max(hi, point, lo)
-        row: dict = {
-            "entity_id": pr.entity_id,
-            "point_forecast": point,
-            "interval": {"level": 0.9, "lo": lo, "hi": hi},
-            "claims": build_claims(unit, pr),
-        }
-        if unit.target_type == "classification" and pr.label is not None:
-            row["label"] = pr.label
-        rows.append(row)
+    for compact in (False, True):
+        rows = []
+        for pr in preds:
+            point, lo, hi = _compact_numbers(pr) if compact else _numbers(pr, 6)
+            row: dict = {"entity_id": pr.entity_id, "point_forecast": point}
+            if isinstance(pr.label, str) and pr.label and (unit.target_type == "classification" or unit.labels):
+                row["label"] = pr.label
+            row["interval"] = {"level": 0.9, "lo": lo, "hi": hi}
+            rows.append(row)
+        if _judge_answer_bytes(rows) <= ANSWER_BYTES_CAP:
+            break
+    for row, pr in zip(rows, preds):
+        row["claims"] = build_claims(unit, pr)
+    # `target_type` is optional in answer.json and only ever a liability (a mismatch with the
+    # trusted card refuses the unit), so it is not written.
     ans: dict = {"task_id": unit.task_id, "entity_predictions": rows}
-    if unit.target_type:
-        ans["target_type"] = unit.target_type
     if reasons:
         try:
             rs = build_reasons(unit, preds)
@@ -86,6 +129,8 @@ def validate(ans: dict, unit: Unit) -> list[str]:
             errs.append(f"{eid}: point missing")
         if unit.target_type == "classification" and unit.labels and r.get("label") not in unit.labels:
             errs.append(f"{eid}: label")
+        if unit.target_type == "classification" and not (isinstance(r.get("label"), str) and r["label"]):
+            errs.append(f"{eid}: no label")
         claims = r.get("claims")
         if not isinstance(claims, list) or not claims:
             errs.append(f"{eid}: claims")
@@ -118,12 +163,18 @@ def validate(ans: dict, unit: Unit) -> list[str]:
     return errs
 
 
-def minimal_answer(task: dict, note: str = "") -> dict:
+def minimal_answer(task: dict, note: str = "", unit_dir: Path | None = None) -> dict:
     """Schema-valid answer from task.json alone: carry-forward point, wide band, the entity's own
     task-row as its single (verbatim) claim. Used when anything in the main path fails."""
     target = task.get("target") if isinstance(task.get("target"), dict) else {}
-    ttype = task.get("target_type") or target.get("type")
-    labels = [x for x in (target.get("labels") or []) if isinstance(x, str)]
+    try:
+        from .corpus import resolve_target_type
+
+        ttype = resolve_target_type(task, unit_dir)
+    except Exception:  # noqa: BLE001
+        ttype = target.get("type")
+    labels = [x for x in (target.get("labels") or []) if isinstance(x, str) and x]
+    la = target.get("label_assertions") if isinstance(target.get("label_assertions"), dict) else {}
     table, ranges = task_table_text(task)
     rows = []
     for ent in task.get("entities") or []:
@@ -152,18 +203,20 @@ def minimal_answer(task: dict, note: str = "") -> dict:
             "interval": {"level": 0.9, "lo": float(f"{anchor - hw:.6g}"), "hi": float(f"{anchor + hw:.6g}")},
             "claims": [claim],
         }
-        if ttype == "classification" and labels:
+        if labels:
             pick = next((l for l in labels if any(w in l.lower() for w in ("no_event", "no event", "inline", "flat", "none"))), labels[0])
             row["label"] = pick
+        elif ttype == "classification":
+            row["label"] = next((str(k) for k in la if isinstance(k, str) and k), "no_change")
         rows.append(row)
     ans = {"task_id": str(task.get("task_id", "")), "entity_predictions": rows}
-    if ttype in ("classification", "regression", "ranking"):
-        ans["target_type"] = ttype
     ans["notes"] = {"agent": AGENT_VERSION, "fallback": True, "why": note[:200]}
     return ans
 
 
 def write_answer(ans: dict, out: Path) -> None:
+    """UTF-8, no BOM. ASCII-escaped, so a lone surrogate or odd code point in quoted corpus text
+    can never make the file undecodable; the scorer's json.loads restores the same strings."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(ans, ensure_ascii=False, indent=1, allow_nan=False)
-    out.write_bytes(data.encode("utf-8"))
+    data = json.dumps(ans, ensure_ascii=True, indent=1, allow_nan=False)
+    out.write_bytes(data.encode("ascii"))

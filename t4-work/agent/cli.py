@@ -15,8 +15,9 @@ import time
 from pathlib import Path
 
 VERB = "analyze"
-SOFT_BUDGET_S = float(os.environ.get("T4_SOFT_BUDGET_S", "420"))
-HARD_ALARM_S = int(os.environ.get("T4_HARD_ALARM_S", "520"))
+# The 600 s unit clock also covers container creation and any image pull, so stay well inside it.
+SOFT_BUDGET_S = 300.0
+HARD_ALARM_S = 420
 
 
 class _Timeout(Exception):
@@ -25,6 +26,11 @@ class _Timeout(Exception):
 
 def _alarm(_sig, _frm):  # pragma: no cover - POSIX only
     raise _Timeout()
+
+
+def _cancel_alarm() -> None:
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(0)
 
 
 def run(task_path: Path, corpus_dir: Path, out_path: Path) -> dict:
@@ -56,14 +62,16 @@ def run(task_path: Path, corpus_dir: Path, out_path: Path) -> dict:
             errs = validate(ans, unit)
         if errs:
             raise ValueError("self-check failed: " + "; ".join(errs[:5]))
+        _cancel_alarm()  # never interrupt the write itself
         write_answer(ans, out_path)
         return ans
     except BaseException as exc:  # noqa: BLE001 - includes the alarm
+        _cancel_alarm()
         if isinstance(exc, KeyboardInterrupt):
             raise
-        if task is None:
+        if not isinstance(task, dict):
             raise
-        ans = minimal_answer(task, note=f"{type(exc).__name__}: {exc}")
+        ans = minimal_answer(task, note=f"{type(exc).__name__}: {exc}", unit_dir=task_path.resolve().parent)
         write_answer(ans, out_path)
         return ans
 

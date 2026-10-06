@@ -10,6 +10,7 @@ import datetime as _dt
 import json
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,9 @@ MAX_DOC_BYTES = 40 * 1024 * 1024
 MAX_DOCS = 2000
 
 _DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+#: The scorer's doc_id grammar (one path component); an id outside it can never resolve.
+DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+TARGET_TYPES = ("classification", "regression", "ranking")
 
 
 def parse_date(value: Any) -> _dt.date | None:
@@ -42,9 +46,18 @@ class Doc:
     meta: dict
     shared: bool = False
     entity_ids: tuple[str, ...] | None = None
+    #: Whether a claim may cite this document at all. The scorer resolves only manifest entries
+    #: with `role: corpus` and reads a citation's offsets into the document's FLAT `text` string
+    #: (`scoring._span_text`), so a `spans`-only document is readable evidence but never cited.
+    citable: bool = True
+
+    def about(self, entity_id: str) -> bool:
+        """The manifest labels this document for the entity, or marks it shared."""
+        return self.shared or (self.entity_ids is not None and entity_id in self.entity_ids)
 
     def admits(self, entity_id: str) -> bool:
-        return self.shared or (self.entity_ids is not None and entity_id in self.entity_ids)
+        """May a claim for `entity_id` cite this document (the scorer's entity check + resolution)?"""
+        return self.citable and self.about(entity_id)
 
 
 @dataclass
@@ -64,6 +77,7 @@ class Unit:
     dropped_post_cutoff: int = 0
     task_table: str = ""
     task_rows: dict[str, tuple[int, int]] = field(default_factory=dict)
+    canary: str = ""
 
     @property
     def horizon_days(self) -> int:
@@ -73,7 +87,7 @@ class Unit:
 
     def docs_for(self, entity_id: str, *, own_first: bool = True) -> list[Doc]:
         """Documents this entity may cite, its own (entity-labelled) ones first, newest first."""
-        own = [d for d in self.docs.values() if not d.shared and d.admits(entity_id)]
+        own = [d for d in self.docs.values() if not d.shared and d.about(entity_id)]
         shared = [d for d in self.docs.values() if d.shared]
         key = lambda d: (d.doc_date, d.doc_id)  # noqa: E731
         own.sort(key=key, reverse=True)
@@ -122,8 +136,10 @@ def _doc_text(raw: Any) -> str:
     return ""
 
 
-def _manifest_labels(unit_dir: Path, corpus_dir: Path, task: dict) -> dict[str, tuple[tuple[str, ...] | None, bool]]:
-    """doc_id -> (entity_ids, shared) from the FIRST readable manifest, in the scorer's order."""
+def _manifest_labels(unit_dir: Path, corpus_dir: Path, task: dict) -> dict[str, tuple[tuple[str, ...] | None, bool, bool]]:
+    """doc_id -> (entity_ids, shared, resolvable) from the FIRST readable manifest, in the
+    scorer's order. `resolvable` mirrors the scorer's `CorpusIndex`: only `role: corpus` entries
+    at exactly `corpus/<doc_id>.json` with a well-formed, NFC doc_id exist for a citation."""
     candidates = [unit_dir / "manifest.json", unit_dir / "corpus" / "manifest.json"]
     rel = task.get("corpus_manifest")
     if isinstance(rel, str) and rel and ".." not in rel:
@@ -133,7 +149,7 @@ def _manifest_labels(unit_dir: Path, corpus_dir: Path, task: dict) -> dict[str, 
         man = _read_json(cand)
         if not isinstance(man, dict) or not isinstance(man.get("files"), list):
             continue
-        out: dict[str, tuple[tuple[str, ...] | None, bool]] = {}
+        out: dict[str, tuple[tuple[str, ...] | None, bool, bool]] = {}
         for entry in man["files"]:
             if not isinstance(entry, dict):
                 continue
@@ -149,9 +165,61 @@ def _manifest_labels(unit_dir: Path, corpus_dir: Path, task: dict) -> dict[str, 
             if shared and ent:
                 ent = None  # malformed label: treat as unlabelled (never cited)
                 shared = False
-            out[stem] = (ent, shared)
+            resolvable = (
+                entry.get("role") == "corpus"
+                and bool(DOC_ID_RE.match(stem))
+                and unicodedata.normalize("NFC", path) == path
+                and stem not in out  # two entries for one doc_id: never cite it
+            )
+            out[stem] = (ent, shared, resolvable)
         return out
     return {}
+
+
+def card_params(unit_dir: Path | None) -> dict:
+    """The few card.toml values the agent uses, if the card is readable: the trusted target type
+    (`[scoring.params].target_type`, else `[task].target_type`) and the canary GUID.
+
+    The scorer takes the target type from the card (or the signed plan it mirrors), not from
+    task.json, so the card is the better authority when both are present."""
+    if unit_dir is None:
+        return {}
+    try:
+        import tomllib
+
+        path = unit_dir / "card.toml"
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 1_000_000:
+            return {}
+        card = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:  # noqa: BLE001 - a missing or odd card is simply absent
+        return {}
+    out: dict = {}
+    sc = card.get("scoring") if isinstance(card.get("scoring"), dict) else {}
+    params = sc.get("params") if isinstance(sc.get("params"), dict) else {}
+    task_sec = card.get("task") if isinstance(card.get("task"), dict) else {}
+    for tt in (params.get("target_type"), task_sec.get("target_type")):
+        if tt in TARGET_TYPES:
+            out["target_type"] = tt
+            break
+    contam = card.get("contamination") if isinstance(card.get("contamination"), dict) else {}
+    if isinstance(contam.get("canary_guid"), str) and contam["canary_guid"].strip():
+        out["canary"] = contam["canary_guid"].strip()
+    return out
+
+
+def resolve_target_type(task: dict, unit_dir: Path | None) -> str | None:
+    """Card first (the scorer's authority), then `target.type`, then a flat `target_type`; a
+    label vocabulary exists only on classification units, so it implies classification."""
+    card = card_params(unit_dir)
+    if card.get("target_type"):
+        return card["target_type"]
+    target = task.get("target") if isinstance(task.get("target"), dict) else {}
+    for cand in (target.get("type"), task.get("target_type")):
+        if cand in TARGET_TYPES:
+            return cand
+    if any(isinstance(x, str) and x for x in (target.get("labels") or [])):
+        return "classification"
+    return None
 
 
 def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
@@ -159,10 +227,9 @@ def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
     if not isinstance(task, dict):
         raise ValueError("task.json is not an object")
     target = task.get("target") if isinstance(task.get("target"), dict) else {}
-    target_type = task.get("target_type") or target.get("type")
-    if target_type not in ("classification", "regression", "ranking"):
-        target_type = None
-    labels = [x for x in (target.get("labels") or []) if isinstance(x, str)]
+    unit_dir = task_path.resolve().parent
+    target_type = resolve_target_type(task, unit_dir)
+    labels = list(dict.fromkeys(x for x in (target.get("labels") or []) if isinstance(x, str) and x))
     la = target.get("label_assertions") if isinstance(target.get("label_assertions"), dict) else {}
     level = task.get("interval_level", 0.9)
     try:
@@ -184,8 +251,8 @@ def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
         entities=entities,
     )
     unit.task_table, unit.task_rows = task_table_text(task)
+    unit.canary = card_params(unit_dir).get("canary", "")
 
-    unit_dir = task_path.resolve().parent
     labels_by_doc = _manifest_labels(unit_dir, corpus_dir, task)
     try:
         names = sorted(os.listdir(corpus_dir))[:MAX_DOCS]
@@ -209,7 +276,9 @@ def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
         text = _doc_text(raw)
         if not text:
             continue
-        ent, shared = labels_by_doc.get(doc_id, (None, False))
+        ent, shared, resolvable = labels_by_doc.get(doc_id, (None, False, False))
+        flat = isinstance(raw, dict) and isinstance(raw.get("text"), str)
         meta = {k: v for k, v in raw.items() if k not in ("text", "spans")} if isinstance(raw, dict) else {}
-        unit.docs[doc_id] = Doc(doc_id=doc_id, text=text, doc_date=date, meta=meta, shared=shared, entity_ids=ent)
+        unit.docs[doc_id] = Doc(doc_id=doc_id, text=text, doc_date=date, meta=meta, shared=shared,
+                                entity_ids=ent, citable=bool(resolvable and flat))
     return unit

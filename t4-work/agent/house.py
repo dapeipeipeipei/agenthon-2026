@@ -33,6 +33,13 @@ def enabled() -> bool:
     )
 
 
+def _seed() -> int:
+    try:
+        return int(os.environ.get("QFBENCH_SEED", "0") or 0) % (2**31)
+    except ValueError:
+        return 0
+
+
 def _post(messages: list[dict], timeout: float) -> str | None:
     endpoint = os.environ["MODEL_ENDPOINT"].rstrip("/") + "/v1/chat/completions"
     body = {
@@ -40,7 +47,7 @@ def _post(messages: list[dict], timeout: float) -> str | None:
         "messages": messages,
         "max_tokens": MAX_TOKENS,
         "temperature": 0,
-        "seed": int(os.environ.get("QFBENCH_SEED", "0") or 0),
+        "seed": _seed(),
         "chat_template_kwargs": {"enable_thinking": False},
     }
     req = urllib.request.Request(
@@ -140,7 +147,11 @@ def enhance(unit: Unit, preds: list[Pred], deadline: float) -> dict:
             pf = it.get("point_forecast")
             if isinstance(pf, (int, float)) and not isinstance(pf, bool) and pf == pf and abs(pf) < 1e12:
                 moved = pr.point + 0.5 * conf * (float(pf) - pr.point)
-                pr.point = min(max(moved, pr.lo), pr.hi)
+                moved = min(max(moved, pr.lo), pr.hi)
+                if moved != pr.point:
+                    # keep the written derivation consistent with the submitted value
+                    pr.facts.append(f"a model review of the same evidence moved the point from {pr.point:.4g} to {moved:.4g}")
+                pr.point = moved
                 report["applied"] += 1
             lab = it.get("label")
             if isinstance(lab, str) and lab in unit.labels and pr.strength == 0 and conf >= 0.6:

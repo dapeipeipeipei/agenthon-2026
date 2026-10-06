@@ -29,9 +29,14 @@ from .tables import Series, norm_tokens
 Z90 = 1.645
 
 _ANCHOR_PRIORITY = ("latest", "consensus", "prior", "last", "previous", "current", "start")
-_DOWN = ("down", "lower", "decrease", "decline", "fall", "negative", "miss", "below", "less", "cut", "worse")
-_UP = ("up", "higher", "increase", "rise", "positive", "beat", "above", "greater", "raise", "better")
-_MIDDLE = ("inline", "flat", "within", "between", "unchanged", "neutral", "hold", "maintain", "no change")
+_DOWN = ("down", "lower", "decrease", "decline", "fall", "negative", "miss", "below", "less", "cut", "worse",
+         "underperform", "downgrade", "weaken", "deteriorate", "reduce", "contract", "loss", "drop", "sell",
+         "short", "bearish", "tighten")
+_UP = ("up", "higher", "increase", "rise", "positive", "beat", "above", "greater", "raise", "better",
+       "outperform", "upgrade", "strengthen", "improve", "expand", "gain", "hike", "buy", "long", "bullish",
+       "widen", "accelerate")
+_MIDDLE = ("inline", "in line", "flat", "within", "between", "unchanged", "neutral", "hold", "maintain",
+           "no change", "steady", "stable", "same", "meet", "met", "in-line")
 _NO_EVENT = ("no_event", "no event", "none", "no_default", "no default", "survive", "solvent")
 
 
@@ -310,18 +315,30 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
             hw = fallback_halfwidth(unit, ent, base, anchor)
             pr.point, pr.lo, pr.hi = base, base - hw, base + hw
         _sanitize(pr)
-        if not pr.spans:
+        if not any(unit.docs.get(d) is not None and unit.docs[d].admits(eid) for d, _, _ in pr.spans):
             try:
-                pr.spans = keyword_spans(unit, ent, k=2)
+                pr.spans = pr.spans + keyword_spans(unit, ent, k=2)
             except Exception:  # noqa: BLE001
-                pr.spans = []
+                pass
         preds.append(pr)
 
-    if ttype == "classification" and unit.labels:
-        for pr, ent in zip(preds, unit.entities):
-            if pr.label not in unit.labels:
+    if ttype == "classification":
+        for pr in preds:
+            if unit.labels and pr.label not in unit.labels:
                 pr.label = _default_label(unit, sem)
+            elif not unit.labels and not (isinstance(pr.label, str) and pr.label):
+                pr.label = fallback_label(unit)
     return preds
+
+
+def fallback_label(unit: Unit) -> str:
+    """A classification unit with no declared vocabulary still needs a non-empty label on every
+    row (the scorer refuses a row without one). Use a label the task itself names."""
+    keys = [k for k in unit.label_assertions if k]
+    if keys:
+        return keys[0]
+    m = re.search(r"[Ll]abel\s+['\"]([A-Za-z0-9_\- ]{1,40})['\"]", unit.prompt)
+    return m.group(1) if m else "no_change"
 
 
 def _sanitize(pr: Pred) -> None:

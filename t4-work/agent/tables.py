@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 _NUM_RE = re.compile(r"^\(?\s*([+\-−]?)\s*\$?\s*([0-9][0-9,]*\.?[0-9]*|\.[0-9]+)\s*\)?\s*(%|bp|bps)?$", re.IGNORECASE)
 _DATEISH = re.compile(r"(\d{4}-\d{2}(-\d{2})?)")
+#: Longest history kept per series (most recent observations).
+MAX_SERIES = 240
 
 
 def parse_number(cell: str) -> float | None:
@@ -117,6 +119,8 @@ def column_series(t: Table, j: int) -> Series | None:
     # time order: if keys look like dates and are descending, reverse
     if all(is_dateish(k) for k in ks) and ks[0] > ks[-1]:
         vals, ks, spans = vals[::-1], ks[::-1], spans[::-1]
+    # bound the work of the pooled backtests (quadratic in series length) on very long tables
+    vals, ks, spans = vals[-MAX_SERIES:], ks[-MAX_SERIES:], spans[-MAX_SERIES:]
     return Series(t.doc_id, t.header[j], ks, vals, spans, t.header_span, t.title_span)
 
 

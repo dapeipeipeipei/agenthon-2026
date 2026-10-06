@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 from .corpus import Unit
 from .predict import Pred
@@ -18,8 +19,61 @@ EVIDENCE_BYTES_BUDGET = 42000   # published cap 46,500
 DENY = ("leaderboard", "canary", "/home/", "units/", "reference/", "outcome.json", "team_id",
         "team name", "participant_id", "participant name", "submission_id", "other submission")
 
+#: The scorer's content-free vocabulary (scorer 5.2.2 `scoring.CONTENT_FREE_*`). A claim with no
+#: digit made only of these words is false even when it is a verbatim quote, so such a slice is
+#: never used as a claim.
+_FUNCTION_WORDS = frozenset(
+    """a an the and or of for to in on at by with from as is are was were be been being this that
+    these those it its it's their there here which who what when where while so such not no nor but
+    if into over only also very can could would should will may might must has have had do does did
+    done any all some each""".split()
+)
+_META_WORDS = frozenset(
+    """pre-cutoff cutoff evidence selected submitted prediction predictions cited citing cite
+    document documents relevant passage passages available context contextual only model inference
+    establish establishes placeholder forecast forecasts quote quotes grounded model-entailed
+    top-retrieved retrieved nearest source sources contains wording fallback excerpt used support
+    supports supporting claim claims""".split()
+)
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
-def _trim_span(text: str, s: int, e: int, max_chars: int = MAX_CLAIM_CHARS) -> tuple[int, int] | None:
+
+def _entity_names(unit: Unit) -> list[str]:
+    """The scorer's `unit_entity_names`: each row's `name`, `entity_id` and any `*ticker` string."""
+    names: list[str] = []
+    for row in unit.entities:
+        for k, v in row.items():
+            if isinstance(v, str) and v.strip() and (k in ("name", "entity_id") or k.endswith("ticker")):
+                names.append(v.strip())
+    return sorted(set(names), key=len, reverse=True)
+
+
+def _contentful(unit: Unit, frag: str) -> bool:
+    """Not content-free in the scorer's sense, judged conservatively: after blanking the unit's
+    entity names, ids and tickers, a digit or at least one word outside the function/meta
+    vocabulary must remain (non-Latin text is simply not quoted)."""
+    text = frag
+    for name in _entity_names(unit):
+        text = re.sub(r"(?<![\w])" + re.escape(name) + r"(?![\w])", " ", text, flags=re.IGNORECASE)
+    if re.search(r"\d", text):
+        return True
+    words = [w.strip("-'") for w in re.findall(r"[a-z][a-z\-']*", text.lower())]
+    rest = [w for w in words if w and w not in _FUNCTION_WORDS and w not in _META_WORDS]
+    return len(rest) >= 1
+
+
+def safe_text(unit: Unit, frag: str) -> bool:
+    """A slice we are willing to put in the output: NFC-stable (the scorer NFC-normalises claim
+    text before its verbatim test), free of canary material, and not content-free."""
+    if unicodedata.normalize("NFC", frag) != frag:
+        return False
+    low = frag.lower()
+    if "canary" in low or _UUID.search(frag) or (unit.canary and unit.canary.lower() in low):
+        return False
+    return _contentful(unit, frag)
+
+
+def _trim_span(text: str, s: int, e: int, max_chars: int = MAX_CLAIM_CHARS, unit: Unit | None = None) -> tuple[int, int] | None:
     s = max(0, s)
     e = min(len(text), e)
     while s < e and text[s].isspace():
@@ -35,6 +89,8 @@ def _trim_span(text: str, s: int, e: int, max_chars: int = MAX_CLAIM_CHARS) -> t
         return None
     frag = text[s:e]
     if not re.search(r"\d", frag) and len(re.findall(r"[A-Za-z]{4,}", frag)) < 4:
+        return None
+    if unit is not None and not safe_text(unit, frag):
         return None
     return s, e
 
@@ -58,7 +114,7 @@ def _task_row_claim(unit: Unit, eid: str, key: str | None) -> dict | None:
         if i < 0 or len(frag) > MAX_CLAIM_CHARS:
             continue
         s, e = rng[0] + i, rng[0] + i + len(frag)
-        if unit.task_table[s:e] != frag:
+        if unit.task_table[s:e] != frag or not safe_text(unit, frag):
             continue
         return {"doc_id": "task", "span_start": s, "span_end": e, "claim": frag}
     return None
@@ -73,7 +129,7 @@ def build_claims(unit: Unit, pr: Pred) -> list[dict]:
         doc = unit.docs.get(doc_id)
         if doc is None or not doc.admits(pr.entity_id):
             continue
-        t = _trim_span(doc.text, s, e)
+        t = _trim_span(doc.text, s, e, unit=unit)
         if t is None:
             continue
         key = (doc_id, t[0], t[1])
@@ -115,17 +171,26 @@ _METHOD_TEXT = {
 }
 
 
-def _premise_span(unit: Unit, pr: Pred) -> Span | None:
-    for doc_id, s, e in pr.spans:
+def _premise_span(unit: Unit, pr: Pred, avoid: set | frozenset = frozenset()) -> Span | None:
+    """The most readable admissible passage behind this prediction: prose beats a bare row of
+    numbers (more words of letters), and a passage already used by an earlier reason is taken
+    only when nothing else is left, so the three reasons do not share one premise."""
+    best: tuple | None = None
+    for rank, (doc_id, s, e) in enumerate(pr.spans):
         doc = unit.docs.get(doc_id)
-        if doc is None:
+        if doc is None or not doc.admits(pr.entity_id):
             continue
-        t = _trim_span(doc.text, s, e, max_chars=600)
+        t = _trim_span(doc.text, s, e, max_chars=600, unit=unit)
         if t is None:
             continue
-        if len(re.findall(r"\S+", doc.text[t[0]:t[1]])) >= 3:
-            return (doc_id, t[0], t[1])
-    return None
+        frag = doc.text[t[0]:t[1]]
+        if len(re.findall(r"\S+", frag)) < 3:
+            continue
+        words = len(re.findall(r"[A-Za-z]{3,}", frag))
+        key = ((doc_id, t[0], t[1]) not in avoid, min(words, 12), -rank)
+        if best is None or key > best[0]:
+            best = (key, (doc_id, t[0], t[1]))
+    return best[1] if best else None
 
 
 def _bytes(obj) -> int:
@@ -155,14 +220,16 @@ def build_reasons(unit: Unit, preds: list[Pred]) -> list[dict]:
         order.insert(k, (m, ms[:1]))
     reasons: list[dict] = []
     ev_bytes = 0
+    used: set = set()
     for method, members in order:
         if len(reasons) >= 3:
             break
         members = sorted(members, key=lambda p: -p.strength)
-        rep = next((p for p in members if _premise_span(unit, p)), None)
+        rep = next((p for p in members if _premise_span(unit, p, used) and _premise_span(unit, p, used) not in used), None)
+        rep = rep or next((p for p in members if _premise_span(unit, p, used)), None)
         if rep is None:
             continue
-        ps = _premise_span(unit, rep)
+        ps = _premise_span(unit, rep, used)
         doc = unit.docs[ps[0]]
         premise = doc.text[ps[1]:ps[2]]
         facts = "; ".join(rep.facts[:3])
@@ -183,8 +250,8 @@ def build_reasons(unit: Unit, preds: list[Pred]) -> list[dict]:
         for p in members:
             if len(cites) >= 3:
                 break
-            q = _premise_span(unit, p)
-            if q and q[0] in unit.docs and (q[0], q[1], q[2]) != tuple(cites[0].values()):
+            q = _premise_span(unit, p, used | {ps})
+            if q and q[0] in unit.docs and all((c["doc_id"], c["span_start"], c["span_end"]) != q for c in cites):
                 cites.append({"doc_id": q[0], "span_start": q[1], "span_end": q[2]})
         reason = {
             "reason_id": f"r{len(reasons) + 1}",
@@ -201,5 +268,6 @@ def build_reasons(unit: Unit, preds: list[Pred]) -> list[dict]:
         if _bytes(core) > REASON_BYTES_BUDGET or ev_bytes + ev > EVIDENCE_BYTES_BUDGET:
             continue
         ev_bytes += ev
+        used.add(ps)
         reasons.append(reason)
     return reasons

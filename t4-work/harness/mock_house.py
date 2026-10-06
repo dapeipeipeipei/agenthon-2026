@@ -78,7 +78,10 @@ def run_case(mode: str, unit: Path, port: int | None) -> tuple[bool, str]:
     ok = schema_errors(ans) == 0 and not fs and not notes.get("fallback")
     if mode == "good":
         ok = ok and notes.get("applied", 0) > 0 and SEEN and SEEN[0]["path"] == "/v1/chat/completions" \
-            and SEEN[0]["body"]["model"] == "house" and SEEN[0]["body"]["max_tokens"] <= 4000
+            and SEEN[0]["body"]["model"] == "house" and SEEN[0]["body"]["max_tokens"] <= 4000 \
+            and SEEN[0]["body"].get("chat_template_kwargs") == {"enable_thinking": False} \
+            and SEEN[0]["body"].get("temperature") == 0 and isinstance(SEEN[0]["body"].get("seed"), int) \
+            and SEEN[0]["body"].get("n", 1) == 1 and "tools" not in SEEN[0]["body"]
     return ok, f"calls={len(SEEN)} notes={ {k: notes.get(k) for k in ('house', 'calls', 'applied')} }"
 
 

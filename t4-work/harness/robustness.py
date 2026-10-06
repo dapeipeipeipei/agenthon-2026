@@ -217,8 +217,124 @@ def main() -> int:
     t["target"].pop("type")
     (u / "task.json").write_text(json.dumps(t), encoding="utf-8")
     rc, a, s = run(u)
+    # the card still says classification, so every row must carry a label from the vocabulary
     results.append(check("task without target.type", u, a, rc, s, scorer=False,
-                         extra=lambda ans: None if "target_type" not in ans and ans["task_id"] == t["task_id"] else "target_type guessed"))
+                         extra=lambda ans: None if "target_type" not in ans and ans["task_id"] == t["task_id"]
+                         and all(r.get("label") in t["target"]["labels"] for r in ans["entity_predictions"])
+                         else "target_type written or label missing"))
+
+    # 10. a spans-only document WITH a valid manifest: the scorer reads offsets into the flat
+    #     `text` field only, so such a document must never be cited by a claim
+    u = clone("spans_cited", "t4-cpicomp-202410-us11")
+    p = u / "corpus" / "ALFRED_CPI_COMPONENTS_20241031.json"
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d["spans"] = [{"text": line} for line in d.pop("text").split("\n")]
+    p.write_text(json.dumps(d), encoding="utf-8")
+    write_manifest(u, labels_of(u))
+    rc, a, s = run(u)
+    no_spans_doc = lambda ans: None if all(c["doc_id"] != "ALFRED_CPI_COMPONENTS_20241031" for r in ans["entity_predictions"] for c in r["claims"]) else "cited a spans-only doc"  # noqa: E731
+    results.append(check("spans-only doc never cited", u, a, rc, s, extra=no_spans_doc))
+
+    # 11. a corpus file listed with a role other than "corpus" does not resolve in the scorer
+    u = clone("role_input", "t4-eps-growth-2024Q3-banks")
+    man = json.loads((u / "manifest.json").read_text(encoding="utf-8")) if (u / "manifest.json").exists() else None
+    if man is None:
+        write_manifest(u, labels_of(u))
+        man = json.loads((u / "manifest.json").read_text(encoding="utf-8"))
+    demoted = set()
+    for f in man["files"]:
+        if f.get("role") == "corpus" and "_10Q_" in f["path"]:
+            f["role"] = "input"
+            demoted.add(f["path"][7:-5])
+    (u / "manifest.json").write_text(json.dumps(man, indent=1), encoding="utf-8")
+    if (u / "corpus" / "manifest.json").exists():
+        (u / "corpus" / "manifest.json").unlink()
+    rc, a, s = run(u)
+    no_demoted = lambda ans: None if demoted and not ({c["doc_id"] for r in ans["entity_predictions"] for c in r["claims"]} & demoted) else "cited a non-corpus-role doc"  # noqa: E731
+    results.append(check("non-corpus role never cited", u, a, rc, s, scorer=False, extra=no_demoted))
+
+    # 12. classification with no label vocabulary at all, card missing: a label on every row
+    u = clone("no_vocab", "t4-postearn-20240201-megacap")
+    t = json.loads((u / "task.json").read_text(encoding="utf-8"))
+    t["target"].pop("labels")
+    (u / "task.json").write_text(json.dumps(t), encoding="utf-8")
+    (u / "card.toml").unlink()
+    rc, a, s = run(u)
+    results.append(check("classification, no vocabulary, no card", u, a, rc, s, scorer=False,
+                         extra=lambda ans: None if all(isinstance(r.get("label"), str) and r["label"] for r in ans["entity_predictions"]) else "row without label"))
+
+    # 13. a very long pipe table (20,000 rows) must not blow the time budget
+    u = clone("long_table", "t4-auction-btc-202411-us7")
+    p = [q for q in sorted((u / "corpus").glob("*.json")) if q.name != "manifest.json"][0]
+    d = json.loads(p.read_text(encoding="utf-8"))
+    rows = "\n".join(f"{2000 + i // 365}-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d} | {2.0 + (i % 17) / 10:.2f}" for i in range(20000))
+    d["text"] = d["text"] + "\n\ndate | bid_to_cover_ratio\n" + rows + "\n"
+    p.write_text(json.dumps(d), encoding="utf-8")
+    write_manifest(u, labels_of(u))
+    rc, a, s = run(u)
+    results.append(check("20k-row table (time)", u, a, rc, s, extra=lambda ans: None if s < 60 else f"slow {s:.0f}s"))
+
+    # 14. canary material in the corpus and card must never reach the output
+    u = clone("canary", "t4-credit-event-2023")
+    guid = "1ac5a43a-a107-4a23-8ce1-8b702a2d5da5"
+    for p in sorted((u / "corpus").glob("*.json")):
+        if p.name == "manifest.json":
+            continue
+        d = json.loads(p.read_text(encoding="utf-8"))
+        d["text"] = f"CANARY {guid} There is substantial doubt about the Company's ability to continue as a going concern. Net loss of $12.5 million. {guid}\n" + d["text"]
+        p.write_text(json.dumps(d), encoding="utf-8")
+    write_manifest(u, labels_of(u))
+    rc, a, s = run(u)
+    no_canary = lambda ans: None if guid not in json.dumps(ans) and "canary" not in json.dumps(ans).lower() else "canary in output"  # noqa: E731
+    results.append(check("canary never echoed", u, a, rc, s, extra=no_canary))
+
+    # 15. a 35-row regression unit: full precision overflows the 3,000-byte grader cap, compact fits
+    u = clone("wide_roster", "t4-fomc-curve-20240918")
+    t = json.loads((u / "task.json").read_text(encoding="utf-8"))
+    base = t["entities"]
+    t["entities"] = [dict(base[i % len(base)], entity_id=f"R{i:02d}", name=f"Row {i}") for i in range(35)]
+    (u / "task.json").write_text(json.dumps(t), encoding="utf-8")
+    rc, a, s = run(u)
+
+    def answer_bytes(ans):
+        proj = [{"entity_id": r["entity_id"], **{k: r[k] for k in ("label", "point_forecast", "interval") if k in r}} for r in ans["entity_predictions"]]
+        n = len(json.dumps(proj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")) - 2
+        return None if n <= 3000 else f"answer bytes {n} > 3000"
+    results.append(check("35-row roster (answer bytes)", u, a, rc, s, scorer=False, extra=answer_bytes))
+
+    # 17. wide roster x large shared corpus (keyword retrieval must not rescan per entity)
+    u = clone("wide_shared", "t4-fomc-curve-20240918")
+    t = json.loads((u / "task.json").read_text(encoding="utf-8"))
+    base = t["entities"]
+    t["entities"] = [dict(base[i % len(base)], entity_id=f"S{i:03d}", name=f"Series {i}") for i in range(120)]
+    (u / "task.json").write_text(json.dumps(t), encoding="utf-8")
+    para = ("Treasury yields rose 12 basis points as the committee held the target range at 5.25 percent "
+            "while inflation expectations eased to 2.4 percent and payrolls added 150,000 jobs. ")
+    for j in range(12):
+        doc = {"doc_id": f"BIG_SHARED_{j}", "doc_date": t["cutoff_date"], "text": para * 2500}
+        (u / "corpus" / f"BIG_SHARED_{j}.json").write_text(json.dumps(doc), encoding="utf-8")
+    lab = labels_of(u)
+    for j in range(12):
+        lab[f"BIG_SHARED_{j}"] = "shared"
+    write_manifest(u, lab)
+    rc, a, s = run(u)
+    results.append(check("120 rows x 12 big shared docs (time)", u, a, rc, s, scorer=False,
+                         extra=lambda ans: None if s < 60 and not ans.get("notes", {}).get("fallback") else f"slow {s:.0f}s or fallback"))
+
+    # 16. seeds do not change the answer
+    u = clone("seed", "t4-cotpos-202411-us10")
+    _, a1, _ = run(u)
+    os.environ["QFBENCH_SEED"] = "12345"
+    try:
+        out = u / "_out" / "answer.json"
+        p = subprocess.run([sys.executable, "-m", "agent", "analyze", "--task", str(u / "task.json"), "--corpus", str(u / "corpus"), "--out", str(out)],
+                           cwd=WORK, env=dict(os.environ, PYTHONUTF8="1", QFBENCH_SEED="12345", PYTHONHASHSEED="777"), capture_output=True, text=True, timeout=900)
+        a2 = json.loads(out.read_text(encoding="utf-8"))
+    finally:
+        os.environ.pop("QFBENCH_SEED", None)
+    strip = lambda ans: {k: v for k, v in ans.items() if k != "notes"}  # noqa: E731
+    results.append(check("seed / hash-seed invariance", u, a2, p.returncode, 0.0,
+                         extra=lambda ans: None if strip(a1) == strip(ans) else "answer depends on the seed"))
 
     print(f"\n{sum(results)}/{len(results)} robustness cases pass")
     return 0 if all(results) else 1

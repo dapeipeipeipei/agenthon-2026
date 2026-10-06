@@ -287,6 +287,15 @@ def sentence_around(doc: Doc, start: int, end: int, max_len: int = 320) -> Span:
     right_candidates = [p for p in (text.find(". ", end, hi), text.find("\n", end, hi)) if p >= 0]
     if right_candidates:
         hi = min(right_candidates) + 1
+    # never start or end inside a word (a quote that opens with "erations" reads badly)
+    if 0 < lo < start and text[lo - 1].isalnum() and text[lo].isalnum():
+        sp = text.find(" ", lo, start)
+        if sp >= 0:
+            lo = sp + 1
+    if end < hi < len(text) and text[hi - 1].isalnum() and text[hi].isalnum():
+        sp = text.rfind(" ", end, hi)
+        if sp > end:
+            hi = sp
     while lo < hi and text[lo].isspace():
         lo += 1
     while hi > lo and text[hi - 1].isspace():
@@ -302,6 +311,27 @@ def sentence_around(doc: Doc, start: int, end: int, max_len: int = 320) -> Span:
 _WORD = re.compile(r"[a-z]{3,}")
 
 
+def _pieces(unit: Unit, doc: Doc, max_scan: int) -> list[tuple[int, int, frozenset]]:
+    """The candidate passages of one document (sentences/lines of 40-320 characters that carry a
+    figure) with their word sets, computed once per document: a shared document is otherwise
+    re-split for every entity of the roster."""
+    cache = unit.__dict__.setdefault("_kw_pieces", {})
+    if doc.doc_id in cache:
+        return cache[doc.doc_id]
+    out: list[tuple[int, int, frozenset]] = []
+    pos = 0
+    for piece in re.split(r"(?<=[.\n])", doc.text[:max_scan]):
+        s, e = pos, pos + len(piece)
+        pos = e
+        frag = piece.strip()
+        if len(frag) < 40 or len(frag) > 320 or not re.search(r"\d", frag):
+            continue
+        lead = len(piece) - len(piece.lstrip())
+        out.append((s + lead, s + lead + len(frag), frozenset(_WORD.findall(frag.lower()))))
+    cache[doc.doc_id] = out
+    return out
+
+
 def keyword_spans(unit: Unit, entity: dict, k: int = 2, max_scan: int = 400_000) -> list[Span]:
     """Top-k short passages (sentences/lines) that mention the target's vocabulary and carry a
     figure, from the entity's admissible documents. Lexical, deterministic."""
@@ -311,22 +341,13 @@ def keyword_spans(unit: Unit, entity: dict, k: int = 2, max_scan: int = 400_000)
     q -= {"predict", "forecast", "corpus", "frozen", "evidence", "citations", "interval", "point", "cutoff", "provide", "support", "passages", "reason", "using", "absent", "design", "every", "should", "within"}
     scored: list[tuple[float, Span]] = []
     for doc in unit.docs_for(eid):
-        text = doc.text[:max_scan]
-        pos = 0
-        for piece in re.split(r"(?<=[.\n])", text):
-            s, e = pos, pos + len(piece)
-            pos = e
-            frag = piece.strip()
-            if len(frag) < 40 or len(frag) > 320 or not re.search(r"\d", frag):
-                continue
-            toks = set(_WORD.findall(frag.lower()))
+        if not doc.citable:
+            continue  # these spans only ever feed citations
+        for s2, e2, toks in _pieces(unit, doc, max_scan):
             ov = len(toks & q)
             if ov == 0:
                 continue
             score = ov + (1.5 if not doc.shared else 0.0)
-            lead = len(piece) - len(piece.lstrip())
-            s2 = s + lead
-            e2 = s2 + len(frag)
             scored.append((score, (doc.doc_id, s2, e2)))
     scored.sort(key=lambda x: (-x[0], x[1]))
     out: list[Span] = []

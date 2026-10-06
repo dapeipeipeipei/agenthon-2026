@@ -51,7 +51,8 @@ House 模型层用本地假服务器测了 4 种情况（正常 / 胡言乱语 /
 | `PLAN.md` | 一页可行性结论（评分规则、做法、预期、风险） |
 | `agent/` | 提交的程序，纯标准库 |
 | `bin/analyze` | 镜像里的命令入口 |
-| `Dockerfile` | linux/amd64，非 root，带 `qfbench2.interface_version="2.0"`，构建时自测 |
+| `Dockerfile` | linux/amd64，非 root，带 `qfbench2.interface_version="2.0"`；两阶段：工具箱只装在自测阶段，运行镜像只有标准库 |
+| `submission/ARTIFACT_PROVENANCE.md` | 规则要求的来源记录（不进 zip） |
 | `harness/run_local.py` | 跑全部公开 unit + 官方检查 + 官方打分器（`--docker-image` 可在镜像里跑） |
 | `harness/robustness.py` / `mock_house.py` | 异常输入 / House 层测试 |
 | `harness/approx_truth.py` | 近似真实结果和猜的 naive 规则（**仅本地诊断**，程序不读） |
@@ -70,6 +71,25 @@ PYTHONUTF8=1 ../.venv/Scripts/python harness/mock_house.py
 （本机已装：`pip install -e track4-analysis-public --no-deps`、`transformers sentencepiece protobuf` 和两个
 judge 的分词器文件（几 MB，没下 3.5GB 权重）。Windows 上官方打分器要靠 `harness/winshim.py` 补 `O_DIRECTORY`，
 并把 git 自动转换的 CRLF 还原，否则 manifest 校验不过。）
+
+## 2026-10-06 对抗审查（按 scorer 5.2.2 源码逐条核对后修的）
+
+1. **只引用有扁平 `text` 的文档**：打分器 `_span_text` 只读 `document["text"]`，`spans[]` 格式的文档
+   在打分器眼里是空串，引用它的 claim 会被判越界（虚假）。现在这类文档只读不引。
+2. **manifest 里 `role` 不是 `corpus` 的文件不引用**：打分器不认识它，引用会被判"未解析"→ 整个 unit 判死。
+3. **目标类型以 card.toml 为准**（打分器就是这么取的），不再在答案里写 `target_type`（可选字段，写错直接判死）；
+   分类题无论有没有标签表，每行都一定有 label。
+4. 引用文本过滤：非 NFC 文本、"内容为空"（按打分器 5.2.2 的词表，先抹掉实体名）、canary/GUID 一律不引。
+5. 时间：600 秒包含拉镜像，硬闹钟 520→420 秒、软预算 420→300 秒；写文件前先关闹钟；超长表只取最近 240 行；
+   检索按文档缓存（120 行 × 12 个大共享文档 3.4 秒）。运行镜像去掉 numpy/scipy（只在自测阶段装），拉取更快。
+6. 推理评分的 3000 字节"逐实体答案"上限：超了就自动压缩小数位（误差 ≤ 区间宽 0.5%）。
+7. 输出改成 ASCII 转义 JSON（语料里有孤立代理字符也不会写坏文件）。
+8. 推理理由的 premise 优先选可读的文字段落、三条理由不重复同一段，引文不再从半个单词开始。
+9. 补了规则要求的 `submission/ARTIFACT_PROVENANCE.md`（不进 zip）。
+
+异常用例从 9 个增加到 17 个（spans 文档、role、无标签表无 card、两万行表、canary、35 行答案字节、
+大语料宽名单、种子/哈希种子不变性），全过；11 个公开 unit 仍全部合格、0 条虚假，本地分数不变。
+**镜像需要重新构建**（推 `ci/t4-image` 触发 CI），新 digest 才包含以上修改。
 
 ## 接下来要做的（按重要性）
 
