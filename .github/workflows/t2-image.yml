@@ -16,6 +16,7 @@ on:
       - "t2-work/.dockerignore"
       - "t2-work/requirements.lock"
       - "t2-work/pack/**"
+      - "!t2-work/pack/**.md"
       - ".github/workflows/t2-image.yml"
 
 permissions:
