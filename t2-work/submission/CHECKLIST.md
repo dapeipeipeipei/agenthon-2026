@@ -150,6 +150,11 @@ is not uploaded.
   arithmetic): **0.9220** (F1 0.9065, F2 1.0090, F3 0.9302, F4 0.8569), identical to the
   in-process `v4_eval.py --profile v4`, so the CLI path (I/O, `steps_override`, rationale) does
   not change a draw.
+* Revision 2 (log1p backbone for log_return targets; F1 width 1.0, F4 width 1.1 after the audit;
+  `engine.v4_resolved` in the meta): `run_all_gates.py --platform-env --out-root
+  t2-work/out_v4_final` **104/104 admissible, 0 fallbacks**; `v4_eval.py --out-dir
+  t2-work/out_v4_final` **0.9441** (F1 0.9979, F2 1.0090, F3 0.9312, F4 0.8681) at the default
+  seed; 5-seed mean 0.9386 (`t2-work/v4_final_eval.py`, `V4_NOTES.md` revision 2).
 * Rationale audit over 104 units: 94 state that no corpus number reached the draws (family row
   has the event width off and no target's direction depends on text); 10 F4 yield cards state
   that the hawkish/dovish balance set the stress direction, with the documents cited.

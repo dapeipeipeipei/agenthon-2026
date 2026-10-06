@@ -52,8 +52,11 @@ per-unit fitting.
 The default profile `v4` (`engine/model.py` `PROFILES["v4"]`, `engine/v4.py`) holds one row of
 constants per card family — (width multiplier on the trailing-window sd, tail-mixture p, k,
 stress-side shift of the mixture paths, corpus event width on/off, drift fraction):
-F1 (0.9, 0, 1, 0, off, 1.0); F2 (1.0, 0, 1, 0, off, 1.0); F3 (1.0, 0, 1, 0, off, 0.5);
-F4 (1.25, 0.2, 1.5, 1.0, off, 1.0); unknown family (1.0, 0, 1, 0, off, 1.0). The family is the
+F1 (1.0, 0, 1, 0, off, 1.0); F2 (1.0, 0, 1, 0, off, 1.0); F3 (1.0, 0, 1, 0, off, 0.5);
+F4 (1.1, 0.2, 1.5, 1.0, off, 1.0); unknown family (1.0, 0, 1, 0, off, 1.0). The row applied on a
+run is recorded in `forecast_meta.json` `engine.v4_resolved`. Widths were pulled toward 1.0
+(F1 0.9 -> 1.0, F4 1.25 -> 1.1) after an independent audit's stress tests (`t2-work/AUDIT_T2.md`);
+log_return targets use per-step ln(1+r). The family is the
 one printed on the card (`[metadata] category` / `forecast_spec.json card_family`), never a unit id.
 
 They were **selected** on 2026-10-06 (`t2-work/v4_cv.py`, `v4_report.py`; results in

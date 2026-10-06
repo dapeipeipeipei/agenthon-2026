@@ -1,5 +1,35 @@
 # V4 notes — Track 2 engine profile v4 (2026-10-06)
 
+> **Revision 2 (same day, after the independent audit `AUDIT_T2.md`) — current state.**
+> (1) log_return targets: the v4 backbone now works on per-step ln(1+r) (`targets.log_return_steps`;
+> the target is the sum of ln(1+r_t)), not on the simple return rows M0 uses. Effect: 0.9220 -> 0.9219.
+> (2) Widths pulled toward 1.0 on the audit's stress tests: **F1 0.9 -> 1.0** (0.9 loses to M0 as
+> soon as realized F1 deviations are 25% larger than the unusually calm public set),
+> **F4 1.25 -> 1.1** (the stress-side shift carries most of the F4 gain; width 1.25 paid only
+> because the public F4 cards were selected for large shocks). F2/F3/default rows unchanged.
+> (3) `forecast_meta.json` `engine.v4_resolved` records the family row actually applied.
+>
+> Final numbers (5-seed mean, `v4_final_eval.py`): **in-sample 0.9386** (F1 0.969, F2 1.007,
+> F3 0.932, F4 0.870), seeds 0.934-0.944; per era 0.928 / 0.969 / 0.891 / 0.932 / 0.963;
+> forward cards (>= 2019) 0.949. All-M0-like rows: 0.990. Previous rows: 0.927 in-sample but
+> F1 1.237 at k=1.5 and F4 1.476 at k=0 in the stress test below. Held-out estimate of the
+> selection procedure after the log1p fix (`v4_cv.py`, 1-SE rule): eras 0.937, forward 0.993.
+> CLI run (default seed): 0.9441; `run_all_gates --platform-env` 104/104, 0 fallbacks;
+> v1-v3 draws bit-identical.
+>
+> Stress (realized deviation from M0's centre x k, M0 recomputed, 5 seeds):
+>
+> | k | F1 adopted (=M0-like) | F1 old w0.9 | F4 adopted w1.1 | F4 old w1.25 | F4 w1.0 | F4 M0-like |
+> |---|---|---|---|---|---|---|
+> | 0 | 0.987 | 0.854 | 1.294 | 1.476 | 1.173 | 1.002 |
+> | 0.3 | 1.033 | 1.054 | 1.037 | 1.120 | 0.989 | 0.986 |
+> | 0.5 | 0.989 | 0.882 | 0.947 | 0.978 | 0.931 | 0.987 |
+> | 1.0 | 0.969 | 0.936 | 0.870 | 0.856 | 0.888 | 0.987 |
+> | 1.5 | 1.025 | 1.237 | 0.861 | 0.832 | 0.886 | 0.998 |
+>
+> Remaining bet: F4 still loses to M0 if the sealed F4 cards carry no shock at all (k <= ~0.3).
+> Sections below describe the first revision; its tables keep the original numbers.
+
 All numbers: 90 locally scorable public units (realized values reconstructed from sibling panels,
 `realized.py`), **scored the way the leaderboard scores** — each component (marginal CRPS, joint
 variogram, pinball tail) divided by the same component of **M0**, weighted (single-cell cards

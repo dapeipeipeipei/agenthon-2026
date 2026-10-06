@@ -246,6 +246,9 @@ def run(a: argparse.Namespace) -> int:
             "profile": used_profile.as_dict(),
             "requested_profile": profile.name,
             "derived_engine": derived or None,
+            # v4: the per-family row actually applied (family from the card; "default" if unknown)
+            "v4_resolved": ({k: (stats.get("derivation") or {}).get(k) for k in ("family", "family_knobs")}
+                            if derived == "v4" else None),
             "seed": seed,
             "language_model_calls": 0,
             "fallback": fallback is not None,

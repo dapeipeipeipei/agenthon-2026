@@ -114,16 +114,19 @@ PROFILES = {
                   ev_width=True, ev_asym=True, ev_binary=True, macro_drift=True,
                   ev_cell_damp=True),
     # v4: see engine/v4.py and t2-work/V4_NOTES.md; knobs from the cross-validated sweep.
-    # Rows: (family, width, tail_p, tail_k, asym_shift, event_width_on, drift_frac). Selected by the
-    # one-standard-error rule on the full 90-card sweep (v4_cv.py, mode family_1se); the same rule
-    # picked these rows in 4-5 of 5 leave-one-era-out folds. Unknown family -> the M0-like row.
+    # Rows: (family, width, tail_p, tail_k, asym_shift, event_width_on, drift_frac). Shapes selected
+    # by the one-standard-error rule on the 90-card sweep (v4_cv.py, mode family_1se); widths then
+    # pulled toward 1.0 after the independent audit (t2-work/AUDIT_T2.md S1/S2 stress tests):
+    # F1 0.9 -> 1.0 (0.9 loses to M0 if sealed F1 is 25% more volatile than the public set),
+    # F4 1.25 -> 1.1 (the stress-side shift carries most of the gain; width relied on shock-heavy
+    # card selection). Unknown family -> the M0-like row.
     "v4": Profile("v4", engine="v4", ev_width=True, ev_cell_damp=True, v4_shape="gauss",
                   v4_window=300, v4_vol_beta=0.0,
                   v4_family=(("default", 1.0, 0.0, 1.0, 0.0, False, 1.0),
-                             ("F1", 0.9, 0.0, 1.0, 0.0, False, 1.0),
+                             ("F1", 1.0, 0.0, 1.0, 0.0, False, 1.0),
                              ("F2", 1.0, 0.0, 1.0, 0.0, False, 1.0),
                              ("F3", 1.0, 0.0, 1.0, 0.0, False, 0.5),
-                             ("F4", 1.25, 0.2, 1.5, 1.0, False, 1.0))),
+                             ("F4", 1.1, 0.2, 1.5, 1.0, False, 1.0))),
 }
 
 
@@ -233,7 +236,8 @@ def prepare(
             # keep only rows that follow a regular step (drops the first row and any post-gap row)
             regular = io.diff_without_gaps(s).notna()
             inc = np.log1p(s)[regular].dropna()
-            out.append(AssetInput(a, 0.0, inc, infer_freq(s), "log_return", s.index[-1], raw=s))
+            # v4 raw = per-step ln(1+r): the target is the sum of ln(1+r_t) (targets.log_return_steps)
+            out.append(AssetInput(a, 0.0, inc, infer_freq(s), "log_return", s.index[-1], raw=np.log1p(s)))
             continue
         d = io.diff_without_gaps(s)
         if _trailing_valid(d) < MIN_ROWS and d.notna().sum() < len(s) - 1:
