@@ -8,11 +8,11 @@
   "category": "api",
   "image": {
     "registry": "ghcr.io",
-    "repository": "placeholder-owner/agenthon-t2-forecast",
-    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "repository": "dapeipeipeipei/jinpei-t2",
+    "digest": "sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74"
   },
   "image_access": "public",
   "models": [],
   "license": "Apache-2.0",
-  "descriptor_digest": "sha256:bffbfbc342429dffc9b3ef53a1fb804b72bb398778080d61af6430ffb90a120e"
+  "descriptor_digest": "sha256:9a1d0737ecb59123fa673dc10a1afd08c93ca16c0daec829df86dfa40a5de345"
 }
