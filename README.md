@@ -1,20 +1,76 @@
-# Agenthon 2026 — Team 299「Jin & Pei」
+# Agenthon 2026 — Team「Jin & Pei」
 
-这是我们参加 [Agenthon 2026](https://www.agenthon.net/) 的工作仓库。Agenthon 是 NeurIPS 2026
-Competition Track 收录的 16 个比赛之一，主题是「可验证的 AI × 量化金融」，由 SQA（Society of
-Quantitative Analysts）和 Stony Brook 大学的 CEWIT 主办，NVIDIA 白金赞助，Nebius 提供算力。
+## 给队友：从这里开始
 
-比赛有四个赛道，**我们主攻 Track 2（概率时序预测）**。本仓库当前只包含 Track 2 的实现，以及四个
-赛道的完整调研报告。
+> Yuren，这一节是写给你的。读完这一节你就知道项目是什么、现在什么状态、截止前**你**必须做什么。
+> 下面更长的部分是设计和操作手册，需要时再看。
 
-**时间线**：注册截止 2026-09-28 23:59 UTC · 最终评测 09-29 至 10-12 · 复现审核 10-13 至 10-25 ·
-NeurIPS Atlanta 12-09 至 12-13 获奖队展示。
+### 这是什么
 
-> **当前进度和下一步看 [STATUS.md](STATUS.md)**，它是每次开工的入口。本 README 讲的是
-> 「这是什么、怎么跑、为什么这么设计」。
+我们参加 [Agenthon 2026](https://www.agenthon.net/)（NeurIPS 2026 Competition Track，「可验证的 AI × 量化金融」）。
+四个赛道里**主攻 Track 2（概率时序预测）**：给一段历史行情和一小堆央行文档，交 2000 个「可能的未来值」，
+按 CRPS 打分并**除以一个不读文本的官方基线（M0）**，1.0 = 打平，越低越好。**副攻 Track 4**（带证据引用的表格预测）。
+提交物是一个 Docker 镜像，主办方在离线沙盒里跑；上传的是用官方工具 `qfbench2 submission pack` 打出来的 zip。
 
-> 本仓库**只包含我们自己写的东西**。四个上游赛道工具包（约 900 MB）作为同级目录存在但已 gitignore，
-> 需要时从 `github.com/Agenthon-2026` 重新克隆到本仓库的**父目录**下。
+### 现在的状态（2026-10-06）
+
+- **T2 引擎 v3 已完成并冻结**（09-13）：纯统计 + 确定性关键词事件检测，不调大模型；104/104 道公开题全部可接纳、零回退；
+  本地相对官方参考 CLI 的 ratio **0.900**（F1 0.804 / F2 1.002 / F3 0.872 / F4 0.907）。
+  ⚠ 这个分母不是排行榜的 M0，按 M0 重新评估是 v4 线在做的事（见 WORKLOG §9、§11.2）。
+- **截止已延期到 10-12**：Dev 在 **10-12 23:59 AoE** 关闭，但**新的 Dev 运行在 10-12 20:00 UTC 之后不再启动**；Final + Verification 10-13 → 10-25，每赛道**只交一份**。
+- **还从没真正上传过一次。** 镜像打包、提交描述文件、zip 打包正在 10-06 冲刺里做。
+- **10-06 起五条线并行**：T2 规则合规、T2 模型 v4、Docker 打包、Track 4、F4 事件表核对 —— 全部进行中，见 [WORKLOG.md §11](WORKLOG.md#11-2026-10-06-冲刺进行中)。
+- 上游规则 09-16 之后变了很多（BYO 撤销、模型预算改为每题 25 次请求、工具包钉 v2.6.0、Dev 榜只是练习板……），见 [WORKLOG.md §8](WORKLOG.md#8-09-16--10-02-上游规则变化很多很重要)。
+
+### 东西在哪
+
+```
+agenthon/
+├── README.md        ← 你在读：项目是什么 + 设计 + 操作手册
+├── WORKLOG.md       ← 从 09-08 到现在做过的每件事、每组实验的数字、走过的弯路
+├── STATUS.md        ← 倒计时、当前状态、下一步、阻塞项（每次开工的入口）
+├── research/        ← 09-08 四个赛道的调研报告（英文）+ F4 危机事件表（中文）
+├── t2-work/         ← Track 2 全部代码
+│   ├── engine/      ←   预测引擎（v1/v2/v3，v4 在做）
+│   ├── Dockerfile   ←   提交镜像
+│   ├── pack/        ←   打包、本地验收、填 digest、校验 zip 的脚本（pack/README.md 是操作手册）
+│   ├── submission/  ←   submission.json（提交描述文件；不含任何密钥）
+│   ├── run_all_gates.py / realized.py / score_local.py   ← 本地打分台
+│   ├── v4_eval.py   ←   按排行榜方式（除以 M0）快速评估
+│   └── grid_v2.py / ablate_v3.py / *_table.csv / scores_*.csv / ablation_*_log.txt  ← 实验与证据
+├── t4-work/         ← Track 4 参赛代码（agent/、harness/、submission/，STATUS.md）
+└── Agenthon2026-public/  track1…track4-*-public/   ← 上游官方仓（gitignore，见「环境搭建」）
+```
+
+### 阅读顺序
+
+1. **README**（本节就够了，后面按需查）
+2. **[WORKLOG.md](WORKLOG.md)** —— 完整来龙去脉
+3. **[STATUS.md](STATUS.md)** —— 现在做到哪、下一步
+4. **`t2-work/pack/README.md`** —— 怎么 build 镜像、怎么验收、怎么打 zip（Docker 线完成后就位）
+5. **`t4-work/STATUS.md`** —— Track 4 的状态（T4 线完成后就位）
+
+### 截止前必须由「人」来做的事
+
+这些事 agent 不能、也不应该代做：
+
+| # | 事项 | 谁 | 说明 |
+|---|---|---|---|
+| 1 | **批准 Wenshuo 的入队申请** | 队长 Yuren | 网站上操作。上次检查（09-22）还是 Pending Approval。**不入队就不算参赛、不能上榜、不能获奖** |
+| 2 | **确认队伍编号**（team number） | 任一队员 | `pack` 需要 `--team-number`。我们记录的是 299，打包前请在网站上再核对一次 |
+| 3 | **在隐藏提示符里输入 Team Key** | 持有 Team Key 的人 | 运行 `qfbench2 submission pack ...` 时它会在隐藏提示符里要（也可用 `--team-key-file`）。**Team Key 等同密码：不要写进任何文件、不要贴到聊天里、不要告诉任何 agent，agent 也不会问** |
+| 4 | **在 CodaBench 上传 zip** | 队伍指定的 CodaBench 账号持有人 | 赛道 CodaBench 页面链接在 agenthon.net 参赛公告里（需登录）。T2 每天最多 5 次、Dev 共 20 次；**最晚在 10-12 20:00 UTC 前让最后一次 Dev 运行启动** |
+| 5 | **Final 阶段（10-13 → 10-25）指定唯一一份 final 提交** | 同上 | 每赛道只能一份；同分时先上传者胜 |
+
+---
+
+> 以下是原来的详细文档（设计、评分、命令手册），10-06 已按最新规则修订过。
+
+本仓库**只包含我们自己写的东西**。四个上游官方仓（约 900 MB）克隆在本仓库**根目录**下、已 gitignore，
+需要时从 `github.com/Agenthon-2026` 重新克隆（见[环境搭建](#环境搭建)）。
+
+**时间线**：Registration + Development 截止 **2026-10-12 23:59 AoE**（新 Dev 运行 10-12 20:00 UTC 后不再启动）·
+Final + Verification **10-13 → 10-25**（每赛道一份 final）· NeurIPS Atlanta 12-09 → 12-13 获奖队展示。
 
 ---
 
@@ -40,7 +96,7 @@ NeurIPS Atlanta 12-09 至 12-13 获奖队展示。
 前置：Python ≥ 3.13，Git，约 1.5 GB 磁盘。详细步骤见[环境搭建](#环境搭建)。
 
 ```bash
-# 1. 克隆本仓库和上游工具包（注意 track 仓要放在本仓库的父目录）
+# 1. 克隆本仓库和上游工具包（track 仓放在本仓库根目录下，已 gitignore）
 git clone https://github.com/dapeipeipeipei/agenthon-2026.git agenthon
 cd agenthon
 for r in Agenthon2026-public track2-forecasting-public; do
@@ -50,7 +106,7 @@ done
 # 2. 建环境
 python -m venv .venv
 .venv/Scripts/python -m pip install \
-  "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+  "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.6.0#subdirectory=common"
 .venv/Scripts/python -m pip install ./track2-forecasting-public
 
 # 3. 跑一道题（Windows 上 PYTHONUTF8=1 是必须的，见环境搭建）
@@ -72,6 +128,11 @@ cd t2-work && ../.venv/Scripts/python -m engine.forecast \
 它和 Kaggle 那种「给数据、训模型、拼分数」完全不同。你提交的不是 notebook，是一个 **Docker 镜像**。
 主办方把它放进离线沙盒跑，先过四道自动验证门，全过了才计算比赛指标。
 
+**上传方式**（09-20 起）：镜像推到允许匿名按 digest 拉取的公开 registry → 把 digest 写进 `submission.json` →
+`qfbench2 submission pack --descriptor submission.json --team-number <N> --out submission.zip`（在隐藏提示符里输入 Team Key，
+它推出 `team_id` 并写入 `team-claim.json`，**Team Key 本身不进 zip**）→ 在赛道的 CodaBench 页面用队伍指定账号上传 zip。
+T2 每天 5 次、Dev 期间共 20 次；平台标 `Failed` 的不扣次数。
+
 四个赛道：
 
 | 赛道 | 任务 | 指标 |
@@ -90,15 +151,16 @@ cd t2-work && ../.venv/Scripts/python -m engine.forecast \
 |---|---|
 | GPU | 1 × NVIDIA B200，183 GB，compute capability 10.0（`sm_100`），CUDA ≤ 13.0 |
 | 沙盒 | gVisor（`runsc`）。系统调用慢 85%，本地 socket 慢 75%，纯计算几乎无损 |
-| 网络 | **只通 `$MODEL_ENDPOINT`**。PyPI、HuggingFace、OpenAI、Anthropic 全部拒绝，也不注入任何 API key |
-| 模型 | 主办方托管的 Nemotron 系列，OpenAI 兼容接口，每题 100 万输入 + 10 万输出 token |
-| T2 资源 | 16 核 / 128 GB / 每题上限 1800 秒 |
-| **T2 真实预算** | **整个提交 12 小时（Dev）或 24 小时（Final）**，摊到约 104 题约 400 秒/题，**且从 `docker create` 开始计时，冷拉取镜像 90–187 秒也算** |
-| 镜像 | 必须 `linux/amd64`、匿名可拉取、带 `LABEL qfbench2.interface_version="2.0"` |
-| 微调 | 只能交 LoRA adapter，rank ≤ 64，不能交权重 |
+| 网络 | **只通 `$MODEL_ENDPOINT`**（经审计代理）。PyPI、HuggingFace、OpenAI、Anthropic 全部拒绝，也不注入任何第三方 API key |
+| 模型 | 主办方托管的 House 模型（Nemotron 系列），`POST $MODEL_ENDPOINT/v1/chat/completions` + `Authorization: Bearer $MODEL_TOKEN`。**预算按请求计：每题 25 次被接纳的请求，每次最多 4000 输出 token**（原「每题 100 万输入 + 10 万输出 token」已于 09-21 撤销） |
+| T2 资源 | 16 CPU 配额 / 128 GB / **每题 1800 秒**（含建容器和拉镜像） |
+| T2 阶段钟 | Dev 摄取阶段整体 43,200 秒（12 小时）**顺序**跑完所有题；Dev 设置不代表 Final 资源 |
+| 容器 | 任意非 root uid（平台用 `--user 65534:65534`）、**只读根文件系统**、64 MiB noexec `/tmp`、256 PID、每进程 1024 文件句柄、没有 HOME |
+| 镜像 | 必须 `linux/amd64`、匿名可按 digest 拉取、带 `LABEL qfbench2.interface_version="2.0"` |
+| 自带模型（BYO） | **已撤销**（09-18 裁定）。唯一类别 `api`；不调模型的提交写 `models: []` |
 
-> **重要**：Track 2 的仓库明确写着「平台上服务 `MODEL_ENDPOINT` 的代理还没建好」。所以我们的代码
-> **必须在没有模型端点的情况下也能跑完并输出合法结果**。当前引擎完全不依赖它。
+> **重要**：我们的 T2 引擎**不调用任何模型**，在没有 `MODEL_ENDPOINT` 的环境下也完整跑出合法结果。
+> 将来若加文本方向层（v4 的 `house.py`），也必须保持「端点不可用时照样出合法结果」。
 
 ---
 
@@ -124,8 +186,10 @@ cd t2-work && ../.venv/Scripts/python -m engine.forecast \
 ### 输入输出合约
 
 ```
-forecast --panels /input --text /input/text --asof 2016-05-31 --out /output/forecast.parquet
+forecast --panels /input/panels/ --text /input/text/ --asof 2016-05-31 --out /output/forecast.parquet
 ```
+
+（真实评测时题目是 staged 过的，parquet 在 `/input/panels/` 下；公开仓里 parquet 在题目根目录。引擎两种布局都支持。）
 
 镜像必须接受 `forecast` 作为第一个位置参数（要么它在 `PATH` 上且不设 `ENTRYPOINT`，要么
 `ENTRYPOINT` 程序把它当位置参数吃掉）。题目目录只读挂载在 `/input`。
@@ -134,7 +198,7 @@ forecast --panels /input --text /input/text --asof 2016-05-31 --out /output/fore
 
 | 文件 | 内容 |
 |---|---|
-| `*.parquet` | 长表，列为 `date, asset, value, panel_id`。104 道题的 parquet **都在题目根目录**，不在 `panels/` 子目录，尽管文档那么写 |
+| `*.parquet` | 长表，列为 `date, asset, value, panel_id`。公开仓 104 道题的 parquet 都在题目根目录；**平台上 staged 的题在 `panels/` 子目录**，要传 `/input/panels/` |
 | `text/corpus_index.json` + `*.txt` | 冻结语料。索引里每篇有 `doc_id`、`timestamp`、`source`、`doc_type`、`file`。**会议纪要的 timestamp 是公开发布日，不是开会日** |
 | `card.toml` | `[targets]` 给出 `asset_ids`、`horizons`、`target_type`、`value_unit`；`[provenance] data_cutoff` 是 as-of |
 
@@ -144,7 +208,10 @@ forecast --panels /input --text /input/text --asof 2016-05-31 --out /output/fore
 |---|---|
 | `forecast.parquet` | 列**正好**是 `draw, asset, horizon, value`；行数**正好**等于 抽样数 × 资产数 × 期限数；draw 编号 0..n-1 连续；每个 `(draw, asset, horizon)` 格子恰好一次；全部有限值；≤ 64 MiB |
 | `forecast_meta.json` | `unit_id`（**不是 `card_id`**）必须等于题卡 `[task].id`；`asof` 精确匹配；`representation` 必须是 `"samples"`（`parametric` 会被拒）；`asset_ids` 和 `horizons` 的**顺序**也是合约的一部分；`n_draws` ∈ [200, 20000]；`target` 必须等于题卡的 `target_type` |
-| `forecast_rationale.md` | 必须存在，**从不计分**（g1 只检查有没有非空白字符），但人工审核会读 |
+| `forecast_rationale.md` | 必须存在，**从不计分**（g1 只检查有没有非空白字符），但会作为榜首的人工筛查材料（格式见 `track2-forecasting-public/docs/RATIONALE-REVIEW.md`） |
+
+**输出目录规则**（10-01 起写明）：容器退出后平台检查整个 `/output` 树，不能有符号链接/硬链接/特殊文件、
+单文件和总量 ≤ 64 MiB、≤ 256 个文件、目录不能太深、不能有只差大小写的文件名等。exit 0 但树被拒 → 该题记 `no_output`。
 
 ### 题库构成（104 道公开题）
 
@@ -159,8 +226,11 @@ forecast --panels /input --text /input/text --asof 2016-05-31 --out /output/fore
 77 道标 hard；as-of 从 2003-08-12 到 2024-12-18；语料共 627 个 txt、28.3 MB、410 篇去重文档，
 每题 2 到 15 篇。
 
+104 道 = 71 道 `validation` + 33 道 `public-dev`。**Dev 排行榜打的是那 71 道 validation 题**，而且官方明说
+Dev 榜是「练习板」不是排名：练习题彼此泄题（103 道里 75 道的答案原样出现在兄弟题面板里），名次没有意义，看逐题分数检查管线和校准即可。
+
 **最终排名不用这 104 道题。** 用的是主办方封存的另一批题，时点在 2025 下半年到 2026 上半年，我们
-永远看不到。这 104 道只是我们验证方法通用性的沙盘。
+永远看不到（官方实测练习数据对它 0 泄漏）。这 104 道只是我们验证方法通用性的沙盘。
 
 ---
 
@@ -175,8 +245,8 @@ forecast --panels /input --text /input/text --asof 2016-05-31 --out /output/fore
 | `g2_cutoff_resource` | 声明的题号/as-of/target 与题卡一致，资源没超 | `target` 写 `level` 但题卡是 `log_return` |
 | `g3_domain_semantics` | 网格齐全，每格恰好一次 | 有重复格子（**不会被平均，直接拒**） |
 
-**任何一道门没过，这题直接记 4.0（最差分），不再往后算。** Dev 阶段可以反复重试，Final 阶段
-失败就是永久失去这道题。
+**任何一道门没过，这题直接记 4.0（最差分），不再往后算。** Dev 阶段可以重新上传（有次数限制），Final 阶段
+只有一份提交，失败就是永久失去这道题。
 
 ### 第二层：分数
 
@@ -194,12 +264,20 @@ S = 0.5 × CRPS_marginal + 0.3 × variogram(p=0.5) + 0.2 × pinball_tail
 
 ### 第三层：归一化
 
-**每一项都要除以主办方自己跑的 text-blind baseline 的同一项。** 那个 baseline 是一个「看得到面板、
-看不到任何文本」的随机游走。
+**每一项都要除以主办方官方基线 M0 的同一项，然后再加权。** M0 是一个「看得到面板、看不到任何文本」的
+联合高斯随机游走，做法在 `track2-forecasting-public/docs/M0-BASELINE.md` 里完整公开（各题的缩放值不公开）。
 
-所以 **1.0 = 和不读文本的随机游走打平**，0.9 = 比它好 10%。榜单排的是 104 题的平均比值。
+所以 **1.0 = 和不读文本的随机游走打平**，0.9 = 比它好 10%。
 
-**这就是为什么我们的所有内部指标都叫 ratio。** 本地打分台复现的就是这个比值。
+**这就是为什么我们的所有内部指标都叫 ratio。** 但要注意两个口径差异（10-06 才发现，详见 WORKLOG §9）：
+
+| | 排行榜 | 我们 09-13 的本地打分台（`score_local.py`） |
+|---|---|---|
+| 分母 | **M0** | 官方**参考 CLI**（`qfbench2_track_forecasting/cli.py`，也是 text-blind 随机游走，但不是 M0） |
+| 归一化 | 三个分量**分别**除以 M0 的同一分量再加权 | 整个复合分相除 |
+| 跨题聚合 | **算术**平均，裁剪到 [0, 4] | **几何**平均 |
+
+所以 README 里 v1/v2/v3 的 0.9xx 只是内部指标，不等于榜单分数——按 M0 口径，v1–v3 在平静的 F1 题上反而输给基线（v4 线的发现）。按榜单口径评估用 `t2-work/v4_eval.py`。
 
 ### 第四层：聚合
 
@@ -215,15 +293,16 @@ S = 0.5 × CRPS_marginal + 0.3 × variogram(p=0.5) + 0.2 × pinball_tail
 
 ## 我们的引擎
 
-代码在 `t2-work/engine/`，共约 1300 行，只依赖 numpy / pandas / pyarrow。
+代码在 `t2-work/engine/`，只依赖 numpy / pandas / pyarrow（v3 冻结时约 1300 行；10-06 起合规线和 v4 线正在改，行数以代码为准）。
 
 ```
 engine/
-├── io.py         312 行  读面板和题卡、写三个输出文件、rationale 账本
-├── model.py      448 行  模拟核心：块自助采样、尺度混合、情景混合
-├── events.py     255 行  确定性语料事件检测器
-├── assets.py      57 行  资产 → 压力方向映射表
-└── forecast.py   206 行  CLI、profile 选择、回退链
+├── io.py         读面板、题卡、forecast_spec.json（月度目标期），写三个输出文件、rationale 账本
+├── model.py      模拟核心：块自助采样、尺度混合、情景混合
+├── events.py     确定性语料事件检测器
+├── assets.py     资产 → 压力方向映射表
+├── house.py      （v4 线新增，进行中）House 模型调用层，端点不可用时必须无损退化
+└── forecast.py   CLI、profile 选择、回退链
 ```
 
 三档 profile，用 `--profile` 选，**默认 v3**。
@@ -306,12 +385,12 @@ v3 的思路：**只在语料说有事的时候才放宽**。这是一个**确�
 
 ## 成绩与消融结论
 
-ratio = 我们的复合分 ÷ text-blind baseline 的复合分，几何均值，**越低越好，1.0 是打平**。
-样本是 90 道能在本地还原出真实值的题。
+ratio = 我们的复合分 ÷ **官方参考 CLI**（text-blind 随机游走）的复合分，几何均值，**越低越好，1.0 是打平**。
+样本是 90 道能在本地还原出真实值的题。（口径与排行榜不同，见上文「第三层：归一化」；按 M0 的新数字由 v4 线回填。）
 
 | profile | 总体 | F1 宏观 | F2 汇率 | F3 多资产 | F4 危机 | 真实值出 90% 区间的比例 |
 |---|---|---|---|---|---|---|
-| text-blind baseline | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 23.7% |
+| 参考 CLI（text-blind） | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 23.7% |
 | v1 块自助 | 0.925 | 0.712 | 1.009 | 0.849 | 1.076 | 26.3% |
 | v2 加校准 | 0.939 | 0.842 | 1.006 | 0.874 | 0.999 | 11.4% |
 | **v3 事件感知** | **0.900** | **0.804** | **1.002** | **0.872** | **0.907** | **13.1%** |
@@ -322,7 +401,8 @@ ratio = 我们的复合分 ÷ text-blind baseline 的复合分，几何均值，
 
 ### 消融跑出来的三条结论
 
-40 组配置的完整结果在 `t2-work/ablation_v3_table.csv`。
+v3 消融共 40 组（分 6 批），每组逐题分数在 `t2-work/scores_v3_<tag>.csv`，每批汇总在 `t2-work/ablation_*_log.txt` 末尾。
+`t2-work/ablation_v3_table.csv` 每批会被覆盖，**只剩最后一批的 6 行**。逐批数字整理在 [WORKLOG.md §6](WORKLOG.md#6-引擎-v3-与-ablate_v340-组只在有事时放宽)。
 
 1. **统一放宽是死路。** 每一个能把 F4 压到 0.93 以下的设置，都会把 F3 推到 0.90 以上。这个权衡
    是结构性的，参数调不出来。
@@ -345,6 +425,8 @@ ratio = 我们的复合分 ÷ text-blind baseline 的复合分，几何均值，
 ```
 agenthon/
 ├── README.md                  ← 你在读的这份
+├── WORKLOG.md                 按时间顺序的完整工作记录
+├── STATUS.md                  倒计时、现状、下一步
 ├── research/                  四个赛道的调研报告
 │   ├── T1-coding.md           每份都含：合约、资源限制、指标定义、
 │   ├── T2-forecasting.md      baseline 情况、坑位清单、三周可行性评估
@@ -353,8 +435,12 @@ agenthon/
 │   └── F4-events.md           31 道危机题的历史背景（预填，待核对）
 ├── t2-work/
 │   ├── engine/                我们的预测引擎（见上一节）
-│   ├── Dockerfile             提交镜像，照抄官方参考镜像的形状
-│   ├── run_all_gates.py       跑遍 104 题 + 检查四道门
+│   ├── Dockerfile             提交镜像（10-06 重写：基础镜像按 digest 钉死、适配只读根文件系统）
+│   ├── requirements.lock      镜像和本地验收环境共用的一份精确依赖
+│   ├── pack/                  build / 本地容器验收 / 填 digest / 校验 zip（见 pack/README.md）
+│   ├── submission/            submission.json 提交描述文件
+│   ├── v4_eval.py             按排行榜口径（除以 M0）的进程内快速评估
+│   ├── run_all_gates.py       跑遍 104 题 + 检查四道门 + 输出目录规则
 │   ├── realized.py            从兄弟题的面板里还原真实值
 │   ├── score_local.py         用官方打分器算分、算比值
 │   ├── grid_v2.py             v2 参数网格
@@ -362,7 +448,8 @@ agenthon/
 │   ├── events_scan.py         把 104 题的事件特征打成一张表看
 │   ├── *_table.csv            网格和消融的汇总表
 │   └── scores_*.csv           每次运行的逐题分数（消融证据）
-├── Agenthon2026-public/       ↓ 以下四个是上游工具包，已 gitignore
+├── t4-work/                   Track 4 参赛代码（10-06 开工）
+├── Agenthon2026-public/       ↓ 以下五个是上游官方仓，已 gitignore
 ├── track1-coding-public/         从 github.com/Agenthon-2026 克隆
 ├── track2-forecasting-public/
 ├── track3-simulation-public/
@@ -381,33 +468,39 @@ agenthon/
 
 ### 2. 克隆
 
-上游四个仓要放在**本仓库的父目录**（脚本按 `../track2-forecasting-public` 找）。T3 有 574 MB
-（Git-LFS 参考轨迹），暂时不用可以不克隆。
+上游仓克隆在**本仓库根目录下**（与 `t2-work/` 同级，已 gitignore；脚本从 `t2-work/` 出发按 `../track2-forecasting-public` 找）。
+T3 有 574 MB（Git-LFS 参考轨迹），不用可以不克隆。
 
 ```bash
+cd agenthon
 git clone --depth 1 https://github.com/Agenthon-2026/Agenthon2026-public
 git clone --depth 1 https://github.com/Agenthon-2026/track2-forecasting-public
+git clone --depth 1 https://github.com/Agenthon-2026/track4-analysis-public    # Track 4 用
 ```
+
+**上游规则一直在改。每次开工先 `git -C <上游仓> pull` 并看 CHANGELOG**——我们就是因为没拉，晚了 20 天才知道截止延期了。
 
 ### 3. 装包
 
 ```bash
 python -m venv .venv
 .venv/Scripts/python -m pip install \
-  "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+  "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.6.0#subdirectory=common"
 .venv/Scripts/python -m pip install ./track2-forecasting-public
 .venv/Scripts/python -c "from qfbench2_common.contracts import CONTRACT_SET; print(CONTRACT_SET)"  # 应打印 1.1.0
+.venv/Scripts/python -c "import importlib.metadata as m; print(m.version('qfbench2-common'))"     # 应打印 2.6.0
 ```
 
-**一定要钉 `@v2.3.1`，不要装分支。** 装分支会让本地结果和评测结果在谁都没错的情况下分叉。
-`qfbench2-common` 没有发布到 PyPI，只能用 git URL。
+**一定要钉 `@v2.6.0`，不要装分支。** 装分支会让本地结果和评测结果在谁都没错的情况下分叉。
+`qfbench2-common` 没有发布到 PyPI，只能用 git URL。（track2 仓的文字里还写着 v2.4.4，共享仓现行 pin 是 v2.6.0，我们跟共享仓。）
+与镜像完全一致的本地验收环境由 `t2-work/pack/make_venv.sh` 建在 `t2-work/pack/.venv-docker`。
 
 ### 4. Windows 三个坑
 
 | 坑 | 现象 | 解法 |
 |---|---|---|
 | **GBK 编码** | 读语料时 `UnicodeDecodeError: 'gbk' codec can't decode byte 0x94` | **每次跑脚本都设 `PYTHONUTF8=1`** |
-| **`qfbench2-smoke` 拒跑** | `os.O_NOFOLLOW / os.O_DIRECTORY are unavailable on this platform` | 官方 smoke 工具在 Windows 上用不了。用我们的 `run_all_gates.py`（调的是同一个官方打分器），或者上 WSL / Docker |
+| **`qfbench2-smoke` 拒跑** | `os.O_NOFOLLOW / os.O_DIRECTORY are unavailable on this platform` | 官方 smoke 工具在 Windows 上用不了。用我们的 `run_all_gates.py` 或 `t2-work/pack/check_outputs.py`（调的是同一个官方打分器和工具包的输出树策略），或者上 WSL / Docker |
 | **换行符** | git 提示 `LF will be replaced by CRLF` | 无害，忽略 |
 
 ---
@@ -507,24 +600,28 @@ ratio、按题族的几何均值，写进 `scores_v3.csv`。
 ### 难但价值最高
 
 7. **F2 的方向判断。** 27 道题，现在全是 1.00。需要从文本里读出「这个货币未来一个月倾向升还是贬」。
-   这是唯一需要大模型的地方，等 `MODEL_ENDPOINT` 上线。注意官方警告：文本对中心的影响只敢是
+   这是唯一需要大模型的地方：House 模型每题只有 25 次请求，v4 线在评估值不值得用。注意官方警告：文本对中心的影响只敢是
    **标准差的几分之一**，不是几倍；乱加漂移会让分数比不读文本还差。
-8. **镜像化与提交。** `t2-work/Dockerfile` 已经写好但**没 build 过**（需要 Docker）。要做的事：
+8. **镜像化与提交。** 10-06 由 Docker 线在做（`t2-work/Dockerfile`、`t2-work/pack/`）：
    build `linux/amd64` 镜像、推到公开 registry、用匿名 token 验证真的可拉取（`docker pull` 用的是
-   你自己的凭证，验证不了任何东西）、封印 `submission.json` 的 descriptor digest。
+   你自己的凭证，验证不了任何东西）、把 digest 填进 `submission.json` 并封印 descriptor digest、
+   最后由人运行 `qfbench2 submission pack` 打 zip 上传。
 
 ---
 
 ## 铁律
 
-1. **Team Key 不进仓库、不进任何文件、不贴聊天。** 它等同于密码。本仓库已扫描确认没有。
+1. **Team Key 不进仓库、不进任何文件、不贴聊天、不告诉任何 agent。** 它等同于密码，只在 `qfbench2 submission pack`
+   的隐藏提示符里由人输入。本仓库已扫描确认没有。
 2. **永不崩溃。** 任何异常都要有兜底：写一份格式合法的保守答案，`exit 0`。崩溃记 4.0 且留在分母。
 3. **绝对路径。** 写到 `--out` 给的路径。相对路径会落在容器里，随容器销毁，运行看起来成功但什么
    都没产出。
 4. **schema 赢过文档。** 官方多份 README 已被证实与代码矛盾。裁决顺序：
    **scorer 源码 > card.toml > starter-pack AGENTS.md > 赛道 README**。
-5. **`submission.json` 严格 12 个字段。** `additionalProperties: false`。官方文档亲手埋了一个雷：
-   它说你「可以设 `house_endpoint_only`」，但 schema 不认这个字段，加了直接被拒。
+5. **`submission.json` 严格 12 个字段**（v2.6.0 schema：`schema_version, interface_version, competition_id, team_id,
+   track, phase, category, image, image_access, models, license, descriptor_digest`，全部必填，`additionalProperties: false`）。
+   官方文档早期说你「可以设 `house_endpoint_only`」，但 schema 不认这个字段，加了直接被拒。`category` 只能是 `api`
+   （`byo-*` 已撤销）；`team_id` 由 `pack` 根据 Team Key 推出并写入，不要手填。
 6. **不读 as-of 之后的任何东西。** 包括语料时间戳。代码里强制过滤，不依赖 staging 保证。
 7. **不针对这 104 道题调参。** 最终排名用封存题集。我们的选参原则一直是「四个题族都不输」，
    而不是「总分最低」。
@@ -536,21 +633,24 @@ ratio、按题族的几何均值，写进 `scores_v3.csv`。
 
 ## 未决事项
 
-| 事项 | 状态 |
+| 事项 | 状态（2026-10-06） |
 |---|---|
-| Yuren 批准入队申请 | 待办，网站上操作 |
-| 核对 `research/F4-events.md` | 待办 |
-| 启动 Docker Desktop，build 提交镜像 | 待办，Dockerfile 已就绪 |
-| 跑通官方 CodaBench 提交流程 | 官方说 "further instructions to come"，盯 Announcements |
-| F2 的文本方向层 | 等 `MODEL_ENDPOINT` 上线 |
-| Track 4（副攻赛道） | 未开工。报告在 `research/T4-analysis.md`：11 道公开题，NLI 忠实度门槛可在本地对着裁判模型直接优化 |
+| Yuren 批准入队申请 | **人工待办**，网站上操作（09-22 时 Pending Approval） |
+| 核对 `research/F4-events.md` | 进行中（第五条线） |
+| build 提交镜像、本地容器验收、匿名拉取验证 | 进行中（Docker 线），见 `t2-work/pack/README.md` |
+| 打 zip 并在 CodaBench 上传 | 流程已明确（见「这个比赛在比什么」），**需人工**输入 Team Key 并用队伍指定账号上传 |
+| 按 M0 口径重新评估 + 引擎 v4 | 进行中（v4 线） |
+| F2 的文本方向层 | House 端点已有合约（每题 25 次请求），v4 线评估中 |
+| Track 4（副攻赛道） | 进行中（`t4-work/`）。报告在 `research/T4-analysis.md` |
 | 14/104 题无法本地打分 | EM transfer 题、月度宏观题、最晚两个 as-of。只检查门槛 |
 
 ---
 
 ## 参考
 
-- 官网 <https://www.agenthon.net/> · 规则 `/rules/` · FAQ `/guides/faq/` · 公告 `/announcements/`（需登录）
+- 官网 <https://www.agenthon.net/> · 规则 `/rules/` · FAQ `/guides/faq/` · 公告 `/announcements/`（需登录；CodaBench 页面链接在这里）
+- 基线定义 `track2-forecasting-public/docs/M0-BASELINE.md`、排行榜构成 `docs/CONCEPTS.md` §13
+- 运行环境与提交次数 `Agenthon2026-public/docs/DEVELOPMENT-RUNTIME.md`；打包与 Team Key 说明 `Agenthon2026-public/starter-packs/track2/TEAM-CLAIM.md`
 - 上游代码 <https://github.com/Agenthon-2026>
 - 官方解题指南 `track2-forecasting-public/docs/SOLVER-PLAYBOOK.md` —— 主办方自己解了 103 道题反推
   出来的方法论，基本是答案，**强烈建议通读**
