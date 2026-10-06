@@ -8,11 +8,11 @@
   "category": "api",
   "image": {
     "registry": "ghcr.io",
-    "repository": "replace-me/agenthon-t4-analyst",
-    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "repository": "dapeipeipeipei/jinpei-t4",
+    "digest": "sha256:bf2a164756244a4ede12e5ea92bf164b60f47c2ba664f9cd955c117f8c68e01c"
   },
   "image_access": "public",
   "models": [],
   "license": "Apache-2.0",
-  "descriptor_digest": "sha256:4569532d24782ba5a11cef62e585dcdeb645b5ed09fc20f04c906ec85156d14a"
+  "descriptor_digest": "sha256:c1ae9b0d01641e5b89110faf4c2511f85eea4a0b9e268d3215b091fdde84bb5c"
 }
