@@ -4,8 +4,8 @@
     python -m engine.forecast ...   (same thing)
 
 Writes exactly forecast.parquet, forecast_meta.json and forecast_rationale.md beside --out and
-exits 0. Never crashes on model errors: v3 (event layer) -> v2 (same knobs, events off) ->
-Gaussian random walk, each step recorded in the meta sidecar and the rationale.
+exits 0. Never crashes on model errors: v4 -> v3 -> v2 inside model.simulate, then a Gaussian
+random walk here, each step recorded in the meta sidecar and the rationale.
 
 Runtime contract honoured here (SUBMISSION_CLI.md, Agenthon2026-public docs/DEVELOPMENT-RUNTIME.md):
   * reads only the unit directory (--panels, its parent for card.toml / forecast_spec.json, --text)
@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
-import inspect
 import os
 import pathlib
 import re
@@ -107,42 +106,6 @@ def _watchdog(seconds: float) -> Iterator[None]:
         signal.signal(signal.SIGALRM, old)
 
 
-@contextlib.contextmanager
-def _monthly_steps(by_last: dict[pd.Timestamp, dict[int, int]]) -> Iterator[Any]:
-    """Make the model use the task's monthly observation periods (docs/MONTHLY-HORIZONS.md).
-
-    Yields kw(fn): the keyword arguments to pass to a model function. If the model function
-    accepts `steps_override` (requested from the model owner) the resolved {horizon: steps} goes
-    there. In every case model.steps_for is also wrapped for the duration of the block: monthly
-    lookups keyed by the asset's last observation date return the resolved step count; daily
-    lookups are untouched."""
-    if not by_last:
-        yield lambda fn: {}
-        return
-    first = next(iter(by_last.values()))
-
-    def kw(fn: Any) -> dict[str, Any]:
-        try:
-            return {"steps_override": first} if "steps_override" in inspect.signature(fn).parameters else {}
-        except (TypeError, ValueError):
-            return {}
-
-    orig = model.steps_for
-
-    def patched(h: int, freq: str, asof: str, last_date: pd.Timestamp) -> int:
-        if freq == "monthly":
-            table = by_last.get(pd.Timestamp(last_date), first)
-            if int(h) in table:
-                return int(table[int(h)])
-        return orig(h, freq, asof, last_date)
-
-    model.steps_for = patched  # type: ignore[assignment]
-    try:
-        yield kw
-    finally:
-        model.steps_for = orig  # type: ignore[assignment]
-
-
 def _provenance(panels: dict[str, pd.DataFrame] | None, assets: list[str], asof: str) -> dict[str, Any]:
     """Which file / rows / dates each target series came from (for the rationale). Never raises."""
     out: dict[str, Any] = {}
@@ -201,7 +164,7 @@ def run(a: argparse.Namespace) -> int:
     inputs: list[Any] | None = None
     monthly_info: dict[str, Any] | None = None
     steps_by_asset: dict[str, dict[int, int]] = {}
-    by_last: dict[pd.Timestamp, dict[int, int]] = {}
+    steps_override: dict[int, int] | None = None
     used_profile = profile
     samples: np.ndarray | None = None
     stats: dict[str, Any] = {}
@@ -218,29 +181,31 @@ def run(a: argparse.Namespace) -> int:
             if any(x.freq == "monthly" for x in inputs):
                 steps_by_asset, monthly_info = io.monthly_steps(
                     card, spec, assets, horizons, {x.asset: x.last_date for x in inputs}, data_asof)
-                by_last = {pd.Timestamp(x.last_date): steps_by_asset[x.asset] for x in inputs}
-            with _monthly_steps(by_last) as kw:
-                try:
-                    samples, stats = model.simulate(inputs, horizons, data_asof, n_draws, seed, a.block_len,
-                                                    profile, feats, **kw(model.simulate))
-                except Exception as exc:  # noqa: BLE001 - v3 -> v2: same knobs with the event layer off
-                    if not profile.uses_events:
-                        raise
-                    fallback_chain.append(f"v3 event layer failed ({type(exc).__name__}: {exc}); retrying without it")
-                    print(f"engine v3 -> v2 for {unit_id}: {fallback_chain[-1]}", file=sys.stderr)
-                    traceback.print_exc(file=sys.stderr)
-                    used_profile = model.without_events(profile)
-                    samples, stats = model.simulate(inputs, horizons, data_asof, n_draws, seed, a.block_len,
-                                                    used_profile, None, **kw(model.simulate))
+                # docs/MONTHLY-HORIZONS.md: the model takes {horizon: steps} resolved here (single-asset
+                # monthly cards; on a multi-asset monthly card the first target's months are used).
+                steps_override = steps_by_asset[inputs[0].asset]
+            try:
+                samples, stats = model.simulate(inputs, horizons, data_asof, n_draws, seed, a.block_len,
+                                                profile, feats, steps_override=steps_override)
+            except Exception as exc:  # noqa: BLE001 - classic profiles: same knobs with the event layer off
+                if not profile.uses_events:
+                    raise
+                fallback_chain.append(f"{profile.name} failed ({type(exc).__name__}: {exc}); retrying with the "
+                                      "event layer off")
+                print(f"engine {profile.name} -> no-events for {unit_id}: {fallback_chain[-1]}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+                used_profile = model.without_events(profile)
+                samples, stats = model.simulate(inputs, horizons, data_asof, n_draws, seed, a.block_len,
+                                                used_profile, None, steps_override=steps_override)
+            fallback_chain.extend(str(x) for x in (stats.get("fallback_chain") or []))
     except (Exception, _Deadline) as exc:  # noqa: BLE001 - never DNF: fall back to a random walk
         fallback = f"{type(exc).__name__}: {exc}"
         fallback_chain.append(f"bootstrap failed ({fallback}); gaussian random walk")
         print(f"engine fallback for {unit_id}: {fallback}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         try:
-            with _monthly_steps(by_last) as kw:
-                samples, stats = model.gaussian_fallback(panels, assets, horizons, data_asof, target_type,
-                                                         n_draws, seed, **kw(model.gaussian_fallback))
+            samples, stats = model.gaussian_fallback(panels, assets, horizons, data_asof, target_type,
+                                                     n_draws, seed, steps_override=steps_override)
         except Exception as exc2:  # noqa: BLE001 - last resort: still write three valid files
             fallback_chain.append(f"gaussian fallback failed ({type(exc2).__name__}: {exc2}); zero-anchored N(0, 0.01)")
             rng = np.random.default_rng(seed)
@@ -250,8 +215,16 @@ def run(a: argparse.Namespace) -> int:
                      "steps": {h: h for h in horizons}, "seed": seed}
     samples = np.nan_to_num(np.asarray(samples, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
 
+    derived = str(((stats.get("derivation") or {}) if isinstance(stats, dict) else {}).get("engine") or "")
     if fallback:
         method = "gaussian random walk (fallback), no text"
+    elif derived == "v4":
+        house = any(x.get("name") == "house_model" for x in (stats["derivation"].get("adjustments") or []))
+        method = ("v4: joint Gaussian walk on the trailing-300-step mean and covariance (the M0 information "
+                  "set) with fixed per-family calibration (width, scale mixture, stress-side tail shift, drift "
+                  "fraction) chosen by cross-validation on the practice cards; corpus keyword features only "
+                  "where the family row enables them; "
+                  + ("bounded House-model widening" if house else "no language model"))
     elif used_profile.uses_events:
         method = ("stationary block bootstrap, recent/full vol blend, shared blocks across assets; "
                   "deterministic corpus event layer (keyword features -> width / asymmetric tail / "
@@ -272,6 +245,7 @@ def run(a: argparse.Namespace) -> int:
             "version": ENGINE_VERSION,
             "profile": used_profile.as_dict(),
             "requested_profile": profile.name,
+            "derived_engine": derived or None,
             "seed": seed,
             "language_model_calls": 0,
             "fallback": fallback is not None,

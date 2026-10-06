@@ -374,7 +374,14 @@ def rationale_text(
     ev = (stats.get("events") or None) if isinstance(stats, dict) else None
     files = prov.get("corpus_files") or {}
 
+    der = (stats.get("derivation") or {}) if isinstance(stats, dict) else {}
+    is_v4 = der.get("engine") == "v4" and not fallback
+
     def k_steps(a: str, h: int) -> int:
+        if is_v4:
+            st = (der.get("assets") or {}).get(a, {}).get("steps") or {}
+            if h in st:
+                return int(st[h])
         return int(steps_by_asset.get(a, {}).get(h, steps_common.get(h, h)))
 
     L: list[str] = []
@@ -384,14 +391,21 @@ def rationale_text(
              f"key(s) {', '.join(str(h) for h in horizons)}. {n_draws} joint draws; every draw carries every "
              f"(asset, horizon) cell.")
     L.append("")
+    house_used = any(x.get("name") == "house_model" for x in (der.get("adjustments") or []))
     L.append("**How this was produced.** A deterministic program (engine "
              f"{prov.get('engine_version', '?')}, profile `{prof.get('name', 'fallback')}`, seed "
-             f"{stats.get('seed', prov.get('seed', '?'))}). No language model was called. Every number below is "
-             "computed in this run from the panel rows dated on or before the as-of and the corpus documents "
-             "dated on or before the as-of; no realized outcome, later data or remembered history enters the "
-             "centre or the spread. The text corpus is read only through fixed keyword counts and can only "
-             "widen the distribution or tilt its tails -- it never moves the bulk of the distribution toward "
-             "a remembered value.")
+             f"{stats.get('seed', prov.get('seed', '?'))}). "
+             + ("The House language model was consulted for a bounded widening only (section 5). " if house_used
+                else "No language model was called. ")
+             + "Every number below is computed in this run from the panel rows dated on or before the as-of "
+             "and the corpus documents dated on or before the as-of; no realized outcome, later data or "
+             "remembered history enters the centre or the spread. "
+             + ("The centre is the panel's own trailing drift; the text corpus is read only through fixed "
+                "keyword counts, and section 5 states exactly which (if any) of its outputs reached the draws."
+                if is_v4 else
+                "The text corpus is read only through fixed keyword counts and can only widen the "
+                "distribution or tilt its tails -- it never moves the bulk of the distribution toward a "
+                "remembered value."))
     if fallback:
         L += ["", f"**FALLBACK.** The bootstrap engine raised (`{fallback}`); the draws below are a driftless "
                   "Gaussian random walk per asset (sd from the recent per-step changes). The text was not used."]
@@ -407,7 +421,7 @@ def rationale_text(
         s = ser.get(a, {})
         L.append(f"| {a} | {s.get('panel', '?')}.parquet | {s.get('rows', '?')} | {s.get('first', '?')} | "
                  f"{s.get('last', '?')} | {_f(s.get('last_value'))} | {per.get(a, {}).get('kind', '?')} |")
-    if isinstance(stats, dict) and stats.get("first_row"):
+    if isinstance(stats, dict) and stats.get("first_row") and not is_v4:
         L.append("")
         L.append(f"Aligned per-step history used for resampling: {stats.get('n_rows')} rows of "
                  f"{stats.get('freq', '?')} steps, {stats.get('first_row')} to {stats.get('last_row')} "
@@ -444,14 +458,21 @@ def rationale_text(
         s = ser.get(a, {})
         if target_type == "log_return":
             L.append(f"- `{a}`: anchor **0** -- the target is the cumulative log return sum(ln(1+r)) over the "
-                     "horizon, so the walk starts at zero; each resampled step is ln(1+r) of a historical "
-                     f"panel return.")
+                     "horizon, so the walk starts at zero; "
+                     + ("each simulated step follows the trailing-window mean and sd of the panel's per-step "
+                        "return (section 3)." if is_v4 else
+                        "each resampled step is ln(1+r) of a historical panel return."))
         elif st.get("kind") == "transfer_proxy":
             L.append(f"- `{a}`: anchor **{_f(st.get('anchor'))}**, the as-of row of {s.get('panel', '?')}.parquet "
                      f"({s.get('last', '?')}). {st.get('note', '')}")
         else:
             L.append(f"- `{a}`: anchor **{_f(st.get('anchor'))}** = last observed level in "
                      f"{s.get('panel', '?')}.parquet on {s.get('last', '?')} (the last row at or before the as-of).")
+
+    if is_v4:
+        L += _v4_sections(der, stats, assets, horizons, n_draws, target_type, feats, files, prov,
+                          samples, k_steps)
+        return "\n".join(L) + "\n"
 
     # ---- 3. horizon in panel steps
     L += ["", "## 3. Horizon in panel steps", ""]
@@ -681,4 +702,203 @@ def _ledger(assets: list[str], horizons: list[int], per: dict[str, Any], ev: dic
     L += spread_rows
     if fallback:
         L += ["", "(Fallback: no mixture, no shifts; nominal sd = sd/step x sqrt(steps).)"]
+    return L
+
+
+# ----------------------------------------------------------------------------- v4 rationale
+
+def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], horizons: list[int],
+                 n_draws: int, target_type: str, feats: dict[str, Any] | None,
+                 files: dict[str, dict[str, str]], prov: dict[str, Any], samples: np.ndarray | None,
+                 k_steps: Any) -> list[str]:
+    """Sections 3-6 + ledger for engine v4, built only from stats["derivation"] (engine/v4.py)."""
+    bb = der.get("backbone") or {}
+    fk = der.get("family_knobs") or {}
+    fin = der.get("final") or {}
+    da = der.get("assets") or {}
+    ev = stats.get("events") or {}
+    adjs = {x.get("name"): x for x in (der.get("adjustments") or [])}
+    family = der.get("family")
+    rd = (feats or {}).get("rdensity", {}) or {}
+    L: list[str] = []
+
+    # ---- 3. backbone
+    L += ["", "## 3. Text-blind backbone (trailing-window mean and covariance)", ""]
+    L.append(f"Per-step changes over the last {bb.get('window_rows')} panel rows of each target series "
+             + ("(the panel's per-step simple return r, used as-is as the step of the cumulative log-return "
+                "target)" if target_type == "log_return"
+                else "(first differences of the level)")
+             + "; a step that spans a hole longer than max(10 x median spacing, 5 days) is dropped, and "
+             f"only dates common to every target asset are kept: {bb.get('aligned_steps')} aligned steps, "
+             f"{bb.get('first_step')} to {bb.get('last_step')}. From these: per-step mean mu and covariance "
+             "Sigma -- the same information set as the organizers' text-blind baseline (docs/M0-BASELINE.md).")
+    L.append("")
+    L.append("| asset | mu per step | sd per step (window) | diag: sd last 60 steps | diag: sd full history |")
+    L.append("|---|---|---|---|---|")
+    for a in assets:
+        x = da.get(a, {})
+        L.append(f"| {a} | {_f(x.get('mu_per_step'), '+.5g')} | {_f(x.get('sd_window_per_step'), '.5g')} | "
+                 f"{_f(x.get('sd_last60_diag'), '.5g')} | {_f(x.get('sd_full_history_diag'), '.5g')} |")
+    L.append("")
+    L.append("(The two diagnostic columns are reported for the reader and are not used by v4.)")
+    corr = der.get("correlation_window")
+    if corr and len(assets) > 1:
+        L += ["", "Window correlation (used for the joint draws):", "",
+              "| | " + " | ".join(assets) + " |", "|---" * (len(assets) + 1) + "|"]
+        for a, row in zip(assets, corr):
+            L.append(f"| {a} | " + " | ".join(f"{v:.3f}" for v in row) + " |")
+
+    # ---- 4. horizon -> steps
+    L += ["", "## 4. Horizon in panel steps", ""]
+    L.append("Horizon keys are written unchanged in the output; only the simulated number of panel steps "
+             "s is resolved, per asset:")
+    for a in assets:
+        rules = da.get(a, {}).get("step_rule") or {}
+        for h in horizons:
+            L.append(f"- `{a}` key {h}: **s = {k_steps(a, h)}** -- {rules.get(h, rules.get(str(h), '?'))}.")
+    mi = prov.get("monthly")
+    if mi:
+        L.append(f"- Monthly target: last observation month "
+                 + ", ".join(f"{a} {m}" for a, m in mi["last_obs"].items())
+                 + "; observation months "
+                 + ", ".join(f"key {h} -> {mi['periods'].get(assets[0], {}).get(h)}" for h in horizons)
+                 + (f", from {', '.join(mi.get('fields', []))}." if mi.get("fields") else
+                    " (no explicit month in the task metadata: month of as-of + h business days)."))
+
+    # ---- 5. adjustments
+    L += ["", "## 5. Adjustments", ""]
+    L.append(f"**5a. Family calibration.** The card states family **{family or 'unknown'}** "
+             f"({'its own row' if fk.get('row') == 'family' else 'no family row: the baseline-like default row'}). "
+             "The row's constants are fixed in the image (engine/model.py profile v4, chosen once by "
+             "cross-validation across all practice cards of the family, never per unit): "
+             f"width x{_f(fk.get('width'), '.4g')}, scale mixture p = {_f(fk.get('tail_p'), '.3g')}, "
+             f"k = {_f(fk.get('tail_k'), '.3g')}, stress-side shift {_f(fk.get('asym'), '.3g')} x sd_h, "
+             f"drift fraction {_f(fk.get('drift_frac'), '.3g')}, corpus event width "
+             f"{'on' if fk.get('ev_width') else 'off'}.")
+    L += ["", "**5b. What the text corpus changed.**"]
+    used: list[str] = []
+    if "event_width" in adjs:
+        x = adjs["event_width"]
+        used.append(f"event width x{_f(x.get('factor'), '.4f')} from stress_score {x.get('stress_score')} "
+                    f"(= 2 x crisis {rd.get('crisis')} + 0.5 x uncertainty {rd.get('uncertainty')}), damped by "
+                    f"{_f(x.get('cell_damp'), '.4f')}")
+    asym = adjs.get("asymmetric_tail")
+    reasons = ev.get("direction_reason") or {}
+    ust = [a for a in assets if str(reasons.get(a, "")).startswith("yield:")]
+    if asym and ust:
+        used.append(f"the stress direction of {', '.join(ust)}, which depends on whether hawkish terms dominate "
+                    f"dovish ones in the recency-weighted corpus (hawkish {rd.get('hawkish')} vs dovish "
+                    f"{rd.get('dovish')} per 1k words -> inflation_dominated = {ev.get('inflation_dominated')})")
+    if "house_model" in adjs:
+        x = adjs["house_model"]
+        used.append(f"House-model widening x{_f(x.get('widen'), '.3f')} and +{x.get('asym_add')} sd_h tail "
+                    f"shift ({x.get('requests')} request(s); answer {x.get('answer')})")
+    if used:
+        L.append("The corpus reached the draws only through: " + "; ".join(used) + ".")
+        if asym and ust:
+            sup = _top_docs(feats or {}, ("hawkish", "dovish"), files, n=3)
+            if sup:
+                L.append("Hawkish/dovish support: " + "; ".join(sup) + ".")
+        if "event_width" in adjs:
+            sup = _top_docs(feats or {}, ("crisis", "uncertainty"), files)
+            if sup:
+                L.append("Stress support: " + "; ".join(sup) + ".")
+    else:
+        L.append("Nothing. The documents listed in section 1 were read and scored (keyword counts in the "
+                 "table), but the calibrated row for this family switches the corpus event width off and no "
+                 "target's stress direction depends on the text, so no corpus number reaches the draws. "
+                 "The forecast is the trailing-window backbone with the family constants of 5a.")
+    L += ["", "**5c. Stress-side tail.**"]
+    if asym:
+        dirs = asym.get("direction") or {}
+        damp = float(ev.get("cell_damp", 1.0) or 1.0)
+        L.append(f"The {asym.get('n_paths')} scale-mixture draws are shifted {_f(fk.get('asym'), '.3g')} x "
+                 f"cell damping {damp:.4f} (1/sqrt of {ev.get('n_cells', 1)} cells) = "
+                 f"**{_f(asym.get('size_sd_h'), '.4f')} x sd_h** toward each asset's stress side, sd_h = sd/step "
+                 "final x sqrt(t), so the shift grows with sqrt(t) along the path. Direction (engine/assets.py, "
+                 "keyed on the asset id): "
+                 + "; ".join(f"`{a}` {_sgn(int(dirs.get(a, 0)))} ({reasons.get(a, '')})" for a in assets)
+                 + ". Direction 0 = no shift.")
+    else:
+        L.append("None for this family.")
+
+    # ---- 6. scale and shape
+    L += ["", "## 6. Scale and shape", ""]
+    shape = bb.get("shape")
+    L.append("- Innovations: " + ("Gaussian with the window correlation (Cholesky), unit sd per step"
+                                 if shape == "gauss" else
+                                 "stationary block bootstrap of full-history steps, each asset rescaled to unit sd")
+             + "; paths are cumulative, so shorter horizons are prefixes of the same path and every draw "
+             "carries all assets jointly.")
+    tilt_on = any(float(v) != 1.0 for v in (bb.get("vol_tilt") or {}).values())
+    L.append(f"- Per-step sd final = window sd x family width {_f(fin.get('w_family'), '.4g')} x event width "
+             f"{_f(fin.get('w_event'), '.4g')} x House {_f(fin.get('w_house'), '.4g')}"
+             + (" x volatility tilt" if tilt_on else "") + ".")
+    if float(fk.get("tail_p", 0) or 0) > 0:
+        L.append(f"- Scale mixture: with probability p = {_f(fk.get('tail_p'), '.3g')} a draw's whole path is "
+                 f"multiplied by k = {_f(fk.get('tail_k'), '.3g')} "
+                 f"({(adjs.get('scale_mixture') or {}).get('n_paths', '?')} of {n_draws} draws); unconditional "
+                 f"multiplier sqrt((1-p) + p k^2) = {_f(fin.get('effective_mixture_multiplier'), '.4f')}.")
+    else:
+        L.append("- No scale mixture (multiplier 1).")
+    L.append("")
+    L.append("Resulting distribution, read directly from the submitted draws:")
+    L.append("")
+    L.append("| asset | key | mean | sd | q01 | q05 | q50 | q95 | q99 |")
+    L.append("|---|---|---|---|---|---|---|---|---|")
+    if samples is not None:
+        for j, a in enumerate(assets):
+            for hi, h in enumerate(horizons):
+                x = np.asarray(samples[:, j, hi], dtype=float)
+                q = np.quantile(x, [0.01, 0.05, 0.5, 0.95, 0.99])
+                L.append(f"| {a} | {h} | {_f(x.mean())} | {_f(x.std(ddof=1), '.4g')} | "
+                         + " | ".join(_f(v) for v in q) + " |")
+
+    # ---- ledger
+    L += ["", "## Adjustment ledger", ""]
+    p_tail = float((asym or {}).get("n_paths", 0) or 0) / max(1, n_draws)
+    a_sz = float((asym or {}).get("size_sd_h", 0.0) or 0.0)
+    dirs = (asym or {}).get("direction") or {}
+    eff = float(fin.get("effective_mixture_multiplier", 1.0) or 1.0)
+    L.append("Centre = anchor + drift fraction x mu x s + E[tail shift], with E[tail shift] = (share of draws "
+             "in the mixture) x direction x shift x sd/step final x sqrt(s). Nothing else moves the centre; "
+             "the last column is the mean of the submitted draws (Monte-Carlo noise only).")
+    L.append("")
+    L.append("| asset | key | s | anchor | + frac x mu x s | + E[tail shift] | = centre | draws mean |")
+    L.append("|---|---|---|---|---|---|---|---|")
+    spread = []
+    for j, a in enumerate(assets):
+        x = da.get(a, {})
+        anchor = float(x.get("anchor", 0.0) or 0.0)
+        mu = float(x.get("mu_per_step", 0.0) or 0.0)
+        frac = float(fk.get("drift_frac", 1.0) or 1.0)
+        sdw = float(x.get("sd_window_per_step", float("nan")))
+        sdf = float(x.get("sd_final_per_step", float("nan")))
+        d = int(dirs.get(a, 0))
+        for hi, h in enumerate(horizons):
+            k = int(k_steps(a, h))
+            e_tail = p_tail * d * a_sz * sdf * math.sqrt(k)
+            centre = anchor + frac * mu * k + e_tail
+            mean = _f(float(np.mean(samples[:, j, hi]))) if samples is not None else "n/a"
+            L.append(f"| {a} | {h} | {k} | {_f(anchor)} | {frac:g} x {mu:+.5g} x {k} = {frac * mu * k:+.5g} | "
+                     f"{p_tail:.4f} x {d:+d} x {a_sz:.4f} x {sdf:.5g} x sqrt({k}) = {e_tail:+.5g} | "
+                     f"{_f(centre)} | {mean} |")
+            nominal = sdf * math.sqrt(k) * eff
+            sd_draws = _f(float(np.std(samples[:, j, hi], ddof=1)), ".4g") if samples is not None else "n/a"
+            spread.append(f"| {a} | {h} | {sdw:.5g} x {_f(fin.get('w_family'), '.4g')} x "
+                          f"{_f(fin.get('w_event'), '.4g')} x {_f(fin.get('w_house'), '.4g')} = {sdf:.5g} | "
+                          f"sqrt({k}) = {math.sqrt(k):.4g} | {eff:.4f} | {nominal:.5g} | {sd_draws} |")
+    L += ["", "Spread = window sd x family width x event width x House = sd/step final; x sqrt(s); x mixture "
+          "multiplier = nominal sd at the horizon (the engine's own `sd_at_horizon`). The draws' sd also "
+          "carries the stress-side shift of the mixture draws and Monte-Carlo noise.", ""]
+    L.append("| asset | key | sd/step final | x sqrt(s) | x mixture | = nominal sd | draws sd |")
+    L.append("|---|---|---|---|---|---|---|")
+    L += spread
+    L += ["", "## What would change this forecast", "",
+          "- Different panel rows in the trailing window move mu and Sigma and therefore the centre and "
+          "width one for one (section 3 and the ledger).",
+          "- A different card family selects a different calibrated row (5a); an unknown family gets the "
+          "baseline-like default.",
+          "- Nothing in this file is a judgement about where the target will land; the engine has no channel "
+          "through which such a judgement could enter the draws."]
     return L

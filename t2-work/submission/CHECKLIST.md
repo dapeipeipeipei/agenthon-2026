@@ -13,15 +13,15 @@ Line numbers refer to the files as committed with this checklist.
 
 | # | Rule | Where satisfied | Status |
 |---|---|---|---|
-| A1 | Verb `forecast` arrives as the first argument; on `PATH` (no ENTRYPOINT) or consumed | `t2-work/Dockerfile` writes `/usr/local/bin/forecast` (packaging agent); `engine/forecast.py:318` also tolerates a leading `forecast` positional | done |
+| A1 | Verb `forecast` arrives as the first argument; on `PATH` (no ENTRYPOINT) or consumed | `t2-work/Dockerfile` writes `/usr/local/bin/forecast` (packaging agent); `engine/forecast.py:292` also tolerates a leading `forecast` positional | done |
 | A2 | `forecast --panels /input/panels/ --text /input/text/ --asof D --out /output/forecast.parquet`; kit units keep panels at the root, staged units under `panels/` | `engine/io.py:79` `read_panels` (dir, else parent); `engine/io.py:42` `find_card` (dir, else parent) | done, both layouts tested |
 | A3 | `LABEL qfbench2.interface_version="2.0"`, linux/amd64, digest-pinned, anonymously pullable | Dockerfile (packaging agent) | **human/packaging**: build, push, anonymous-pull check (RUNTIME-ENVIRONMENT.md) |
 | A4 | Non-root uid 65534, read-only root FS, 64 MiB noexec /tmp, no HOME | Dockerfile sets `HOME=/tmp`, `PYTHONDONTWRITEBYTECODE=1`, `USER 65534`; the engine writes nothing but the three outputs (`engine/io.py:288` `write_outputs`) | done; run DEVELOPMENT-RUNTIME.md "Run it locally the way the platform runs it" once with Docker |
 | A5 | 256 PIDs / 1,024 fds | thread pools capped before numpy/pyarrow import: `engine/__init__.py:20-23`, `engine/io.py:34` (`pa.set_cpu_count(4)`); Dockerfile sets 1 thread; engine opens one file at a time | done |
-| A6 | Exit 0 on success; never DNF on model errors | fallback chain v3 -> v2 -> Gaussian -> emergency N(0, 0.01): `engine/forecast.py:235-252`; rationale rendering cannot crash the run: `engine/forecast.py:297` | done (fallback path tested with a forced error: admissible) |
-| A7 | 1,800 s per-unit clock incl. pull; 12 h stage clock | measured 2.4–3.0 s per unit locally; SIGALRM watchdog at 600 s forces the fast fallback: `engine/forecast.py:92` (`ENGINE_DEADLINE_S`) | done |
-| A8 | No network; works with `QFBENCH_NETWORK=restricted` or `none` and with `MODEL_ENDPOINT` absent | engine imports no HTTP client and reads no `MODEL_*` variable; `run_all_gates.py --platform-env` removes them and sets `restricted` | done |
-| A9 | Read nothing outside `/input`, write nothing outside `/output` | inputs: card / `forecast_spec.json` beside the card, panels, `--text` only; outputs: `engine/io.py:288`; paths made absolute `engine/forecast.py:171` | done |
+| A6 | Exit 0 on success; never DNF on model errors | v4 -> v3 -> v2 inside `model.simulate` (recorded, merged into the meta at `engine/forecast.py:200`), then Gaussian -> emergency N(0, 0.01): `engine/forecast.py:201-218`; rationale rendering cannot crash the run: `engine/forecast.py:271` | done (fallback path tested with a forced error: admissible) |
+| A7 | 1,800 s per-unit clock incl. pull; 12 h stage clock | measured 2.4–3.0 s per unit locally; SIGALRM watchdog at 600 s forces the fast fallback: `engine/forecast.py:91` (`ENGINE_DEADLINE_S`) | done |
+| A8 | No network; works with `QFBENCH_NETWORK=restricted` or `none` and with `MODEL_ENDPOINT` absent | `engine/house.py` (optional House layer) exists but is **off by default**: `engine/v4.py:160` imports it (and `urllib`) only when `JINPEI_USE_HOUSE=1`, and it then also requires `MODEL_ENDPOINT`/`MODEL_NAME`/`MODEL_TOKEN`. The image does not set `JINPEI_USE_HOUSE`, so the submitted engine makes no network call and reads no `MODEL_*` variable; `run_all_gates.py --platform-env` removes them and sets `restricted`. Turning it on requires the House row in `models` and a resealed descriptor (section F) | done (off) |
+| A9 | Read nothing outside `/input`, write nothing outside `/output` | inputs: card / `forecast_spec.json` beside the card, panels, `--text` only; outputs: `engine/io.py:288`; paths made absolute `engine/forecast.py:134` | done |
 | A10 | No bring-your-own model, no neural weights, nothing fetched at run time | engine is numpy/pandas only (`t2-work/submission/ARTIFACT_PROVENANCE.md`) | done |
 
 ## B. Output contract
@@ -30,7 +30,7 @@ Line numbers refer to the files as committed with this checklist.
 |---|---|---|---|
 | B1 | `/output` holds exactly `forecast.parquet`, `forecast_meta.json`, `forecast_rationale.md` | `engine/io.py:288`; checked per unit by `run_all_gates.py:65` `output_tree_problems` | 104/104 |
 | B2 | Parquet columns exactly `draw:int32, asset:string, horizon:int32, value:float64`, contiguous draws, every cell once, asset/horizon order = card | `engine/io.py:303-311` | done |
-| B3 | `n_draws` in [200, 20000] and >= card `n_draws_min` | `engine/forecast.py:182` (2000 by default) | done |
+| B3 | `n_draws` in [200, 20000] and >= card `n_draws_min` | `engine/forecast.py:145` (2000 by default) | done |
 | B4 | Horizon keys unchanged (monthly too) | output uses the card's integers; monthly steps only change the simulation | done |
 | B5 | `forecast_meta.json`: `unit_id` (not `card_id`), `asof` equal to the card's as-of, `representation`, `asset_ids`, `horizons`, `n_draws`, `target` = card `target_type`; schema has no `additionalProperties:false`, our extra `engine` key is allowed | `engine/forecast.py` meta block (`meta_asof` = card `[forecast].asof` / `[provenance].data_cutoff`, `engine/io.py:68` mirrors `cutoff.trusted_asof`) | done, g1/g2 pass 104/104 |
 | B6 | Output-tree rules: no links, <= 64 MiB, meta <= 256 KiB, rationale <= 1 MiB | largest rationale 17 kB, whole 104-unit output 8 MB; rationale truncated at 900 kB as a guard `engine/io.py:320` | done |
@@ -38,9 +38,22 @@ Line numbers refer to the files as committed with this checklist.
 
 ## C. Rationale (SUBMISSION_CLI.md T2 note, docs/RATIONALE-REVIEW.md)
 
-Generated only from numbers computed in the run (`engine/io.py:349-690`, fed by
-`engine/forecast.py` with the model's `stats`, the detector's per-document features, the panel
-provenance and the submitted draws):
+Generated only from numbers computed in the run (`engine/io.py:349` `rationale_text`, fed by
+`engine/forecast.py` with the model's `stats` / `stats["derivation"]`, the detector's per-document
+features, the panel provenance and the submitted draws).
+
+**Default engine v4** (`engine/io.py:708` `_v4_sections`, used when `derivation.engine == "v4"`):
+1. data used (series files, dates, every document read with its keyword counts); 2. anchor;
+3. trailing-300-step backbone: aligned dates, gap rule, mu and sd per step, window correlation;
+4. horizon -> steps with the rule used (monthly: named observation month); 5a. family row constants
+(from the family printed on the card); 5b. exactly which corpus output reached the draws -- for
+most cards "nothing", on F4 yield cards the hawkish/dovish balance that sets the stress direction,
+with the documents (file + date) behind it; 5c. stress-side tail shift with its arithmetic and the
+direction table; 6. scale and shape and the draws' quantiles; ledger: anchor + drift fraction x mu
+x s + E[tail shift] = centre vs draws mean, and window sd x family width x event width x House =
+sd/step final, x sqrt(s) x mixture = nominal sd (the engine's own `sd_at_horizon`) vs draws sd.
+
+**Classic engines v1-v3** (also used when v4 falls back inside the model):
 
 1. Data used: panel file, rows, first/last date and last value per asset; aligned history dates;
    every corpus document read (file name, date, type, words, recency weight, raw hits per family).
@@ -64,7 +77,7 @@ anything).
 
 | # | Rule | Where satisfied | Status |
 |---|---|---|---|
-| D1 | Steps = calendar-month transitions from the last panel observation (after the as-of, publication lag included) to the named observation month | `engine/io.py:243` `monthly_steps`; applied to the model via `engine/forecast.py:111` `_monthly_steps` | done; equals the official `monthly_horizon_steps` on all 4 monthly units (8/9, 7/8, 2, 2 steps; the old code gave 9/10, 9/10, 3, 3) |
+| D1 | Steps = calendar-month transitions from the last panel observation (after the as-of, publication lag included) to the named observation month | `engine/io.py:243` `monthly_steps`; passed to the model as `steps_override` (`engine/forecast.py:186`) | done; equals the official `monthly_horizon_steps` on all 4 monthly units (8/9, 7/8, 2, 2 steps; the old code gave 9/10, 9/10, 3, 3) |
 | D2 | Month from `targets.observation_periods` / `target_dates` / `questions[]` in card or `forecast_spec.json`; conflicts refused | `engine/io.py:193` `explicit_monthly_periods` (conflict -> recorded heuristic, never a crash) | done |
 | D3 | No explicit month (sealed cards are not promised to carry it) | month of as-of + h business days, recorded in the rationale | heuristic, flagged |
 | D4 | Monthly panels are now the ALFRED vintage of the as-of date; PCE on 2012=100 before Sept 2023 | engine just reads the panel; nothing hard-codes a base | done |
@@ -73,7 +86,7 @@ anything).
 
 | # | Rule | Where | Status |
 |---|---|---|---|
-| E1 | Harness sets `QFBENCH_SEED`; verification reruns on fresh seeds | `engine/forecast.py:63` `_seed` (int, else sha256 of the string — not the salted `hash()` used before) | done |
+| E1 | Harness sets `QFBENCH_SEED`; verification reruns on fresh seeds | `engine/forecast.py:62` `_seed` (int, else sha256 of the string — not the salted `hash()` used before) | done |
 | E2 | Same seed + inputs -> identical output | tested: two runs with `QFBENCH_SEED=7` and two with `abc` byte-identical draws and meta (except `elapsed_s`) | done |
 
 ## F. Descriptor (`submission.json`)
@@ -127,3 +140,18 @@ is not uploaded.
   The shift comes from upstream changes, not from engine code: the corpora (59 documents added,
   website clutter removed) move the event features, and the current reference CLI's
   cumulative-log-return walk changes the baseline on the factor cards.
+
+### Update after v4 became the default (commit bae4ab0 + this one)
+
+* `run_all_gates.py --engine engine --out-root t2-work/out_engine_v4 --platform-env`: **104/104
+  admissible, 0 fallbacks**; every unit runs natively in v4 (`derived_engine = "v4"`, empty
+  fallback chain in all 104 metas).
+* `v4_eval.py --out-dir t2-work/out_engine_v4` (scored against the rebuilt M0, leaderboard
+  arithmetic): **0.9220** (F1 0.9065, F2 1.0090, F3 0.9302, F4 0.8569), identical to the
+  in-process `v4_eval.py --profile v4`, so the CLI path (I/O, `steps_override`, rationale) does
+  not change a draw.
+* Rationale audit over 104 units: 94 state that no corpus number reached the draws (family row
+  has the event width off and no target's direction depends on text); 10 F4 yield cards state
+  that the hawkish/dovish balance set the stress direction, with the documents cited.
+* `t2-work/.v4_cache.pkl` and `.v4_sweep.pkl` hold reconstructed realized values: git-ignored, and
+  the Dockerfile copies only `engine/` and `requirements.lock`.

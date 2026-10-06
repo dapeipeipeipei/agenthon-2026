@@ -1,16 +1,18 @@
-"""Agenthon 2026 Track 2 forecasting engine (v1/v2 text-blind, v3 event-aware).
+"""Agenthon 2026 Track 2 forecasting engine. Default profile v4 (engine/v4.py, t2-work/V4_NOTES.md).
 
     python -m engine.forecast --panels <dir> --text <dir> --asof YYYY-MM-DD --out <dir>/forecast.parquet
 
-Stationary block bootstrap of demeaned per-step changes with a recent/full volatility blend,
-shared block indices across assets (empirical joint structure), prefix-consistent horizons.
-v3 adds a deterministic corpus event layer (engine.events + engine.assets) on top of v2.
-Falls back v3 -> v2 -> Gaussian random walk on any error so the three contract files are always written.
+v4: joint Gaussian walk on the trailing-300-step mean and covariance (the organizers' M0
+information set) with fixed per-family calibration; corpus keyword features only where the
+family row enables them; optional House layer off unless JINPEI_USE_HOUSE=1.
+v1-v3 (classic): block bootstrap with a recent/full volatility blend; v3 adds the corpus event layer.
+Falls back v4 -> v3 -> v2 (inside model.simulate) -> Gaussian random walk (forecast.py), so the
+three contract files are always written.
 """
 
 import os as _os
 
-ENGINE_VERSION = "v3"
+ENGINE_VERSION = "v4"
 
 # Runtime contract (Agenthon2026-public docs/DEVELOPMENT-RUNTIME.md "Container limits"): 256 PIDs
 # across the container and 1,024 open files per process. BLAS / OpenMP / Arrow size their thread
