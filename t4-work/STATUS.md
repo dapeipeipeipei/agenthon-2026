@@ -17,11 +17,11 @@
 
 ## CI（镜像在平台同等限制下实跑）
 
-GitHub Actions `t4-image`（分支 `ci/t4-image`，run 37531031242）全绿：linux/amd64 构建 + 构建时自测，
+GitHub Actions `t4-image`（最终版：main d630d5f 手动触发，run 37533228853；首版 run 37531031242 已被取代）全绿：linux/amd64 构建 + 构建时自测，
 11 个公开 unit 在镜像里跑（只读根目录、uid 65534、无网络、pids 256、nofile 1024），官方 schema / 引用规则 /
-推理理由检查 / 打分器全过，结果与本机逐项一致；异常用例 9/9、House 假服务器 4/4。镜像（GHCR 私有）：
+推理理由检查 / 打分器全过，结果与本机逐项一致；异常用例 17/17、House 假服务器 4/4。最终镜像（GHCR，需改为公开），已填入并重新封印进 `submission/submission.json` 与 `submission.final.json`：
 
-`ghcr.io/dapeipeipeipei/jinpei-t4@sha256:8f519356912d15db41da47c7e431199b05026d454ed601558843e0f7ae54e538`
+`ghcr.io/dapeipeipeipei/jinpei-t4@sha256:bf2a164756244a4ede12e5ea92bf164b60f47c2ba664f9cd955c117f8c68e01c`
 
 ## 本地成绩
 

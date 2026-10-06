@@ -103,7 +103,7 @@ validate against the installed v2.6.0 `submission.schema.json`, parse with
 | `competition_id` | `agenthon2026-forecasting-dev` / `-final` | suffixed form, as the fixtures |
 | `team_id` | placeholder | **written by `qfbench2 submission pack`** from team number + Team Key |
 | `category` | `api` | only category on Track 2 |
-| `image` | `ghcr.io` / `placeholder-owner/agenthon-t2-forecast` / `sha256:000…0` | **placeholder: fill with `pack/descriptor_tool.py fill` after push** |
+| `image` | `ghcr.io` / `dapeipeipeipei/jinpei-t2` / `sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74` | filled and resealed (7dd1d6f); built by CI run 37536643119 from main fa26d6e, 104/104 in-image with platform limits, mean 2.0 s/unit, identical to native. Package must be made public before upload |
 | `image_access` | `public` | |
 | `models` | `[]` | the engine calls no model. If House is ever called, add the row from HOUSE-MODEL.md: `{"name": "nvidia/nemotron-3-super-120b-a12b", "version": "rl-030326-fp8", "revision": "rl-030326-fp8", "training_cutoff": "unpublished", "access": "api"}` (validated) and reseal |
 | `license` | `Apache-2.0` | **team decision** — OSI id for our own code |
