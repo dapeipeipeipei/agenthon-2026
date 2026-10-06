@@ -32,6 +32,8 @@ from typing import Any
 
 import pandas as pd
 
+from . import cardinfo
+
 RECENCY_TAU_DAYS = 45.0       # e-folding age for document weights
 MAX_DOC_CHARS = 400_000       # guard: never read more than this per document
 
@@ -85,6 +87,35 @@ TERMS: dict[str, list[tuple[str, float]]] = {
     ],
 }
 FAMILIES = list(TERMS)
+
+#: v4-only extra families (2026-10-06, from the F4 corpus audit). Counted into feats["v4"] only, so
+#: every v3 feature (and therefore every v3 draw) is unchanged. Generic regime / fragility / fiscal
+#: / taper wording; forward-looking vs retrospective binary-event phrasing.
+TERMS_V4: dict[str, list[tuple[str, float]]] = {
+    "crisis_x": [
+        (r"\bminimum exchange rate\b", 1.0), (r"\bexchange rate (?:floor|cap|peg)\b", 1.0),
+        (r"\bunlimited quantities\b", 1.0), (r"\bunrealized losses\b", 1.0), (r"\bafter-tax loss", 1.0),
+        (r"\bcapital rais", 0.7), (r"\bdeposit outflows?\b", 1.0), (r"\bwind-?down\b", 0.7),
+        (r"\bdebt (?:ceiling|limit)\b", 1.0), (r"\btechnical default\b", 1.0), (r"\bgovernment shutdown\b", 1.0),
+        (r"\bemergency (?:rate )?(?:cut|easing|action|lending)", 0.3), (r"\bgeopolitic", 0.3),
+    ],
+    "hawkish_x": [
+        (r"\b(?:reduce|slow|moderate|adjust down|taper) the pace of (?:its |our )?(?:net )?(?:asset )?purchases\b", 1.0),
+        (r"\bexceeded (?:its |the )?2 percent\b", 1.0), (r"\binflation (?:has )?(?:run|running) (?:well )?above\b", 1.0),
+    ],
+    "binary_fwd": [
+        (r"\b(?:upcoming|forthcoming|scheduled|ahead of(?: the)?|in the run-up to(?: the)?|before the) "
+         r"(?:\w+ ){0,3}(?:referendum|plebiscite|vote|election|ballot)", 1.0),
+        (r"\b(?:referendum|plebiscite|election) (?:on|in) (?:\d{1,2} )?(?:january|february|march|april|may|june|"
+         r"july|august|september|october|november|december)", 1.0),
+    ],
+    "binary_retro": [
+        (r"\b(?:following|after|since|outcome of|result of|in the wake of|aftermath of) (?:the )?(?:\w+ ){0,3}"
+         r"(?:referendum|plebiscite|vote|election)", 1.0),
+    ],
+}
+FAMILIES_V4 = list(TERMS_V4)
+_COMPILED_V4 = {fam: [(re.compile(p, re.IGNORECASE), w) for p, w in terms] for fam, terms in TERMS_V4.items()}
 _COMPILED = {fam: [(re.compile(p, re.IGNORECASE), w) for p, w in terms] for fam, terms in TERMS.items()}
 _WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 _STATEMENT_HINT = re.compile(r"fomc[_\-]?statement|statement[_\-]?fomc", re.IGNORECASE)
@@ -122,7 +153,7 @@ def _read_doc(text_dir: pathlib.Path, d: dict[str, Any]) -> str:
 def _count(text: str, fam: str) -> tuple[int, float]:
     """(raw hits, weighted hits) of one family in one document."""
     raw, weighted = 0, 0.0
-    for rx, w in _COMPILED[fam]:
+    for rx, w in (_COMPILED[fam] if fam in _COMPILED else _COMPILED_V4[fam]):
         k = len(rx.findall(text))
         raw += k
         weighted += w * k
@@ -174,6 +205,9 @@ def empty_features() -> dict[str, Any]:
 def detect(text_dir: pathlib.Path | str, asof: str, horizon_bd: int) -> dict[str, Any]:
     """Never raises: on any failure returns the empty feature dict with an `error` key."""
     feats = empty_features()
+    # v4: task-statement facts (unit id, card family, monthly observation periods); {} if absent.
+    feats["card"] = cardinfo.read(text_dir)
+    feats["text_dir"] = str(text_dir)
     try:
         return _detect(pathlib.Path(text_dir), asof, horizon_bd, feats)
     except Exception as exc:  # noqa: BLE001 - the detector must not take the engine down
@@ -201,6 +235,7 @@ def _detect(text_dir: pathlib.Path, asof: str, horizon_bd: int, feats: dict[str,
     hits = {f: 0 for f in FAMILIES}
     whits = {f: 0.0 for f in FAMILIES}       # term-weighted
     rwhits = {f: 0.0 for f in FAMILIES}      # term- and recency-weighted
+    rwx = {f: 0.0 for f in FAMILIES_V4}       # v4 extras, recency-weighted
     statement_dates: list[pd.Timestamp] = []
     latest = max(ts for _, ts in used)
     for d, ts in used:
@@ -217,6 +252,11 @@ def _detect(text_dir: pathlib.Path, asof: str, horizon_bd: int, feats: dict[str,
             hits[fam] += raw
             whits[fam] += weighted
             rwhits[fam] += w * weighted
+        x_raw: dict[str, int] = {}
+        for fam in FAMILIES_V4:
+            raw, weighted = _count(text, fam) if text else (0, 0.0)
+            x_raw[fam] = raw
+            rwx[fam] += w * weighted
         tot_words += n_words
         w_words += w * n_words
         if per_raw["binary"] > 0:
@@ -226,7 +266,8 @@ def _detect(text_dir: pathlib.Path, asof: str, horizon_bd: int, feats: dict[str,
             statement_dates.append(ts)
         feats["docs"].append({"doc_id": str(d.get("doc_id", "")), "timestamp": str(ts.date()), "doc_type": dtype,
                               "words": int(n_words), "weight": round(w, 3),
-                              **{f"h_{f}": int(per_raw[f]) for f in FAMILIES}})
+                              **{f"h_{f}": int(per_raw[f]) for f in FAMILIES},
+                              **{f"h_{f}": int(x_raw[f]) for f in FAMILIES_V4}})
     feats["recency_days"] = int((asof_ts - latest).days)
     feats["latest_doc"] = str(latest.date())
     feats["kwords"] = round(tot_words / 1000.0, 2)
@@ -240,6 +281,14 @@ def _detect(text_dir: pathlib.Path, asof: str, horizon_bd: int, feats: dict[str,
     rd = feats["rdensity"]
     feats["inflation_dominated"] = bool(rd["hawkish"] > 1.3 * rd["dovish"] and rd["hawkish"] >= 0.8)
     feats.update(meeting_in_window(statement_dates, asof_ts, horizon_bd))
+    rx = {f: round(1000.0 * rwx[f] / w_words, 3) if w_words else 0.0 for f in FAMILIES_V4}
+    hawk = rd["hawkish"] + rx["hawkish_x"]
+    feats["v4"] = {
+        "rdensity_extra": rx,
+        "stress_score": round(2.0 * (rd["crisis"] + rx["crisis_x"]) + 0.5 * rd["uncertainty"], 3),
+        "inflation_dominated": bool(hawk > 1.3 * rd["dovish"] and hawk >= 0.8),
+        "binary_score": round(max(0.0, rx["binary_fwd"] - 0.5 * rx["binary_retro"]), 3),
+    }
     return feats
 
 

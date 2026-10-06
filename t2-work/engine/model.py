@@ -76,6 +76,17 @@ class Profile:
     binary_width: float = 1.5         # shock cluster spread multiplier
     # --- v3: monthly macro drift
     macro_drift: bool = False
+    # --- v4 (engine/v4.py): baseline-consistent backbone + per-family calibration. Ignored by v1-v3.
+    engine: str = "classic"           # classic (v1-v3 code path) | v4
+    v4_window: int = 300              # trailing rows for mu / Sigma (M0 information set)
+    v4_shape: str = "boot"            # boot: full-history block bootstrap rescaled to the window sd | gauss
+    v4_drift: float = 1.0             # centre = anchor + v4_drift * steps * mu
+    v4_vol_beta: float = 0.0          # sd x (EWMA sd / window sd)^beta (0 = window sd, as M0)
+    v4_vol_halflife: float = 30.0     # EWMA half-life in steps for the tilt
+    v4_features: str = "v3"           # corpus features for the v4 event plan: v3 keys | v4 (extended terms)
+    #: family -> (width, tail_p, tail_k, asym_shift, event_width_on[, drift_frac]); "default" row
+    #: is used for an unknown / missing family
+    v4_family: tuple = (("default", 1.0, 0.0, 1.0, 0.0, False),)
 
     @property
     def effective_multiplier(self) -> float:
@@ -84,7 +95,7 @@ class Profile:
 
     @property
     def uses_events(self) -> bool:
-        return bool(self.ev_width or self.ev_asym or self.ev_binary or self.macro_drift)
+        return bool(self.ev_width or self.ev_asym or self.ev_binary or self.macro_drift or self.engine == "v4")
 
     def as_dict_fields(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in self.__dataclass_fields__}
@@ -102,6 +113,17 @@ PROFILES = {
     "v3": Profile("v3", vol_floor=False, tail_p=0.2, tail_k=2.0, width=1.0,
                   ev_width=True, ev_asym=True, ev_binary=True, macro_drift=True,
                   ev_cell_damp=True),
+    # v4: see engine/v4.py and t2-work/V4_NOTES.md; knobs from the cross-validated sweep.
+    # Rows: (family, width, tail_p, tail_k, asym_shift, event_width_on, drift_frac). Selected by the
+    # one-standard-error rule on the full 90-card sweep (v4_cv.py, mode family_1se); the same rule
+    # picked these rows in 4-5 of 5 leave-one-era-out folds. Unknown family -> the M0-like row.
+    "v4": Profile("v4", engine="v4", ev_width=True, ev_cell_damp=True, v4_shape="gauss",
+                  v4_window=300, v4_vol_beta=0.0,
+                  v4_family=(("default", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                             ("F1", 0.9, 0.0, 1.0, 0.0, False, 1.0),
+                             ("F2", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                             ("F3", 1.0, 0.0, 1.0, 0.0, False, 0.5),
+                             ("F4", 1.25, 0.2, 1.5, 1.0, False, 1.0))),
 }
 
 
@@ -119,6 +141,7 @@ class AssetInput:
     kind: str                    # diff | log_return | transfer_proxy
     last_date: pd.Timestamp
     notes: dict[str, Any] = field(default_factory=dict)
+    raw: pd.Series | None = None  # v4: the panel series itself (level or per-step return), <= as-of
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -196,7 +219,7 @@ def _transfer_input(
         f"{float(early.std()) if len(early) else float('nan'):.3g}/step; G10 factor sd {f_sd:.3g}/step."
     )
     return AssetInput(asset, anchor, inc, "daily", "transfer_proxy", s.index[-1],
-                      {"note": note, "beta": beta, "beta_raw": beta_raw, "factor_sd": f_sd})
+                      {"note": note, "beta": beta, "beta_raw": beta_raw, "factor_sd": f_sd}, raw=s)
 
 
 def prepare(
@@ -210,13 +233,13 @@ def prepare(
             # keep only rows that follow a regular step (drops the first row and any post-gap row)
             regular = io.diff_without_gaps(s).notna()
             inc = np.log1p(s)[regular].dropna()
-            out.append(AssetInput(a, 0.0, inc, infer_freq(s), "log_return", s.index[-1]))
+            out.append(AssetInput(a, 0.0, inc, infer_freq(s), "log_return", s.index[-1], raw=s))
             continue
         d = io.diff_without_gaps(s)
         if _trailing_valid(d) < MIN_ROWS and d.notna().sum() < len(s) - 1:
             out.append(_transfer_input(a, s, panels, asof, set(assets), rng))
             continue
-        out.append(AssetInput(a, float(s.iloc[-1]), d.dropna(), infer_freq(s), "diff", s.index[-1]))
+        out.append(AssetInput(a, float(s.iloc[-1]), d.dropna(), infer_freq(s), "diff", s.index[-1], raw=s))
     return out
 
 
@@ -302,7 +325,48 @@ def plan_events(profile: Profile, feats: dict[str, Any] | None, assets: list[str
 def simulate(
     inputs: list[AssetInput], horizons: list[int], asof: str, n_draws: int, seed: int,
     block_len: float | None = None, profile: Profile | None = None,
-    feats: dict[str, Any] | None = None,
+    feats: dict[str, Any] | None = None, steps_override: dict[int, int] | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """steps_override: {horizon: panel steps} resolved by the caller for monthly targets
+    (docs/MONTHLY-HORIZONS.md); None = the model's own conversion."""
+    profile = profile or PROFILES["v1"]
+    if profile.engine == "v4":
+        return _simulate_v4_with_fallback(inputs, horizons, asof, n_draws, seed, block_len, profile, feats,
+                                          steps_override)
+    return _simulate_classic(inputs, horizons, asof, n_draws, seed, block_len, profile, feats, steps_override)
+
+
+def _simulate_v4_with_fallback(
+    inputs: list[AssetInput], horizons: list[int], asof: str, n_draws: int, seed: int,
+    block_len: float | None, profile: Profile, feats: dict[str, Any] | None,
+    steps_override: dict[int, int] | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """v4 -> v3 -> v2 inside the model, each failure recorded in stats["fallback_chain"]; if all
+    three raise, the exception propagates and engine.forecast writes the Gaussian fallback."""
+    from . import v4 as V4
+
+    chain: list[str] = []
+    try:
+        return V4.simulate_v4(inputs, horizons, asof, n_draws, seed, block_len, profile, feats,
+                              plan_events, stationary_block_indices, steps_override)
+    except Exception as exc:  # noqa: BLE001 - never crash: drop to the v3 code path
+        chain.append(f"v4 failed ({type(exc).__name__}: {exc}); v3")
+    for prof, fe in ((PROFILES["v3"], feats), (without_events(PROFILES["v3"]), None)):
+        try:
+            samples, stats = _simulate_classic(inputs, horizons, asof, n_draws, seed, block_len, prof, fe,
+                                               steps_override)
+            stats["fallback_chain"] = chain
+            stats["derivation"] = {"engine": prof.name, "fallback_chain": chain}
+            return samples, stats
+        except Exception as exc:  # noqa: BLE001
+            chain.append(f"{prof.name} failed ({type(exc).__name__}: {exc})")
+    raise RuntimeError("; ".join(chain))
+
+
+def _simulate_classic(
+    inputs: list[AssetInput], horizons: list[int], asof: str, n_draws: int, seed: int,
+    block_len: float | None = None, profile: Profile | None = None,
+    feats: dict[str, Any] | None = None, steps_override: dict[int, int] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     profile = profile or PROFILES["v1"]
     rng = np.random.default_rng(seed)
@@ -311,7 +375,8 @@ def simulate(
     if n < MIN_ROWS:
         raise ValueError(f"only {n} aligned history rows across {len(inputs)} asset(s)")
     freq = inputs[0].freq
-    steps = {h: steps_for(h, freq, asof, inputs[0].last_date) for h in horizons}
+    steps = {h: (int(steps_override[h]) if steps_override and h in steps_override
+                 else steps_for(h, freq, asof, inputs[0].last_date)) for h in horizons}
     path_len = max(steps.values())
     if block_len is None:
         block_len = 3.0 if freq == "monthly" else float(np.clip(path_len // 12, 5, 10))
@@ -400,14 +465,54 @@ def simulate(
         "events": {**plan, "width_mode": profile.ev_width_mode, "n_binary_paths": int(np.count_nonzero(bin_mask)),
                    "shifts": shift_notes} if plan else None,
     }
+    stats["derivation"] = classic_derivation(stats, profile, feats, horizons)
     return samples, stats
+
+
+def classic_derivation(stats: dict[str, Any], profile: Profile, feats: dict[str, Any] | None,
+                       horizons: list[int]) -> dict[str, Any]:
+    """Structured record of the v1-v3 numbers for the rationale writer (read-only summary of
+    `stats`; computing it never changes a draw)."""
+    ev = stats.get("events") or {}
+    eff = float(profile.effective_multiplier)
+    adj: list[dict[str, Any]] = []
+    if ev:
+        if ev.get("w_event", 1.0) != 1.0:
+            docs = sorted((feats or {}).get("docs") or [],
+                          key=lambda d: -(d.get("weight", 0) * (d.get("h_crisis", 0) + 0.25 * d.get("h_uncertainty", 0))))[:5]
+            adj.append({"name": "event_width", "factor": ev["w_event"], "stress_score": ev.get("stress_score"),
+                        "w_stress": ev.get("w_stress"), "w_meeting": ev.get("w_meeting"),
+                        "cell_damp": ev.get("cell_damp"), "mode": ev.get("width_mode"),
+                        "docs": [{"doc_id": d["doc_id"], "date": d["timestamp"], "weight": d["weight"],
+                                  "crisis_hits": d.get("h_crisis", 0)} for d in docs]})
+        if ev.get("asym"):
+            adj.append({"name": "asymmetric_tail", "size_sd_h": ev.get("asym_shift"),
+                        "direction": ev.get("direction"), "why": ev.get("direction_reason")})
+        if ev.get("binary"):
+            adj.append({"name": "binary_mixture", "weight": ev.get("binary_w"), "shift_sd_h": ev.get("binary_shift"),
+                        "spread": ev.get("binary_width"), "trigger": ev.get("binary_reason")})
+    return {
+        "engine": profile.name,
+        "backbone": {"recent_window": stats.get("recent_window"), "blend_recent": BLEND_RECENT,
+                     "rows": stats.get("n_rows"), "first_row": stats.get("first_row"),
+                     "last_row": stats.get("last_row"), "block_len": stats.get("block_len")},
+        "assets": {a: {"anchor": st.get("anchor"), "kind": st.get("kind"), "sd_recent": st.get("sd_recent"),
+                       "sd_full": st.get("sd_full"), "sd_blend": st.get("sd_blend"), "sd_final": st.get("sd_final"),
+                       "drift_per_step": st.get("drift_per_step", 0.0),
+                       "sd_at_horizon": {int(h): float(st.get("sd_final", 0.0)) * eff * float(np.sqrt(stats["steps"][h]))
+                                         for h in horizons}}
+                   for a, st in stats.get("assets", {}).items()},
+        "adjustments": adj,
+        "final": {"width": profile.width, "tail_p": profile.tail_p, "tail_k": profile.tail_k,
+                  "effective_mixture_multiplier": eff, "w_event": ev.get("w_event", 1.0) if ev else 1.0},
+    }
 
 
 # ----------------------------------------------------------------------------- fallback
 
 def gaussian_fallback(
     panels: dict[str, pd.DataFrame] | None, assets: list[str], horizons: list[int], asof: str,
-    target_type: str, n_draws: int, seed: int,
+    target_type: str, n_draws: int, seed: int, steps_override: dict[int, int] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Independent driftless Gaussian random walks; every step guarded so it cannot raise."""
     rng = np.random.default_rng(seed)
@@ -419,7 +524,8 @@ def gaussian_fallback(
         try:
             s = io.series(panels or {}, a, asof)
             freq = infer_freq(s)
-            steps = {h: steps_for(h, freq, asof, s.index[-1]) for h in horizons}
+            steps = {h: (int(steps_override[h]) if steps_override and h in steps_override
+                         else steps_for(h, freq, asof, s.index[-1])) for h in horizons}
             if target_type == "log_return":
                 d = np.log1p(s).to_numpy()
             else:

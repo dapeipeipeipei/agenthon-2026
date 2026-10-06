@@ -1,0 +1,27 @@
+id,description,n_tuned_params,insample_all,insample_F1,insample_F2,insample_F3,insample_F4,heldout_eras_all,heldout_eras_F1,heldout_eras_F2,heldout_eras_F3,heldout_eras_F4,forward_2019plus_all,forward_2019plus_F1,forward_2019plus_F2,forward_2019plus_F3,forward_2019plus_F4,adopted,note
+E0a,"M0 reproduction (published procedure, crc32 seed, 500 draws) vs itself: metric sanity check",0,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,,exactly 1.0 by construction
+E0b,"M0 clone, other seeds, 2000 draws (Monte-Carlo noise floor; mean of 5 seeds)",0,0.9941,0.9825,1.0058,0.9903,0.9945,0.9941,0.9825,1.0058,0.9903,0.9945,,,,,,,range of 'all' over seeds: 0.9830-1.0014
+E1-v1,profile v1 as shipped (not tuned on this metric -> in-sample = held-out),0,1.0380,1.0531,1.0378,1.0110,1.0475,1.0380,1.0531,1.0378,1.0110,1.0475,1.0839,1.1286,1.1326,0.9830,1.1430,,
+E1-v2,profile v2 as shipped (not tuned on this metric -> in-sample = held-out),0,1.1730,1.7827,1.0839,1.0647,0.9399,1.1730,1.7827,1.0839,1.0647,0.9399,1.1358,1.3495,1.2932,1.0016,1.0685,,
+E1-v3,profile v3 as shipped (not tuned on this metric -> in-sample = held-out),0,1.1389,1.7185,1.0887,1.0564,0.8759,1.1389,1.7185,1.0887,1.0564,0.8759,1.1204,1.3753,1.2791,1.0102,1.0049,baseline,
+E2-gauss,"v4 backbone gauss, w1, no mixture, drift 1 (M0-like with 2000 own-seed draws)",0,0.9934,0.9953,1.0090,0.9918,0.9808,0.9934,0.9953,1.0090,0.9918,0.9808,0.9936,0.9760,1.0085,0.9955,0.9873,,
+E2-boot,"v4 backbone boot (full-history blocks rescaled to window sd), w1, drift 1",0,0.9927,0.9270,1.0108,1.0031,1.0119,0.9927,0.9270,1.0108,1.0031,1.0119,1.0025,0.9050,1.0085,1.0179,1.0237,,
+E3-shared,"sweep selection: one row for all families, chosen by train mean",8,0.9620,0.9678,1.0284,0.9461,0.9167,0.9693,0.9691,1.0350,0.9644,0.9208,0.9783,0.9730,1.0446,0.9376,0.9745,,"global ('gauss', 0.5); F1:(0.9, 0.2, 1.5, 1.0, False, 0.5); F2:(0.9, 0.2, 1.5, 1.0, False, 0.5); F3:(0.9, 0.2, 1.5, 1.0, False, 0.5); F4:(0.9, 0.2, 1.5, 1.0, False, 0.5); leave-one-family-out all 1.0738"
+E3-family,"sweep selection: a row per family, chosen by train mean",26,0.9199,0.9065,1.0021,0.9287,0.8569,0.9570,0.9314,1.0729,0.9414,0.8918,1.0062,0.9801,1.1519,0.9428,0.9739,,"global ('gauss', 0.0); F1:(0.9, 0.0, 1.0, 0.0, False, 1.0); F2:(1.0, 0.2, 1.5, 0.0, False, 1.0); F3:(0.9, 0.2, 1.5, 0.0, False, 0.5); F4:(1.25, 0.2, 1.5, 1.0, False, 1.0)"
+E3-family_1se,"sweep selection: a row per family, one-standard-error rule toward the M0-like row",26,0.9220,0.9065,1.0090,0.9302,0.8569,0.9294,0.9065,1.0090,0.9357,0.8760,0.9914,0.8910,1.0961,0.9955,0.9466,YES (v4),"global ('gauss', 0.0); F1:(0.9, 0.0, 1.0, 0.0, False, 1.0); F2:(1.0, 0.0, 1.0, 0.0, False, 1.0); F3:(1.0, 0.0, 1.0, 0.0, False, 0.5); F4:(1.25, 0.2, 1.5, 1.0, False, 1.0)"
+E4-seed20260909,"adopted v4, engine seed 20260909",0,0.9220,0.9065,1.0090,0.9302,0.8569,,,,,,0.9378,0.8910,1.0085,0.9258,0.9156,,
+E4-seed1,"adopted v4, engine seed 1",0,0.9334,0.9606,1.0118,0.9358,0.8526,,,,,,0.9386,0.9002,1.0047,0.9347,0.9066,,
+E4-seed2,"adopted v4, engine seed 2",0,0.9287,0.9348,1.0044,0.9282,0.8651,,,,,,0.9429,0.8964,1.0146,0.9281,0.9230,,
+E4-seed3,"adopted v4, engine seed 3",0,0.9295,0.9329,1.0092,0.9299,0.8640,,,,,,0.9360,0.8715,1.0026,0.9292,0.9189,,
+E4-seed4,"adopted v4, engine seed 4",0,0.9233,0.9279,1.0016,0.9285,0.8548,,,,,,0.9315,0.8731,0.9949,0.9250,0.9137,,
+E5-v3feat,F4 corpus event width ON with v3 keyword features (else adopted v4),0,0.9226,0.9065,1.0090,0.9302,0.8589,,,,,,0.9468,0.8910,1.0085,0.9258,0.9466,,no gain over event width OFF (adopted)
+E5-v4feat,F4 corpus event width ON with v4 keyword features (else adopted v4),0,0.9219,0.9065,1.0090,0.9302,0.8568,,,,,,0.9469,0.8910,1.0085,0.9258,0.9468,,no gain over event width OFF (adopted)
+E6-F1-width1.0,adopted v4 with F1 width=1.0,0,0.9397,0.9953,1.0090,0.9302,0.8569,,,,,,0.9490,0.9760,1.0085,0.9258,0.9156,,sensitivity
+E6-F1-width0.85,adopted v4 with F1 width=0.85,0,0.9313,0.9529,1.0090,0.9302,0.8569,,,,,,0.9343,0.8644,1.0085,0.9258,0.9156,,sensitivity
+E6-F3-drift1.0,adopted v4 with F3 drift=1.0,0,0.9357,0.9065,1.0090,0.9918,0.8569,,,,,,0.9617,0.8910,1.0085,0.9955,0.9156,,sensitivity
+E6-F3-drift0.25,adopted v4 with F3 drift=0.25,0,0.9238,0.9065,1.0090,0.9382,0.8569,,,,,,0.9365,0.8910,1.0085,0.9219,0.9156,,sensitivity
+E6-F4-width1.1,adopted v4 with F4 width=1.1,0,0.9266,0.9065,1.0090,0.9302,0.8713,,,,,,0.9375,0.8910,1.0085,0.9258,0.9146,,sensitivity
+E6-F4-width1.4,adopted v4 with F4 width=1.4,0,0.9205,0.9065,1.0090,0.9302,0.8523,,,,,,0.9391,0.8910,1.0085,0.9258,0.9201,,sensitivity
+E6-F4-asym0.5,adopted v4 with F4 asym=0.5,0,0.9301,0.9065,1.0090,0.9302,0.8820,,,,,,0.9440,0.8910,1.0085,0.9258,0.9370,,sensitivity
+E6-F4-asym1.5,adopted v4 with F4 asym=1.5,0,0.9172,0.9065,1.0090,0.9302,0.8422,,,,,,0.9331,0.8910,1.0085,0.9258,0.8994,,sensitivity
+E6-F2-width1.1,adopted v4 with F2 width=1.1,0,0.9203,0.9065,1.0022,0.9302,0.8569,,,,,,0.9455,0.8910,1.0410,0.9258,0.9156,,sensitivity

@@ -38,7 +38,7 @@ from . import ENGINE_VERSION, events, io, model
 
 DEFAULT_DRAWS = 2000
 DEFAULT_SEED = 20260909
-DEFAULT_PROFILE = "v3"
+DEFAULT_PROFILE = "v4"
 DEFAULT_DEADLINE_S = 600
 MIN_DRAWS, MAX_DRAWS = 200, 20_000   # contract floor/ceiling (limits.ParseLimits)
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
