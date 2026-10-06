@@ -1,0 +1,136 @@
+# Track 2 (Forecasting) submission image: build for linux/amd64, run EVERY public unit inside the
+# image with the Development platform's container settings, time each unit, check every output
+# with the toolkit's output-tree policy and the official track scorer (gates g0-g3), compare the
+# image's outputs with a native run under the same pins and seed, then push to GHCR and print the
+# immutable digest. The pushed package stays PRIVATE; making it public is the owner's manual step
+# (t2-work/pack/README.md). Everything here drives the same scripts the owner runs locally.
+name: t2-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/t2-image]
+    paths:
+      - "t2-work/engine/**"
+      - "t2-work/Dockerfile"
+      - "t2-work/.dockerignore"
+      - "t2-work/requirements.lock"
+      - "t2-work/pack/**"
+      - ".github/workflows/t2-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: t2-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRACK2_REF: 2299dab3d31f5e93c10df087af86ffb0b7bfe938   # track2-forecasting-public: units + scorer
+  GHCR_OWNER: dapeipeipeipei
+  GHCR_NAME: jinpei-t2
+  PYTHONUTF8: "1"
+
+defaults:
+  run:
+    shell: bash   # explicit bash => -eo pipefail, so `| tee` cannot hide a failing step
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 2 kit (units, scorer) at a pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track2-forecasting-public
+          ref: ${{ env.TRACK2_REF }}
+          path: track2-forecasting-public
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Pinned venv (requirements.lock + toolkit v2.6.0 + track scorer)
+        run: bash t2-work/pack/make_venv.sh
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (linux/amd64) + self-checks
+        run: bash t2-work/pack/build.sh
+
+      - name: Native reference run (same pins, seed and argv; no container)
+        run: |
+          bash t2-work/pack/local_run.sh --all --native --runs-root "$RUNNER_TEMP/t2" \
+            --run-name native --no-check
+
+      - name: Every unit in the image with platform settings, gates, parity with native
+        run: |
+          mkdir -p "$RUNNER_TEMP/t2"
+          bash t2-work/pack/local_run.sh --all --runs-root "$RUNNER_TEMP/t2" --run-name image \
+            --cpus "$(nproc)" --memory 14g --compare "$RUNNER_TEMP/t2/native/out" \
+            | tee "$RUNNER_TEMP/t2/image-report.txt"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR (private package)
+        id: push
+        run: bash t2-work/pack/push.sh --yes --no-login --tag "${GITHUB_SHA::12}"
+
+      - name: Anonymous pull check (expected to FAIL while the package is private)
+        continue-on-error: true
+        run: |
+          bash t2-work/pack/verify_anonymous_pull.sh --digest "${{ steps.push.outputs.digest }}" \
+            | tee "$RUNNER_TEMP/t2/anonymous-pull.txt"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### T2 image"
+            echo
+            echo "- digest: \`${{ steps.push.outputs.image_ref }}\`"
+            echo "- commit: \`${GITHUB_SHA}\`  track2 kit: \`${TRACK2_REF}\`"
+            if [ -f t2-work/pack/state/image.env ]; then
+              echo "- image: $(grep -E '^(LOCAL_IMAGE|SIZE_BYTES)=' t2-work/pack/state/image.env | tr '\n' ' ')"
+            fi
+            echo
+            echo '```'
+            tail -n 8 "$RUNNER_TEMP/t2/image-report.txt" 2>/dev/null || echo "(no image run report)"
+            echo '```'
+            if [ -f "$RUNNER_TEMP/t2/image/timings.tsv" ]; then
+              echo
+              echo "Slowest units (seconds, container create -> exit):"
+              echo '```'
+              sort -t$'\t' -k4 -nr "$RUNNER_TEMP/t2/image/timings.tsv" | head -n 6
+              echo '```'
+            fi
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/t2/anonymous-pull.txt" 2>/dev/null | tail -n 6 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t2-image-report
+          path: |
+            ${{ runner.temp }}/t2/image-report.txt
+            ${{ runner.temp }}/t2/anonymous-pull.txt
+            ${{ runner.temp }}/t2/image/timings.tsv
+            ${{ runner.temp }}/t2/image/summary.json
+            ${{ runner.temp }}/t2/image/run.env
+            ${{ runner.temp }}/t2/image/logs/**
+            ${{ runner.temp }}/t2/image/out/**
+            ${{ runner.temp }}/t2/native/timings.tsv
+            t2-work/pack/state/*.env
+          retention-days: 30

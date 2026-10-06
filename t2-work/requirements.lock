@@ -1,0 +1,21 @@
+# Runtime dependencies of the Track 2 engine (t2-work/engine), pinned exactly.
+#
+# ONE list, used in two places:
+#   * t2-work/Dockerfile installs exactly this file into the submission image (linux/amd64, cp313);
+#   * t2-work/pack/make_venv.sh installs exactly this file into t2-work/pack/.venv-docker (Windows,
+#     cp313), so local gate/score runs use the same library versions as the image.
+#
+# These are the versions the engine was developed and scored under (the main .venv: v3 = 0.900,
+# 104/104 admissible). Every pin has a cp313 manylinux_2_28 x86_64 wheel (checked with
+# `pip download --platform manylinux_2_28_x86_64 --python-version 3.13 --only-binary=:all:`);
+# python:3.13-slim-bookworm has glibc 2.36, so no source build happens in the image.
+#
+# The engine imports numpy, pandas and pyarrow only (no scipy, no qfbench2_common).
+# python-dateutil/six are pandas' own requirements; tzdata is a pandas requirement on Windows only,
+# pinned here unconditionally so both environments carry the same tz database.
+numpy==2.5.3
+pandas==3.0.5
+pyarrow==25.0.1
+python-dateutil==2.9.0.post0
+six==1.17.0
+tzdata==2026.3

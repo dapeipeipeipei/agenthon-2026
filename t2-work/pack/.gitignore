@@ -1,0 +1,6 @@
+# local artefacts of t2-work/pack scripts
+.venv-docker/
+state/
+runs/
+dist/
+*.zip

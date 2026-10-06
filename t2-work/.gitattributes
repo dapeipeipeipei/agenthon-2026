@@ -1,0 +1,4 @@
+Dockerfile text eol=lf
+requirements.lock text eol=lf
+pack/*.sh text eol=lf
+pack/*.py text eol=lf

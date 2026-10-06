@@ -1,6 +1,8 @@
-out*
-realized
-*.json
-*.csv
-__pycache__
-*.pyc
+# Build context is t2-work/, which also holds ~100 output folders (hundreds of MB) and the
+# local venv. Allowlist: send ONLY what the Dockerfile copies.
+*
+!Dockerfile
+!requirements.lock
+!engine/
+engine/**/__pycache__
+engine/**/*.pyc
