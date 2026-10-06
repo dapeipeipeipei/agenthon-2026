@@ -20,6 +20,10 @@ env:
   TRACK4_REF: 1c744e1d6725340643a533f436517d72b53ca0e1   # track4-analysis-public, scorer 5.2.2
   TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
 
+defaults:
+  run:
+    shell: bash   # explicit bash => -eo pipefail, so `| tee` cannot hide a failing gate
+
 jobs:
   build-test-push:
     runs-on: ubuntu-latest

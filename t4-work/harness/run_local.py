@@ -191,7 +191,7 @@ def main() -> int:
     args = ap.parse_args()
     global DOCKER_IMAGE
     DOCKER_IMAGE = args.docker_image or None
-    out_root = Path(args.out_root)
+    out_root = Path(args.out_root).resolve()  # docker -v needs an absolute host path
     scratch = out_root / "_scratch_units"
     scratch.mkdir(parents=True, exist_ok=True)
 
