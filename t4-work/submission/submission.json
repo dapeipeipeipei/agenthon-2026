@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-analysis-dev",
+  "team_id": "team-00000000000000000000000000000000",
+  "track": "analysis",
+  "phase": "dev",
+  "category": "api",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "replace-me/agenthon-t4-analyst",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "image_access": "public",
+  "models": [],
+  "license": "Apache-2.0",
+  "descriptor_digest": "sha256:4569532d24782ba5a11cef62e585dcdeb645b5ed09fc20f04c906ec85156d14a"
+}

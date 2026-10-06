@@ -1,0 +1,111 @@
+# Track 4 (Explainability) analyst image: build for linux/amd64, run every public dev unit inside
+# the image with the Development platform's container settings, check every answer with the
+# official verifier/scorer, upload the summary, and push the image to GHCR.
+name: t4-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/t4-image]
+    paths:
+      - "t4-work/**"
+      - ".github/workflows/t4-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/dapeipeipeipei/jinpei-t4
+  TRACK4_REF: 1c744e1d6725340643a533f436517d72b53ca0e1   # track4-analysis-public, scorer 5.2.2
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 4 kit (units, scorer, baselines)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track4-analysis-public
+          ref: ${{ env.TRACK4_REF }}
+          path: track4-analysis-public
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install toolkit v2.6.0 + Track 4 scorer
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$TOOLKIT" "jsonschema==4.23.0"
+          pip install --no-deps -e track4-analysis-public
+
+      - name: Judge tokenizers for the 400-token claim cap (tokenizer files only, no weights)
+        continue-on-error: true
+        run: |
+          pip install transformers sentencepiece protobuf
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          for m in ("cross-encoder/nli-deberta-v3-large", "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"):
+              snapshot_download(m, allow_patterns=["*.json", "*.model", "*.txt"])
+          PY
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (linux/amd64)
+        run: |
+          docker buildx build --platform linux/amd64 --load \
+            -t t4-local:ci -f t4-work/Dockerfile t4-work
+          docker image inspect t4-local:ci --format 'label={{ index .Config.Labels "qfbench2.interface_version" }} user={{ .Config.User }} entrypoint={{ json .Config.Entrypoint }} size={{ .Size }}'
+          test "$(docker image inspect t4-local:ci --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
+
+      - name: Run every public unit in the image (platform settings) + official checks
+        run: |
+          mkdir -p t4-ci-out
+          python t4-work/harness/run_local.py --docker-image t4-local:ci --out-root t4-ci-out --gate \
+            | tee t4-ci-out/summary.txt
+
+      - name: Robustness cases (agent from source)
+        run: python t4-work/harness/robustness.py | tee -a t4-ci-out/summary.txt
+
+      - name: House layer against a mock endpoint (agent from source)
+        run: python t4-work/harness/mock_house.py | tee -a t4-ci-out/summary.txt
+
+      - name: Verb contract (no args / --help) in the image
+        run: |
+          docker run --rm --network=none t4-local:ci analyze --help | head -5
+          docker run --rm --network=none t4-local:ci | head -3
+
+      - name: Push to GHCR
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag t4-local:ci "$IMAGE:${GITHUB_SHA::12}"
+          docker tag t4-local:ci "$IMAGE:ci"
+          docker push "$IMAGE:${GITHUB_SHA::12}"
+          docker push "$IMAGE:ci"
+          DIGEST=$(docker image inspect "$IMAGE:${GITHUB_SHA::12}" --format '{{ index .RepoDigests 0 }}')
+          echo "image digest: $DIGEST" | tee -a t4-ci-out/summary.txt
+          echo "### T4 image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary to job page
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 60 t4-ci-out/summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t4-ci-summary
+          path: |
+            t4-ci-out/summary.txt
+            t4-ci-out/results.json
+            t4-ci-out/ours/**/answer.json
+          retention-days: 30
