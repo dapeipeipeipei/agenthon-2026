@@ -1,0 +1,2 @@
+# Linux image inputs must keep LF line endings even on a Windows checkout (core.autocrlf).
+* text=auto eol=lf

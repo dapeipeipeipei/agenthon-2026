@@ -1,0 +1,8 @@
+# keep the build context to the agent and its launcher
+*
+!agent/
+!agent/**
+!bin/
+!bin/analyze
+**/__pycache__
+**/*.pyc

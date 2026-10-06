@@ -1,0 +1,3 @@
+#!/bin/sh
+# Track 4 verb. The harness runs `analyze --task /input/task.json --corpus /input/corpus/ --out /output/answer.json`.
+exec python3 -B -m agent "$@"
