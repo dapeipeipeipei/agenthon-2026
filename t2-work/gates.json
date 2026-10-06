@@ -10,7 +10,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.88
+    "elapsed_s": 2.68
   },
   "t2-F1-ai-mom-2024": {
     "card_id": "t2-F1-ai-mom-2024",
@@ -23,7 +23,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.86
+    "elapsed_s": 2.72
   },
   "t2-F1-aud-on-hold-2016": {
     "card_id": "t2-F1-aud-on-hold-2016",
@@ -36,7 +36,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 2.7
   },
   "t2-F1-cad-boc-2017": {
     "card_id": "t2-F1-cad-boc-2017",
@@ -62,7 +62,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.05
+    "elapsed_s": 2.7
   },
   "t2-F1-conflicting-texts-2024": {
     "card_id": "t2-F1-conflicting-texts-2024",
@@ -75,7 +75,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.79
+    "elapsed_s": 2.62
   },
   "t2-F1-considerable-period-2003": {
     "card_id": "t2-F1-considerable-period-2003",
@@ -88,7 +88,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.92
+    "elapsed_s": 2.69
   },
   "t2-F1-conundrum-2005": {
     "card_id": "t2-F1-conundrum-2005",
@@ -101,7 +101,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.79
+    "elapsed_s": 2.7
   },
   "t2-F1-cpi-glidepath-2023": {
     "card_id": "t2-F1-cpi-glidepath-2023",
@@ -114,7 +114,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.75
+    "elapsed_s": 2.73
   },
   "t2-F1-dkk-peg-2019": {
     "card_id": "t2-F1-dkk-peg-2019",
@@ -127,7 +127,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.48
   },
   "t2-F1-eur-range-2017": {
     "card_id": "t2-F1-eur-range-2017",
@@ -140,7 +140,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 2.51
   },
   "t2-F1-fed-put-2019": {
     "card_id": "t2-F1-fed-put-2019",
@@ -153,7 +153,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.95
+    "elapsed_s": 2.51
   },
   "t2-F1-greater-confidence-2024": {
     "card_id": "t2-F1-greater-confidence-2024",
@@ -166,7 +166,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.95
+    "elapsed_s": 2.49
   },
   "t2-F1-hawkish-cut-2024": {
     "card_id": "t2-F1-hawkish-cut-2024",
@@ -179,7 +179,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.92
+    "elapsed_s": 2.55
   },
   "t2-F1-jpy-ycc-flex-2018": {
     "card_id": "t2-F1-jpy-ycc-flex-2018",
@@ -192,7 +192,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.62
   },
   "t2-F1-liftoff-telegraph-2015": {
     "card_id": "t2-F1-liftoff-telegraph-2015",
@@ -205,7 +205,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.92
+    "elapsed_s": 2.56
   },
   "t2-F1-measured-pace-2004": {
     "card_id": "t2-F1-measured-pace-2004",
@@ -218,7 +218,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.78
+    "elapsed_s": 3.85
   },
   "t2-F1-normalization-2017": {
     "card_id": "t2-F1-normalization-2017",
@@ -231,7 +231,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.86
+    "elapsed_s": 4.56
   },
   "t2-F1-patient-dropped-2015": {
     "card_id": "t2-F1-patient-dropped-2015",
@@ -244,7 +244,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.87
+    "elapsed_s": 4.51
   },
   "t2-F1-pause-2006": {
     "card_id": "t2-F1-pause-2006",
@@ -257,7 +257,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.98
+    "elapsed_s": 4.33
   },
   "t2-F1-qe3-end-2014": {
     "card_id": "t2-F1-qe3-end-2014",
@@ -270,7 +270,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.9
+    "elapsed_s": 4.38
   },
   "t2-F1-sahm-watch-2024": {
     "card_id": "t2-F1-sahm-watch-2024",
@@ -283,7 +283,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.81
+    "elapsed_s": 4.91
   },
   "t2-F1-third-cut-2019": {
     "card_id": "t2-F1-third-cut-2019",
@@ -296,7 +296,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.92
+    "elapsed_s": 4.64
   },
   "t2-F1-ust-positioning-2018": {
     "card_id": "t2-F1-ust-positioning-2018",
@@ -309,7 +309,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.88
+    "elapsed_s": 4.67
   },
   "t2-F2-abenomics-2012": {
     "card_id": "t2-F2-abenomics-2012",
@@ -322,7 +322,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.99
+    "elapsed_s": 4.77
   },
   "t2-F2-act-as-appropriate-2019": {
     "card_id": "t2-F2-act-as-appropriate-2019",
@@ -335,7 +335,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 3.81
   },
   "t2-F2-aud-taper-2013": {
     "card_id": "t2-F2-aud-taper-2013",
@@ -348,7 +348,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.88
+    "elapsed_s": 2.58
   },
   "t2-F2-boj-thin-signal-2014": {
     "card_id": "t2-F2-boj-thin-signal-2014",
@@ -361,7 +361,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.96
+    "elapsed_s": 2.58
   },
   "t2-F2-cnh-stress-2015": {
     "card_id": "t2-F2-cnh-stress-2015",
@@ -374,7 +374,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.54
   },
   "t2-F2-cnh-tradewar-2018": {
     "card_id": "t2-F2-cnh-tradewar-2018",
@@ -387,7 +387,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.65
   },
   "t2-F2-considerable-removal-2004": {
     "card_id": "t2-F2-considerable-removal-2004",
@@ -400,7 +400,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.83
+    "elapsed_s": 2.61
   },
   "t2-F2-credit-crunch-2007": {
     "card_id": "t2-F2-credit-crunch-2007",
@@ -413,7 +413,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 2.55
   },
   "t2-F2-cut-sizing-2024": {
     "card_id": "t2-F2-cut-sizing-2024",
@@ -426,7 +426,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.03
+    "elapsed_s": 2.59
   },
   "t2-F2-draghi-precommit-2014": {
     "card_id": "t2-F2-draghi-precommit-2014",
@@ -439,7 +439,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.52
   },
   "t2-F2-ecb-qe-telegraph-2014": {
     "card_id": "t2-F2-ecb-qe-telegraph-2014",
@@ -452,7 +452,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.61
   },
   "t2-F2-eur-parity-2022": {
     "card_id": "t2-F2-eur-parity-2022",
@@ -465,7 +465,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.01
+    "elapsed_s": 2.51
   },
   "t2-F2-fragile-five-brl-2013": {
     "card_id": "t2-F2-fragile-five-brl-2013",
@@ -478,7 +478,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.6
   },
   "t2-F2-fragile-five-inr-2013": {
     "card_id": "t2-F2-fragile-five-inr-2013",
@@ -491,7 +491,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 2.52
   },
   "t2-F2-higher-for-longer-2023": {
     "card_id": "t2-F2-higher-for-longer-2023",
@@ -504,7 +504,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.49
   },
   "t2-F2-nirp-paradox-2016": {
     "card_id": "t2-F2-nirp-paradox-2016",
@@ -517,7 +517,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.82
+    "elapsed_s": 2.53
   },
   "t2-F2-opec-cad-2014": {
     "card_id": "t2-F2-opec-cad-2014",
@@ -530,7 +530,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.54
   },
   "t2-F2-powell-pivot-2019": {
     "card_id": "t2-F2-powell-pivot-2019",
@@ -543,7 +543,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.56
   },
   "t2-F2-qe2-jackson-hole-2010": {
     "card_id": "t2-F2-qe2-jackson-hole-2010",
@@ -556,7 +556,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 2.59
   },
   "t2-F2-shunto-nirp-exit-2024": {
     "card_id": "t2-F2-shunto-nirp-exit-2024",
@@ -569,7 +569,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 2.57
   },
   "t2-F2-some-pain-2022": {
     "card_id": "t2-F2-some-pain-2022",
@@ -582,7 +582,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.54
   },
   "t2-F2-taper-begins-2013": {
     "card_id": "t2-F2-taper-begins-2013",
@@ -595,7 +595,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.01
+    "elapsed_s": 2.51
   },
   "t2-F2-taper-testimony-2013": {
     "card_id": "t2-F2-taper-testimony-2013",
@@ -608,7 +608,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 2.58
   },
   "t2-F2-time-has-come-2024": {
     "card_id": "t2-F2-time-has-come-2024",
@@ -621,7 +621,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.88
+    "elapsed_s": 2.62
   },
   "t2-F2-trade-war-escalation-2019": {
     "card_id": "t2-F2-trade-war-escalation-2019",
@@ -634,7 +634,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.87
+    "elapsed_s": 2.57
   },
   "t2-F2-trichet-alertness-2008": {
     "card_id": "t2-F2-trichet-alertness-2008",
@@ -647,7 +647,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.82
+    "elapsed_s": 2.57
   },
   "t2-F2-whatever-it-takes-2012": {
     "card_id": "t2-F2-whatever-it-takes-2012",
@@ -660,7 +660,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.81
+    "elapsed_s": 2.55
   },
   "t2-F3-bear-flattener-2022": {
     "card_id": "t2-F3-bear-flattener-2022",
@@ -673,7 +673,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.6
   },
   "t2-F3-boj-ust-channel-2023": {
     "card_id": "t2-F3-boj-ust-channel-2023",
@@ -686,7 +686,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.98
+    "elapsed_s": 2.55
   },
   "t2-F3-brexit-joint-2016": {
     "card_id": "t2-F3-brexit-joint-2016",
@@ -699,7 +699,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.95
+    "elapsed_s": 2.59
   },
   "t2-F3-conundrum-joint-2005": {
     "card_id": "t2-F3-conundrum-joint-2005",
@@ -712,7 +712,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.97
+    "elapsed_s": 2.47
   },
   "t2-F3-covid-curve-2020": {
     "card_id": "t2-F3-covid-curve-2020",
@@ -725,7 +725,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.87
+    "elapsed_s": 3.1
   },
   "t2-F3-cpi-shock-cross-2022": {
     "card_id": "t2-F3-cpi-shock-cross-2022",
@@ -738,7 +738,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 5.89
   },
   "t2-F3-divergence-2014": {
     "card_id": "t2-F3-divergence-2014",
@@ -751,7 +751,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.86
+    "elapsed_s": 6.22
   },
   "t2-F3-dollar-squeeze-2020": {
     "card_id": "t2-F3-dollar-squeeze-2020",
@@ -764,7 +764,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.88
+    "elapsed_s": 6.42
   },
   "t2-F3-dollar-vortex-2022": {
     "card_id": "t2-F3-dollar-vortex-2022",
@@ -777,7 +777,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.02
+    "elapsed_s": 6.68
   },
   "t2-F3-dots-vs-oil-2014": {
     "card_id": "t2-F3-dots-vs-oil-2014",
@@ -790,7 +790,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.9
+    "elapsed_s": 7.02
   },
   "t2-F3-election-2024-joint": {
     "card_id": "t2-F3-election-2024-joint",
@@ -803,7 +803,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.9
+    "elapsed_s": 6.57
   },
   "t2-F3-fragile-five-joint-2013": {
     "card_id": "t2-F3-fragile-five-joint-2013",
@@ -816,7 +816,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.06
+    "elapsed_s": 7.0
   },
   "t2-F3-funding-flip-2024": {
     "card_id": "t2-F3-funding-flip-2024",
@@ -829,7 +829,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.02
+    "elapsed_s": 6.78
   },
   "t2-F3-hiking-year-curve-2018": {
     "card_id": "t2-F3-hiking-year-curve-2018",
@@ -842,7 +842,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.97
+    "elapsed_s": 7.14
   },
   "t2-F3-inversion-persistence-2019": {
     "card_id": "t2-F3-inversion-persistence-2019",
@@ -855,7 +855,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 5.79
   },
   "t2-F3-oil-fx-split-2022": {
     "card_id": "t2-F3-oil-fx-split-2022",
@@ -868,7 +868,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 3.95
   },
   "t2-F3-rates-into-factors-2022": {
     "card_id": "t2-F3-rates-into-factors-2022",
@@ -881,7 +881,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 3.74
   },
   "t2-F3-safe-haven-paradox-2011": {
     "card_id": "t2-F3-safe-haven-paradox-2011",
@@ -894,7 +894,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.95
+    "elapsed_s": 3.67
   },
   "t2-F3-scandies-stress-2022": {
     "card_id": "t2-F3-scandies-stress-2022",
@@ -907,7 +907,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.0
+    "elapsed_s": 3.73
   },
   "t2-F3-taper-steepener-2013": {
     "card_id": "t2-F3-taper-steepener-2013",
@@ -920,7 +920,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.96
+    "elapsed_s": 3.83
   },
   "t2-F3-term-premium-steepener-2023": {
     "card_id": "t2-F3-term-premium-steepener-2023",
@@ -933,7 +933,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.9
+    "elapsed_s": 3.74
   },
   "t2-F3-vaccine-rotation-2020": {
     "card_id": "t2-F3-vaccine-rotation-2020",
@@ -946,7 +946,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.87
+    "elapsed_s": 3.83
   },
   "t2-F4-aud-gfc-2008": {
     "card_id": "t2-F4-aud-gfc-2008",
@@ -959,7 +959,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 3.89
   },
   "t2-F4-chf-floor-strain-2015": {
     "card_id": "t2-F4-chf-floor-strain-2015",
@@ -972,7 +972,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 3.81
   },
   "t2-F4-china-panic-2016": {
     "card_id": "t2-F4-china-panic-2016",
@@ -985,7 +985,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.87
+    "elapsed_s": 3.68
   },
   "t2-F4-china-stress-mkt-2015": {
     "card_id": "t2-F4-china-stress-mkt-2015",
@@ -998,7 +998,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.84
+    "elapsed_s": 3.04
   },
   "t2-F4-covid-mkt-2020": {
     "card_id": "t2-F4-covid-mkt-2020",
@@ -1011,7 +1011,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 3.4
   },
   "t2-F4-covid-nfp-2020": {
     "card_id": "t2-F4-covid-nfp-2020",
@@ -1024,7 +1024,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.96
+    "elapsed_s": 2.77
   },
   "t2-F4-covid-rates-2020": {
     "card_id": "t2-F4-covid-rates-2020",
@@ -1037,7 +1037,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.95
+    "elapsed_s": 2.67
   },
   "t2-F4-cpi-friday-2022": {
     "card_id": "t2-F4-cpi-friday-2022",
@@ -1050,7 +1050,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.84
+    "elapsed_s": 2.66
   },
   "t2-F4-cpi-vintage-2022": {
     "card_id": "t2-F4-cpi-vintage-2022",
@@ -1063,7 +1063,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.94
+    "elapsed_s": 2.54
   },
   "t2-F4-eur-warnings-2022": {
     "card_id": "t2-F4-eur-warnings-2022",
@@ -1076,7 +1076,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.96
+    "elapsed_s": 2.65
   },
   "t2-F4-factor-stress-2008": {
     "card_id": "t2-F4-factor-stress-2008",
@@ -1089,7 +1089,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.96
+    "elapsed_s": 2.49
   },
   "t2-F4-funding-stress-10y-2008": {
     "card_id": "t2-F4-funding-stress-10y-2008",
@@ -1102,7 +1102,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.51
   },
   "t2-F4-funding-stress-2y-2008": {
     "card_id": "t2-F4-funding-stress-2y-2008",
@@ -1115,7 +1115,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.97
+    "elapsed_s": 2.57
   },
   "t2-F4-gbp-brexit-2016": {
     "card_id": "t2-F4-gbp-brexit-2016",
@@ -1128,7 +1128,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.01
+    "elapsed_s": 2.61
   },
   "t2-F4-gbp-conference-2016": {
     "card_id": "t2-F4-gbp-conference-2016",
@@ -1141,7 +1141,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.81
+    "elapsed_s": 2.58
   },
   "t2-F4-hike-cycle-2021Q4b": {
     "card_id": "t2-F4-hike-cycle-2021Q4b",
@@ -1154,7 +1154,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.02
+    "elapsed_s": 2.53
   },
   "t2-F4-hml-covid-2020": {
     "card_id": "t2-F4-hml-covid-2020",
@@ -1167,7 +1167,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.93
+    "elapsed_s": 2.61
   },
   "t2-F4-jpy-carry-2007": {
     "card_id": "t2-F4-jpy-carry-2007",
@@ -1180,7 +1180,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 2.8
   },
   "t2-F4-jpy-crowding-2024": {
     "card_id": "t2-F4-jpy-crowding-2024",
@@ -1193,7 +1193,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.79
   },
   "t2-F4-mkt-selloff-2011": {
     "card_id": "t2-F4-mkt-selloff-2011",
@@ -1206,7 +1206,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.86
+    "elapsed_s": 2.7
   },
   "t2-F4-momentum-reversal-2009": {
     "card_id": "t2-F4-momentum-reversal-2009",
@@ -1219,7 +1219,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.93
+    "elapsed_s": 2.66
   },
   "t2-F4-nok-covid-2020": {
     "card_id": "t2-F4-nok-covid-2020",
@@ -1232,7 +1232,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.96
+    "elapsed_s": 2.69
   },
   "t2-F4-powell-december-2018": {
     "card_id": "t2-F4-powell-december-2018",
@@ -1245,7 +1245,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.91
+    "elapsed_s": 2.65
   },
   "t2-F4-qe1-expansion-2009": {
     "card_id": "t2-F4-qe1-expansion-2009",
@@ -1258,7 +1258,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.83
+    "elapsed_s": 2.67
   },
   "t2-F4-quant-crowding-2007": {
     "card_id": "t2-F4-quant-crowding-2007",
@@ -1271,7 +1271,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.85
+    "elapsed_s": 2.62
   },
   "t2-F4-short-vol-2018": {
     "card_id": "t2-F4-short-vol-2018",
@@ -1284,7 +1284,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.79
+    "elapsed_s": 2.59
   },
   "t2-F4-svb-whiplash-2023": {
     "card_id": "t2-F4-svb-whiplash-2023",
@@ -1297,7 +1297,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.89
+    "elapsed_s": 2.74
   },
   "t2-F4-taper-warning-2013": {
     "card_id": "t2-F4-taper-warning-2013",
@@ -1310,7 +1310,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.99
+    "elapsed_s": 2.66
   },
   "t2-F4-ust-downgrade-watch-2011": {
     "card_id": "t2-F4-ust-downgrade-watch-2011",
@@ -1323,7 +1323,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.88
+    "elapsed_s": 2.7
   },
   "t2-F4-ust10y-supply-2023": {
     "card_id": "t2-F4-ust10y-supply-2023",
@@ -1336,7 +1336,7 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 2.98
+    "elapsed_s": 2.82
   },
   "t2-F4-vaccine-timeline-2020": {
     "card_id": "t2-F4-vaccine-timeline-2020",
@@ -1349,6 +1349,6 @@
     },
     "scored": false,
     "note": "no --realized supplied: gates only, no score",
-    "elapsed_s": 3.05
+    "elapsed_s": 2.7
   }
 }

@@ -4,7 +4,7 @@
    "unit": "t2-EXAMPLE-ust-curve-1m",
    "asof": "2024-06-28",
    "target_type": "level",
-   "target_frequency": "monthly",
+   "target_frequency": "daily",
    "value_unit": "percent_per_annum",
    "assets": [
     "UST_2Y",
@@ -612,7 +612,7 @@
    ],
    "cells": [],
    "status": "uncovered",
-   "reason": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)"
+   "reason": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage"
   },
   "t2-F1-dkk-peg-2019": {
    "unit": "t2-F1-dkk-peg-2019",
@@ -1677,7 +1677,7 @@
    ],
    "cells": [],
    "status": "uncovered",
-   "reason": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)"
+   "reason": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage"
   },
   "t2-F1-third-cut-2019": {
    "unit": "t2-F1-third-cut-2019",
@@ -8561,7 +8561,7 @@
    ],
    "cells": [],
    "status": "uncovered",
-   "reason": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)"
+   "reason": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage"
   },
   "t2-F4-covid-rates-2020": {
    "unit": "t2-F4-covid-rates-2020",
@@ -8673,7 +8673,7 @@
    ],
    "cells": [],
    "status": "uncovered",
-   "reason": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)"
+   "reason": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage"
   },
   "t2-F4-eur-warnings-2022": {
    "unit": "t2-F4-eur-warnings-2022",
@@ -10029,16 +10029,16 @@
   "uncovered": {
    "t2-EXAMPLE-ust-curve-1m": "own panel disagrees with sibling panels on overlapping dates ({'UST_2Y': 124, 'UST_5Y': 124, 'UST_10Y': 124, 'UST_30Y': 124}); not the same series, sibling values would be wrong",
    "t2-F1-ai-mom-2024": "pool does not reach 2024-11-26 (+-3d) for this asset (max 2024-05-31)",
-   "t2-F1-cpi-glidepath-2023": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)",
+   "t2-F1-cpi-glidepath-2023": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage",
    "t2-F1-hawkish-cut-2024": "no pooled row within +-3d of 2025-06-12 (pool spans 2000-01-03..2024-12-18); no pooled row within +-3d of 2025-09-09 (pool spans 2000-01-03..2024-12-18)",
-   "t2-F1-sahm-watch-2024": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)",
+   "t2-F1-sahm-watch-2024": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage",
    "t2-F2-cnh-stress-2015": "no pooled row within +-3d of 2015-10-29 (pool spans 1995-07-31..2018-06-15)",
    "t2-F2-cnh-tradewar-2018": "no pooled row within +-3d of 2018-09-13 (pool spans 1995-07-31..2018-06-15)",
    "t2-F2-fragile-five-brl-2013": "no pooled row within +-3d of 2013-08-22 (pool spans 1995-01-02..2013-05-24)",
    "t2-F2-fragile-five-inr-2013": "no pooled row within +-3d of 2013-08-22 (pool spans 1993-05-24..2013-05-24)",
    "t2-F3-fragile-five-joint-2013": "no pooled row within +-3d of 2013-08-21 (pool spans 1993-05-24..2013-05-24); no pooled row within +-3d of 2013-08-21 (pool spans 1995-01-02..2013-05-24); no pooled row within +-3d of 2013-11-18 (pool spans 1993-05-24..2013-05-24); no pooled row within +-3d of 2013-11-18 (pool spans 1995-01-02..2013-05-24)",
-   "t2-F4-covid-nfp-2020": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)",
-   "t2-F4-cpi-vintage-2022": "monthly target without explicit target_dates: the sealed target date is not derivable from asof + BDay(h) (panel rows are month-start reference dates)"
+   "t2-F4-covid-nfp-2020": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage",
+   "t2-F4-cpi-vintage-2022": "monthly target: forecast_spec.json names the observation month, but the scored value is a specific vintage (first release or current) and since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED vintage of its OWN as-of date, so no pooled row is the scored vintage"
   },
   "cells_nearest_date": [
    "t2-F3-divergence-2014:EUR@63:nearest(-2d)",
@@ -10051,7 +10051,7 @@
   ],
   "cells_with_value_conflict": [],
   "pool_rows": 3437877,
-  "pool_conflicting_points": 496,
+  "pool_conflicting_points": 1541,
   "conventions": {
    "target_date": "card [targets].target_dates if present, else np.busday_offset(asof, h) (weekday arithmetic, no holidays)",
    "level": "panel value on target_date; else nearest within +-tol calendar days",

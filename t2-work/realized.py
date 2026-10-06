@@ -19,8 +19,10 @@ Conventions, each verified against the track repo:
     forecast_card.md: "`value` = cumulative log return over the h business days after the
     as-of date (sum of ln(1+r_t))" -> sum(log1p(r_t)) over pooled rows with asof < date <=
     target_date. Requires the pool to reach target_date (+-tol) with no gap > 5 calendar days.
-  * target_frequency "monthly" with no explicit target_dates: the macro panel rows are
-    month-start reference dates, the sealed target date is not derivable -> uncovered.
+  * target_frequency "monthly" with no explicit target_dates -> uncovered. The month itself is
+    now named (forecast_spec.json observation_periods, upstream #50/#16), but the scored value is
+    a specific vintage and the monthly panels hold the vintage of their own as-of (upstream #51),
+    so a sibling row is not the scored number.
   * Pool values are the MAJORITY across units per (panel, asset, date). A unit whose own panel
     disagrees with that majority on overlapping dates is not the same series (the EXAMPLE
     unit ships a perturbed exemplar panel) -> uncovered rather than scored on wrong values.
@@ -206,9 +208,10 @@ def build_unit(unit: Path, pool: pd.DataFrame, collapsed: pd.DataFrame, tol: int
         return info
     if tfreq == "monthly" and not explicit:
         info["status"] = "uncovered"
-        info["reason"] = ("monthly target without explicit target_dates: the sealed target "
-                          "date is not derivable from asof + BDay(h) (panel rows are "
-                          "month-start reference dates)")
+        info["reason"] = ("monthly target: forecast_spec.json names the observation month, but "
+                          "the scored value is a specific vintage (first release or current) and "
+                          "since upstream #51 (2026-09-26) every sibling monthly panel is the ALFRED "
+                          "vintage of its OWN as-of date, so no pooled row is the scored vintage")
         return info
 
     mism = {a: own_panel_mismatch(pool, collapsed, unit.name, a) for a in assets}
