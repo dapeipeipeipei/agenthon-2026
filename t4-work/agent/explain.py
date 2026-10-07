@@ -169,6 +169,7 @@ _METHOD_TEXT = {
     "carry_forward": "Absent new information that moves it, the best estimate of the next value is the latest published one; the band reflects the usual size of surprises around such values.",
     "zero_default": "Prices already reflect public pre-cutoff information, so without a directional signal the expected move is close to zero and the spread of outcomes is set by the typical size of such moves over the window.",
     "no_change": "Markets already price the pre-cutoff stance and information, so without a signal that sets the direction the expected change is zero, with a spread scaled to the level and the length of the window.",
+    "policy_path": "Front-end yields are the market's expected path of the policy rate: when the shortest yield sits far from where the Committee itself has signalled the rate will be in the near term, either the market or the Committee gives ground, and historically each gives about half, so the gap closes partly by the resolution; the pass-through fades with maturity because long yields are anchored by long-run growth and inflation expectations rather than the next few meetings, and the band is the usual size of yield moves over a window of this length.",
 }
 
 

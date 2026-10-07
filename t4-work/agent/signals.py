@@ -126,6 +126,12 @@ def vintage_signal(unit: Unit, entity: dict, cache: dict) -> VintageSignal | Non
                 first = next((i for i, v in enumerate(vals) if v is not None), None)
                 if first is None:
                     continue
+                # a row that never changed across every vintage shown is outside the agency's
+                # revision window: its zeros describe no revision process and would only pull
+                # the centre and the spread of the routine revisions toward zero
+                shown = [v for v in vals if v is not None]
+                if len(shown) >= 2 and max(shown) == min(shown):
+                    continue
                 # a row whose first value appears after the first vintage column starts at its
                 # first print, so the age of each later revision is known exactly
                 known_age = first > 0 and all(v is None for v in vals[:first])
@@ -425,6 +431,116 @@ def notes_span(unit: Unit, doc_id: str, needle_tokens: set[str], names: tuple[st
 
 def finite(x: float) -> bool:
     return isinstance(x, (int, float)) and math.isfinite(x)
+
+
+# --------------------------------------------------------------------------- policy-path anchor
+
+_FRAC = r"\d{1,2}(?:[ -]\d/\d)?(?:\.\d+)?"
+_RANGE = re.compile(
+    r"target range for the federal funds rate[^.;]{0,80}?\bto (" + _FRAC + r") (?:to|-|–) (" + _FRAC + r") percent",
+    re.IGNORECASE,
+)
+_RANGE_VERB = re.compile(r"\b(raise|raised|raising|increase|increased|lift|lifted|lower|lowered|lowering|reduce|reduced|cut|maintain|maintained|keep|kept|hold|held|leave|left|unchanged)\b", re.IGNORECASE)
+_STEP_PP = re.compile(r"by (\d/\d|\d+(?:\.\d+)?) percentage point", re.IGNORECASE)
+_STEP_BY_BP = re.compile(r"by (\d{2,3})[ -]basis[ -]points?", re.IGNORECASE)
+_STEP_BP = re.compile(r"(\d{2,3})[ -]basis[ -]points? (?:rate )?(increase|hike|rise|cut|reduction|decrease|easing|tightening)", re.IGNORECASE)
+_SEP_FF = re.compile(r"Federal funds rate\s+(\d\.\d{1,2})\s+(\d\.\d{1,2})", re.IGNORECASE)
+_SEP_PROSE = re.compile(r"(\d\.\d{1,2}) percent median federal funds rate", re.IGNORECASE)
+_UP_WORDS = ("raise", "increase", "lift")
+_DOWN_WORDS = ("lower", "reduce", "cut")
+
+
+def _frac(s: str) -> float | None:
+    s = s.strip().replace(" ", "-")
+    m = re.fullmatch(r"(\d{1,2})(?:-(\d)/(\d))?(?:\.(\d+))?", s)
+    if not m:
+        return None
+    v = float(m.group(1))
+    if m.group(2):
+        v += float(m.group(2)) / float(m.group(3))
+    elif m.group(4):
+        v = float(m.group(1) + "." + m.group(4))
+    return v
+
+
+@dataclass
+class PolicyPathSignal:
+    midpoint: float          # current target-range midpoint (percent)
+    step: float              # last signed policy step (percentage points; 0 = held)
+    anchor: float            # near-term policy anchor (percent)
+    anchor_kind: str         # "sep" (Committee's projected year-end median) | "step" | "hold"
+    span: Span               # the verbatim target-range statement
+    sep_span: Span | None = None
+
+
+def policy_path_signal(unit: Unit) -> PolicyPathSignal | None:
+    """The policy stance written in the unit's own pre-cutoff documents: the current federal funds
+    target range (midpoint), the direction and size of the latest move, and - when a Summary of
+    Economic Projections is in the corpus - the Committee's median projected rate for the current
+    year. The near-term anchor is that median when present, else the midpoint moved one more step
+    in the signalled direction (a committee that has just moved tends to move again the same way
+    until it signals a pause). Verbatim spans back every figure."""
+    best: PolicyPathSignal | None = None
+    for doc in sorted(unit.docs.values(), key=lambda d: (d.doc_date, d.doc_id), reverse=True):
+        if not doc.citable:
+            continue
+        m = _RANGE.search(doc.text)
+        if not m:
+            continue
+        lo, hi = _frac(m.group(1)), _frac(m.group(2))
+        if lo is None or hi is None or not (0.0 <= lo <= hi <= 25.0) or hi - lo > 0.6:
+            continue
+        mid = (lo + hi) / 2.0
+        sent_lo = max(0, doc.text.rfind(".", 0, m.start()) + 1)
+        sent_hi = min(len(doc.text), doc.text.find(".", m.end()) + 1 if doc.text.find(".", m.end()) >= 0 else len(doc.text))
+        sentence = doc.text[sent_lo:sent_hi]
+        direction = 0
+        verbs = [v.group(1).lower() for v in _RANGE_VERB.finditer(sentence[: m.start() - sent_lo + 40])]
+        for v in reversed(verbs):
+            if any(v.startswith(w) for w in _UP_WORDS):
+                direction = 1
+                break
+            if any(v.startswith(w) for w in _DOWN_WORDS):
+                direction = -1
+                break
+            if v in ("maintain", "maintained", "keep", "kept", "hold", "held", "leave", "left", "unchanged"):
+                direction = 0
+                break
+        step = 0.0
+        sp = _STEP_PP.search(sentence)
+        sbp = _STEP_BY_BP.search(sentence)
+        if sp:
+            step = _frac(sp.group(1)) or 0.0
+        elif sbp:
+            step = float(sbp.group(1)) / 100.0
+        else:
+            sb = _STEP_BP.search(sentence) or _STEP_BP.search(doc.text) or next(
+                (x for d2 in unit.docs.values() if d2.citable for x in [_STEP_BP.search(d2.text)] if x), None)
+            if sb:
+                step = float(sb.group(1)) / 100.0
+                word = sb.group(2).lower()
+                if direction == 0:
+                    direction = 1 if word in ("increase", "hike", "rise", "tightening") else -1
+        if direction != 0 and step == 0.0:
+            step = 0.25  # the standard increment when the size is not stated
+        step = direction * min(step, 1.0)
+        span = sentence_around(doc, m.start(), m.end(), max_len=320)
+        sig = PolicyPathSignal(mid, step, mid + step, "step" if step else "hold", span)
+        # the Committee's own projected year-end rate, if the corpus carries the projections
+        for d2 in sorted(unit.docs.values(), key=lambda d: (d.doc_date, d.doc_id), reverse=True):
+            if not d2.citable:
+                continue
+            ms = _SEP_FF.search(d2.text) or _SEP_PROSE.search(d2.text)
+            if not ms:
+                continue
+            sep = float(ms.group(1))
+            if abs(sep - mid) <= 1.5:  # a plausible same-year median; anything else is another variable or year
+                sig.anchor, sig.anchor_kind = sep, "sep"
+                sig.sep_span = sentence_around(d2, ms.start(), ms.end(), max_len=320)
+                break
+        best = sig
+        break
+    return best
 
 
 # --------------------------------------------------------------------------- high-frequency proxies

@@ -65,13 +65,54 @@ pq 0.50→0.52 量级。新发/续发修正在 unit 内方向一致（新发低 
 max(年龄匹配 spread, 合并常规修订 spread)；并把"从未修订过的死行"的零修订剔出合并集（避免把中心和 spread 压到 0）。
 粗估 IS →≈3700 < naive → iq 0.47→0.53，unit +0.02（标签不变）。
 
-## 待做（恢复后）
+## 已落地的改动（第二段，低负载模式：单进程、Idle 优先级）
 
-1. 在 `agent/predict.py` 加"政策路径锚"（k=0.5, M0=5），抽取器放 `agent/signals.py`（带 verbatim span 作 claim/premise），
-   `explain.py` 加对应 _METHOD_TEXT；仅当 target 是 bps 变化、实体行有 start yield 且语料能抽到目标区间时触发，否则回退零。
-2. vintage 区间：小样本 σ 下限 + 剔除死行零修订；检查 12 行标签不变。
-3. auction：fit_level_weight 的网格已含 w=0/win=12，但现版选到 (0.5,6)？核对 `_robust_scale` 归一是否让 w=0 吃亏；
-   σ 加合并残差下限。
-4. 跑 `run_local.py --gate`、`robustness.py`、`nli_check.py`（11 unit，模型权重在 C:/Users/wensh/hf-model-cache）；
-   逐 unit before/after 表；留一 unit 检验 k（只有 2 个 fomc unit，能做的是报告 k 的敏感性）。
-5. 提交、推 `exp/t4ns`，中文汇报。
+| 改动 | 文件 | 常数 | 触发条件（通用） |
+|---|---|---|---|
+| 政策路径锚 `policy_path` | `signals.policy_path_signal`、`predict._fill` 第 5 步 | PATH_SHARE=0.5、PATH_M0=5 | 目标是 bps 变化 + 行里有期限与起始收益率 + 语料（可引用文档）里能逐字抽到"target range for the federal funds rate … to X to Y percent"；否则照旧回零 |
+| vintage 小样本 σ 下限 | `predict._fill` 第 2 步 | SMALL_SAMPLE=5 | 年龄匹配修订 <5 个时，spread 取 max(年龄匹配, 全部常规修订) |
+| vintage 剔除死行 | `signals.vintage_signal` | 无 | 一行在所有 vintage 列里从未变过 → 不进常规修订集合 |
+| 序列模型 σ 下限 | `predict._fill` 第 4 步 | POOLED_SD_FLOOR=0.75 | 单行回测残差 ≥ 0.75 × unit 合并残差（都按各行自身尺度归一） |
+
+抽取器细节：目标区间按最新可引用文档的那句话取（verbatim span 进 claims 与 r1 premise）；方向看句内动词
+（raise/lower/maintain…）；步长先句内"by 1/2 percentage point"/"by 50 basis points"，再本文档/其他文档的
+"75 basis point increase"，都没有则 0.25；SEP 当年中位数从"Federal funds rate 4.4 3.4…"表或
+"4.4 percent median federal funds rate"句子取，且要求 |SEP − 中点| ≤ 1.5 才采信。
+k=0.5、M0=5 是事先定的经济先验（上表敏感性里 k=1 在 Dev 上更高，**没有**改成 k=1）。
+
+### 逐 unit：C → 本分支（核实真值，naive=carry；Dev 榜 = 10 个非 EXAMPLE unit 均值）
+
+| unit | C | t4ns | pq | iq | 说明 |
+|---|---|---|---|---|---|
+| auction-btc | 0.488 | 0.486 | 0.504 | 0.445 | σ 下限让 3Y 带略宽（−0.002，噪声级）；点值本来就是回测选的 12 期均值 |
+| cotpos | 0.531 | 0.531 | 0.545 | 0.498 | 不变（回测只支持现版） |
+| cpicomp | 0.556 | 0.556 | 0.556 | 0.556 | 分不变；覆盖 0.82→0.91，raw iq 0.591→0.615（被 pq 封顶） |
+| credit-event | 0.875 | 0.875 | | | 不变 |
+| eps-growth | 0.636 | 0.636 | | | 不变 |
+| eps-yoy | 0.898 | 0.898 | | | 不变 |
+| **fomc-2022** | 0.500 | **0.531** | 0.531 | 0.531 | 锚 = 2.375+0.75 = 3.125，gap +27bp → 点 +6…+14bp（真值 +57…+113） |
+| **fomc-2024** | 0.500 | **0.658** | 0.658 | 0.658 | 锚 = SEP 4.4，gap +81bp → 点 +17…+41bp（真值 +54…+78） |
+| **macrorev** | 0.607 | **0.613** | 0.667 | 0.489 | 标签仍 8/12（不变）；DGORDER/PAYEMS 带变宽，DGORDER_08（−2702）仍出界 |
+| postearn | 0.763 | 0.763 | | | 不变 |
+| **Dev10 均值** | 0.6353 | **0.6547** | | | 榜面 0.5368 → **0.5615**（+0.025） |
+| EXAMPLE | 0.850 | 0.850 | | | 不在 Dev 榜 |
+
+三种 naive 假设（carry / zero / mean）下 Dev10 均值 0.6547 / 0.6532 / 0.6640，相对 C 均 +0.024~+0.025。
+`run_local.py --gate` PASS 11/11（0 虚假 claim、reasons 检查 0 发现）；`robustness.py` 17/17。
+**NLI 全量检查未跑**（按指示等"full speed"）。
+
+### 哪些能推广、哪些不能（诚实版）
+
+- **能推广**：政策路径锚——密封的 rate_curve 家族题目本身就点名"市场定价 vs 委员会路径 / 前端离政策中点多远"，
+  规则就是这句话的确定性实现，两常数、有经济理由；方向错时每 unit 丢 0.03–0.10（镜像压力），方向对时赚 0.03–0.16。
+  2022 这题 gap 小（+27）所以赚得少，说明它不是靠"记住 2022 大涨"。
+- **能推广但 Dev 上看不出**：σ 下限（小样本、合并）——cpicomp 覆盖率升、auction 略降，净 0；它买的是密封题上
+  "单行历史太安静"的尾部保护。
+- **不能/不该推广**：cotpos 的"−水平"（对真值 ρ 0.50 但回测为负）和 auction 的新发/续发修正——都没采用。
+- **留一检验**：fomc 规则只有两个 unit，无法做真正的留一；能做的是上面的 k/M0/锚 敏感性表 + 镜像压力，
+  k=0.5 在所有锚变体里都为正收益，"仅当前中点"锚在 2022 方向错（所以用了"中点+上次步长 / SEP"）。
+
+### 待做
+
+1. 老板说 full speed 后：`nli_check.py` 11 unit（矛盾检查开启）；CI 构建镜像；视结果决定是否并入 Final 候选。
+2. 可选：auction σ 下限改为"同量纲行用原始合并残差"（会让 30Y 带 ±0.14→±0.21），本次没做（多一个判断分支）。

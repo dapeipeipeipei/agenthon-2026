@@ -22,6 +22,7 @@ from .signals import (
     finite,
     keyword_spans,
     notes_span,
+    policy_path_signal,
     proxy_signal,
     vintage_signal,
 )
@@ -149,6 +150,44 @@ def _last_date(keys: list[str]) -> _dt.date | None:
 #: 90% band half-width in robust standard deviations (prefer wide: the interval score is far
 #: flatter above the 1.645 sigma optimum than below it).
 VINTAGE_HW = 1.8
+#: Below this many age-matched revisions, their spread is floored at the spread of all routine
+#: revisions in the table (three observations say little about the tail).
+SMALL_SAMPLE = 5
+#: A series' own backtest residual is floored at this share of the unit-pooled residual (both in
+#: units of each series' own scale): one quiet year in one row is not evidence of a quiet future.
+POOLED_SD_FLOOR = 0.75
+
+#: Policy-path anchor: the share of the gap between the near-term policy anchor and the front-end
+#: yield expected to close by the resolution (markets and the committee each half right), and the
+#: maturity (years) beyond which the pass-through decays as sqrt(M0 / maturity).
+PATH_SHARE = 0.5
+PATH_M0 = 5.0
+
+
+def _maturity_years(ent: dict) -> float | None:
+    for k, v in ent.items():
+        x = _num(v)
+        if x is not None and x > 0 and any(w in k.lower() for w in ("maturity", "tenor_years", "years")):
+            return x
+    for k in ("name", "tenor", "entity_id"):
+        m = re.search(r"(\d+(?:\.\d+)?)\s*-?\s*(?:Year|Yr|Y)\b", str(ent.get(k) or ""), re.IGNORECASE)
+        if m:
+            return float(m.group(1))
+    return None
+
+
+def _yield_level(ent: dict) -> float | None:
+    for k, v in ent.items():
+        x = _num(v)
+        kl = k.lower()
+        if x is not None and ("yield" in kl or "rate" in kl) and ("pct" in kl or "percent" in kl):
+            return x
+    return None
+
+
+def _is_bps(unit: Unit) -> bool:
+    text = (unit.target_name + " " + " ".join(str(e.get("unit", "")) for e in unit.entities) + " " + unit.prompt).lower()
+    return "bps" in text or "basis point" in text
 
 
 def _robust_center(xs: list[float]) -> float:
@@ -355,6 +394,26 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
             steps[eid] = 1
     h_common = int(statistics.median(steps.values())) if steps else 1
     kappa = fit_reversion(series, h_common) if change else 0.0
+    # unit-pooled level-model residual, in units of each series' own scale (the floor for a row's band)
+    ratios = []
+    for s in series.values():
+        sc = _robust_scale(s.values)
+        if sc > 0 and len(s.values) >= 5:
+            ratios.append(level_residual_sd(s.values, *w_level) / sc)
+    pooled_ratio = _rms(ratios) if len(ratios) >= 2 else 0.0
+
+    # policy-path anchor for a yield-change cross-section: one stance per unit, read from the
+    # pre-cutoff statements, applied through each row's maturity
+    path = None
+    if change and _is_bps(unit):
+        try:
+            pp = policy_path_signal(unit)
+            fronts = [(m, _yield_level(e)) for e in unit.entities for m in [_maturity_years(e)] if m is not None and _yield_level(e) is not None]
+            if pp is not None and fronts:
+                m0, y0 = min(fronts)
+                path = (pp, m0, y0)
+        except Exception:  # noqa: BLE001
+            path = None
 
     preds: list[Pred] = []
     for ent in unit.entities:
@@ -363,7 +422,7 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
         pr = Pred(entity_id=eid, point=0.0, lo=-1.0, hi=1.0, anchor_key=anchor[0] if anchor else None)
         try:
             _fill(pr, unit, ent, ttype, change, anchor, series.get(eid), vint.get(eid), eps.get(eid),
-                  dist.get(eid), w_level, kappa, steps.get(eid, h_common), sem)
+                  dist.get(eid), w_level, kappa, steps.get(eid, h_common), sem, pooled_ratio, path)
         except Exception:  # noqa: BLE001
             pr.method = "fallback"
             base = anchor[1] if (anchor and not change) else 0.0
@@ -516,7 +575,8 @@ def _label_from_value(unit: Unit, ent: dict, sem: dict[str, str], value: float, 
 
 
 def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: Series | None, v, e, d,
-          w_level: tuple[float, int], kappa: float, h: int, sem: dict) -> None:
+          w_level: tuple[float, int], kappa: float, h: int, sem: dict, pooled_ratio: float = 0.0,
+          path: tuple | None = None) -> None:
     eid = ent["entity_id"]
     name = str(ent.get("name") or eid)
     prob = ttype == "classification" and wants_probability(unit)
@@ -581,6 +641,9 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         nz = [r for r in revs if r != 0]
         c = _robust_center(revs) if revs else 0.0
         spread = max(_robust_sd([r - c for r in revs]), _rms([r - c for r in revs])) if len(revs) >= 2 else abs(base) * 0.002
+        if len(revs) < SMALL_SAMPLE and len(pooled) >= 2:
+            cp = _robust_center(pooled)
+            spread = max(spread, _robust_sd([r - cp for r in pooled]), _rms([r - cp for r in pooled]))
         sd = max(spread * math.sqrt(steps), abs(exp_rev) * 0.5, abs(base) * 1e-4, 1e-3)
         point = base + exp_rev
         pr.point, pr.lo, pr.hi = point, point - VINTAGE_HW * sd, point + VINTAGE_HW * sd
@@ -633,6 +696,8 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             wl, win = w_level
             point = _level_pred(vals, wl, win)
             sd = level_residual_sd(vals, wl, win)
+            if pooled_ratio > 0:
+                sd = max(sd, POOLED_SD_FLOOR * pooled_ratio * _robust_scale(vals))
             pr.method = "series_level"
             tail = vals[-win:]
             pr.facts.append(f"{s.label}: last {vals[-1]:g}, trailing {len(tail)}-period mean {statistics.fmean(tail):.4g}, weight on last value {wl:.2f} (picked by backtest on all rows)")
@@ -667,6 +732,28 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         p = 0.1
         pr.point, pr.lo, pr.hi = p, 0.0, 0.5
         pr.method = "prior_probability"
+        return
+    if change and path is not None and _maturity_years(ent) is not None:
+        pp, m0, y0 = path
+        m = _maturity_years(ent)
+        gap_bp = (pp.anchor - y0) * 100.0
+        beta = min(1.0, math.sqrt(PATH_M0 / m)) if m > 0 else 1.0
+        point = PATH_SHARE * gap_bp * beta
+        pr.method = "policy_path"
+        hw = fallback_halfwidth(unit, ent, point, anchor)
+        pr.point, pr.lo, pr.hi = point, point - hw, point + hw
+        pr.strength = abs(point) / (hw / Z90 + 1e-9)
+        what = ("the Committee's projected year-end policy rate" if pp.anchor_kind == "sep"
+                else "the current target-range midpoint moved one more step in the signalled direction" if pp.anchor_kind == "step"
+                else "the current target-range midpoint (no further move signalled)")
+        pr.facts.append(f"near-term policy anchor {pp.anchor:.3f}% ({what}; target-range midpoint {pp.midpoint:.3f}%, last step {pp.step * 100:+.0f} bp) "
+                        f"sits {gap_bp:+.0f} bp from the {m0:g}-year yield of {y0:g}%")
+        pr.facts.append(f"half of that gap is expected to close by the resolution, passed through to the {m:g}-year point at {beta:.2f}: {point:+.1f} bp")
+        pr.spans.append(pp.span)
+        if pp.sep_span:
+            pr.spans.append(pp.sep_span)
+        if ttype == "classification":
+            pr.label = _label_from_value(unit, ent, sem, point, 0.0, hw / Z90, pr=pr)
         return
     if change:
         point = 0.0
