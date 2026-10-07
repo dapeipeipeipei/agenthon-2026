@@ -9,73 +9,76 @@
 
 我们参加 [Agenthon 2026](https://www.agenthon.net/)（NeurIPS 2026 Competition Track，「可验证的 AI × 量化金融」）。
 四个赛道里**主攻 Track 2（概率时序预测）**：给一段历史行情和一小堆央行文档，交 2000 个「可能的未来值」，
-按 CRPS 打分并**除以一个不读文本的官方基线（M0）**，1.0 = 打平，越低越好。**副攻 Track 4**（带证据引用的表格预测）。
+按 CRPS 等打分，并**除以一个不读文本的官方基线（M0）对这张卡自己预期的误差**（10-06 新规则），越低越好；公开榜显示为 −(平均分)，越高越好。**副攻 Track 4**（带证据引用的表格预测）。
 提交物是一个 Docker 镜像，主办方在离线沙盒里跑；上传的是用官方工具 `qfbench2 submission pack` 打出来的 zip。
 
-### 现在的状态（2026-10-06 晚；10-07 评分规则更新见第一条）
+### 现在的状态（2026-10-07）
 
-- **10-07：主办方改了 T2 计分**（上游 `60509df`）：分母改为 M0「自己预期的误差」（不再看实际结果），截断/失败值 4.0 → 8.0，
-  公开榜显示为 −(均值)，M0 参考行 −2.64。v4 按新规则重选：F2 宽度 1.0 → 1.25、F4 宽度 1.1 → 2.0。
-  新规则 5 种子：全部 1.975、validation 65 张 1.773（旧行 2.236 / 2.026），估计榜上约 **−2.0 ~ −2.15**。
-  下面几条里的 0.9xx 数字都是旧规则口径，详见 `t2-work/V4_NOTES.md` 修订 3。**镜像需要用新提交重新构建**（CI）。
-
-- **T2 默认引擎是 v4**（`t2-work/engine/v4.py`）：以 M0 同样的信息（最近 300 行的均值和协方差）为骨架，按题卡上印的题族加一行常数
-  （F1 宽度 1.0；F2 = 基线；F3 漂移 ×0.5；F4 宽度 1.1 + 20% 路径 ×1.5 倍波动并往压力方向偏 1 个标准差）。不调大模型。
-  **按榜单口径 5 种子样本内 0.939**（F1 0.969 / F2 1.007 / F3 0.932 / F4 0.870），选参流程严格留出 0.937（留一时代）/ 0.993（前向），
-  独立审计确认度量与官方源码逐卡一致。
-- **旧的「v3 = 0.900」作废**：那是除以参考 CLI 的内部数字；按榜单口径 v3 = **1.139**，比基线还差。来龙去脉见 [WORKLOG §9、§11.2](WORKLOG.md#112-t2-模型-v4--完成默认-profile)。
-- **两个赛道的镜像都已构建并测试**（在 GitHub Actions 里，本机 Docker 起不来）：T2 镜像内 104/104、T4 镜像内 11/11，digest 已填进提交描述文件。
-  **但还从没上传过**——剩下的全是只有人能做的步骤（见下表）。
-- **截止**：新的 Dev 运行在 **10-12 20:00 UTC 之后不再启动**（Dev 10-12 23:59 AoE 关闭）；Final + Verification 10-13 → 10-25，每赛道**只交一份**。
-- **Track 4** 用确定性、不调模型的程序：11/11 可接纳、0 条虚假引用，近似本地分 0.68 vs 官方基线 0.46。10-06 五条线全部完成，见 [WORKLOG §11](WORKLOG.md#11-2026-10-06-冲刺已完成)。
+- **两个赛道都已在 CodaBench 真实出分**（账号已关联队伍 299）：T2 第一次上传 **−2.3626**（旧常数 v4；T2 榜面 = −平均损失，越高越好，M0 ≈ −2.64），
+  T4 第一次上传 **0.5394，第 7/83**。两者都和本地估计吻合。之后又传了 T2 rev3 / v5a / v5b、T4 B / C，等出分。全部上传 ID 和分数见 [STATUS.md](STATUS.md)。
+- **10-06 晚主办方改了 T2 计分**（上游 `60509df`）：分母改为 M0「自己预期的误差」，封顶/失败值 4.0 → 8.0，20 个练习单元改名。
+  我们按新规则重选常数（v4 rev3：F2 宽度 1.25、F4 2.0），**下文里 0.9xx 之类的 T2 数字都是旧规则口径**，新数字看 `t2-work/V4_NOTES.md` 修订 3 和 `V5_NOTES.md`。
+- **镜像公开、发布演练全过**：GHCR 包已公开、匿名拉取验证通过；在 runsc 和 runc 两种运行时下 T2 104/104、T4 11/11（run 37573765226，`RELEASE_REHEARSAL.md`）。
+- **不追 Dev 第一**：上限分析显示 T2 #1（−1.34）和 T4 前 4 名都超过诚实方法能到的上限，大概率靠模型「记得」截止前的练习事件；
+  Final 封存题在截止之后，Dev 名次 ≠ Final 名次，规则也禁止反推标签（`t2-work/HEADROOM.md`、`t4-work/HEADROOM.md`、`research/COMPETITIVE.md`）。
+- **Final 计划**：T4 用 **C**（确定性，不依赖大模型）。T2 在 **v5a**（押 F4 有冲击）/ **v5a_h**（对冲）/ **rev3**（保守）里选，
+  看主办方对 [T2#26](https://github.com/Agenthon-2026/track2-forecasting-public/issues/26) 第 2 问的回答。Final 10-13 12:00 UTC 开放，选定后尽早传（同分先传者胜）。
+- **截止**：最后一次 Dev 运行必须在 **10-12 20:00 UTC 前启动**；Final + Verification 10-13 → 10-25，每赛道**只交一份**。
+- **要你（或 Wenshuo）拍板**：① 仓库现在是 **PUBLIC** 且网页搜索排第一，对手能看到方法——建议转私有，并把你加为 collaborator；② T2 Final 选哪个版本（等 T2#26）。
 
 ### 东西在哪
 
 ```
 agenthon/
 ├── README.md        ← 你在读：项目是什么 + 设计 + 操作手册
-├── WORKLOG.md       ← 从 09-08 到现在做过的每件事、每组实验的数字、走过的弯路
-├── STATUS.md        ← 倒计时、当前状态、下一步、阻塞项（每次开工的入口）
-├── research/        ← 09-08 四个赛道的调研报告（英文）+ F4 危机事件表（中文）
+├── STATUS.md        ← 倒计时、所有上传 ID 与分数、Final 方案、下一步、待拍板的决定（每次开工的入口）
+├── WORKLOG.md       ← 从 09-08 到现在做过的每件事、每组实验的数字、走过的弯路、决策记录
+├── RELEASE_REHEARSAL.md  ← 10-07 上传前发布演练（匿名拉取、runsc/runc、四个 zip 校验）
+├── pack_all.py      ← 打 T2/T4 提交 zip（支持候选名、--key-file），输出到 ../agenthon-submissions/
+├── research/        ← 09-08 四个赛道调研（英文）、F4 危机事件表、COMPETITIVE.md（10-07 竞争情报与主办方裁定）
 ├── t2-work/         ← Track 2 全部代码
-│   ├── engine/      ←   预测引擎（默认 v4；v1–v3 保留作回退和对照）
-│   ├── Dockerfile   ←   提交镜像
+│   ├── engine/      ←   预测引擎（main 默认 v4 rev3；v5a/v5a_h/v5b/v5b_h 是同一引擎的 profile，各自在 cand/t2-<profile> 分支构建）
+│   ├── HEADROOM.md / V5_NOTES.md / V4_NOTES.md / AUDIT_T2.md  ← 上限分析、v5 候选、v4 方法与审计
 │   ├── pack/        ←   打包、本地验收、填 digest、校验 zip 的脚本（pack/README.md 是操作手册）
-│   ├── submission/  ←   submission.json / submission.final.json（已填 digest；不含任何密钥）、CHECKLIST.md（规则逐条对照）
-│   ├── run_all_gates.py / realized.py / score_local.py   ← 本地打分台
-│   ├── V4_NOTES.md / AUDIT_T2.md / v4_experiments.csv  ← v4 的方法、独立审计、全部实验
-│   ├── v4_eval.py / audit_metric.py  ←   按排行榜方式（除以 M0）打分
-│   └── grid_v2.py / ablate_v3.py / *_table.csv / scores_*.csv / ablation_*_log.txt  ← 实验与证据
-├── t4-work/         ← Track 4 参赛代码（PLAN.md、STATUS.md、agent/、harness/、submission/）
-├── .github/workflows/  ← t2-image.yml、t4-image.yml：云端构建镜像 + 平台同等限制下全量测试 + 推 GHCR
+│   ├── submission/  ←   submission*.json（各候选的描述文件，不含任何密钥）、CHECKLIST.md（规则逐条对照）
+│   └── run_all_gates.py / v4_eval.py / audit_metric.py …  ← 本地打分台（按榜单方式打分）
+├── t4-work/         ← Track 4（STATUS.md 有 A/B/C/D 候选与成绩、HEADROOM.md 上限分析、agent/、harness/、submission/）
+├── .github/workflows/  ← t2-image.yml、t4-image.yml、release-rehearsal.yml：云端构建镜像 + 平台同等限制下全量测试
 ├── LICENSE          ← Apache-2.0（与描述文件一致）
 └── Agenthon2026-public/  track1…track4-*-public/   ← 上游官方仓（gitignore，见「环境搭建」）
 ```
 
 ### 阅读顺序
 
-1. **README**（本节就够了，后面按需查）
-2. **[WORKLOG.md](WORKLOG.md)** —— 完整来龙去脉
-3. **[STATUS.md](STATUS.md)** —— 现在做到哪、下一步
-4. **`t2-work/pack/README.md`** —— 从 CI 构建到上传 zip 的逐步操作手册（中文，每步写了正常输出和出错怎么办）
-5. **`t4-work/STATUS.md`** —— Track 4 的状态与成绩（其中 CI 一节的 digest 已过时，以 `t4-work/submission/submission.json` 为准）
+1. **README 本节**——够你了解全貌
+2. **[STATUS.md](STATUS.md)**——倒计时、所有上传和分数、Final 方案、待拍板的决定
+3. **[WORKLOG.md](WORKLOG.md)** §12（10-07）和 §13（决策记录）——今天发生了什么、为什么这么定；更早的来龙去脉在前面各节
+4. **`research/COMPETITIVE.md`** §0——一页看懂主办方裁定和榜单头部在做什么
+5. **`t2-work/HEADROOM.md`**、**`t4-work/HEADROOM.md`**——为什么 Dev 第一追不得（T4 这份是中文，T2 是英文）
+6. **`t2-work/V5_NOTES.md`** §3b、§5——T2 Final 三选一的依据；**`t4-work/STATUS.md`** 开头——T4 候选 C/D
+7. **`RELEASE_REHEARSAL.md`**——镜像和 zip 在平台式环境里的验收记录
+8. 需要动手时：`t2-work/pack/README.md`（从 CI 构建到上传的逐步手册）
 
-### 截止前必须由「人」来做的事（按顺序）
+### 在哪看提交和分数
 
-这些事 agent 不能、也不应该代做。T2 的每一步在 `t2-work/pack/README.md` 第 3–8 步有详细说明。
+- **我们的上传记录**：[STATUS.md「所有 CodaBench 上传」](STATUS.md) 表（上传 ID、版本、镜像 digest、平台分/估计）。
+- **平台**：用队伍指定的 CodaBench 账号登录，T2 / T4 各自的比赛页面 → My Submissions（链接在 agenthon.net 参赛公告里）。
+- **公开榜**：agenthon.net 的 leaderboard（主办方把成绩同步到这里；CodaBench 页面本身的榜单是空的）。
 
-| # | 事项 | 谁 | 怎么做 |
+### 截止前要「人」来做的事
+
+| # | 事项 | 谁 | 说明 |
 |---|---|---|---|
-| 1 | **把两个 GHCR 镜像包改成公开** | dapeipeipeipei GitHub 账号 | <https://github.com/users/dapeipeipeipei/packages/container/package/jinpei-t2> 和 `.../jinpei-t4` → Package settings → Danger Zone → Change visibility → Public。主办方不带账号拉镜像，私有包 = 整次提交白费 |
-| 2 | **验证不登录也能拉到** | 同上 | `bash t2-work/pack/verify_anonymous_pull.sh --digest sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74`；T4：`bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t4 --digest sha256:bf2a164756244a4ede12e5ea92bf164b60f47c2ba664f9cd955c117f8c68e01c`。最后一行要是 `PASS` |
-| 3 | **队长批准 Wenshuo 的入队申请，并确认队伍编号** | 队长 Yuren | 网站上操作。上次检查（09-22）还是 Pending Approval。**不入队就不算参赛、不能上榜、不能获奖**。`pack` 需要 `--team-number`，记录是 299，以网站为准 |
-| 4 | **打包，在隐藏提示符里输入 Team Key** | 持有 Team Key 的人 | T2：`bash t2-work/pack/pack.sh --team-number <N> --digest sha256:c558843f…7d74`（完整 digest 见第 2 行），出现 `Team Key (hidden):` 时输入，最后一行 `READY: ... t2-work/pack/dist/submission.zip`。T4：`t2-work/pack/.venv-docker/Scripts/qfbench2 submission pack --descriptor t4-work/submission/submission.json --team-number <N> --out <T4 的 zip 路径>`，同样在隐藏提示符输入。**Team Key 等同密码：不进命令行、不进文件、不贴聊天、不告诉任何 agent，agent 也不会问** |
-| 5 | **在 CodaBench 上传两个 zip** | 队伍指定的 CodaBench 账号持有人 | 各赛道 CodaBench 页面（链接在 agenthon.net 参赛公告里），阶段选 Development。每赛道先用 **1–2 次** Dev 上传确认线上能跑、逐题全部可接纳（每天 5 次、共 20 次；平台标 `Failed` 的不扣）。**最后一次 Dev 运行必须在 10-12 20:00 UTC 前启动** |
-| 6 | **Final 阶段（10-13 → 10-25）指定唯一一份 final 提交** | 同上 | 只交 Dev 上真实跑过且逐题可接纳的版本。T2：`bash t2-work/pack/pack.sh --team-number <N> --digest sha256:c558843f…7d74 --descriptor t2-work/submission/submission.final.json --out t2-work/pack/dist/submission-final.zip`；T4 目前只有 Dev 描述文件，需要先准备一份 `competition_id` 为 `agenthon2026-analysis-final` 的。同分时先上传者胜 |
+| 1 | **决定仓库是否转私有**，转私有就把队长加为 collaborator | 仓库所有者 | 建议转私有（理由见 STATUS「待人拍板的决定」） |
+| 2 | **定 T2 Final 版本** | Wenshuo + Yuren | 看 T2#26 第 2 问回答；三选一规则见 STATUS「Final 方案」 |
+| 3 | **打包**（Team Key 只由持有人输入） | 持有 Team Key 的人 | `.venv\Scripts\python pack_all.py <候选名…>`，隐藏提示符输入，或 `--key-file` 指向自己保管的文件。**Team Key 等同密码：不进命令行、不进文件、不贴聊天、不告诉任何 agent** |
+| 4 | **剩余 Dev 上传**（只用来确认要交 Final 的版本在平台跑通） | CodaBench 账号持有人 | 10-12 20:00 UTC 前；T2 已用 4/20、T4 3/20 |
+| 5 | **Final 上传**，每赛道一份 | 同上 | 10-13 12:00 UTC 开放后尽早；只交 Dev 上真实跑过且逐题可接纳的版本 |
 
 ---
 
-> 以下是原来的详细文档（设计、评分、命令手册），10-06 已按最新规则修订过。
+> 以下是原来的详细文档（设计、评分、命令手册），10-06 写成。**T2 的分数和「除以 M0 实际误差、裁剪到 4」的描述都是 10-06 晚改规则之前的口径**；
+> 新规则和新数字以 `t2-work/V4_NOTES.md` 修订 3、`t2-work/V5_NOTES.md`、`t2-work/HEADROOM.md` 为准。
 
 本仓库**只包含我们自己写的东西**。四个上游官方仓（约 900 MB）克隆在本仓库**根目录**下、已 gitignore，
 需要时从 `github.com/Agenthon-2026` 重新克隆（见[环境搭建](#环境搭建)）。
@@ -390,6 +393,9 @@ v3 的思路：**只在语料说有事的时候才放宽**。这是一个**确�
 
 ### v4 — 对齐 M0 的骨架 + 按题族校准（当前默认）
 
+> 10-07 更新：按新计分规则重选为 **rev3**——F2 宽度 1.0 → **1.25**、F4 宽度 1.1 → **2.0**（其余行不变）。下表是 10-06 的旧行。
+> v5a / v5a_h / v5b 是在此基础上改 F4 行（及加 House 方向层）的候选，见 `t2-work/V5_NOTES.md`。
+
 10-06 发现排行榜的分母是 M0（最近 300 行均值和协方差的联合高斯随机游走），不是参考 CLI。按这个口径 v3 = 1.139，
 输在三处：M0 带漂移而 v3 没有；v3 的尺度混合和事件放宽让平静题过宽；单资产两期限题的联合项只有一个平方差，
 跨期限离散度的任何系统偏差都会让比值爆炸（3 道 F1 题撞到 4.0 截断）。
@@ -420,7 +426,9 @@ F4 的剩余风险：如果封存的 F4 卡完全没有冲击，F4 会输给 M0�
 
 ## 成绩与消融结论
 
-### 榜单口径（10-06 起以这个为准）
+### 榜单口径（10-06 版，已被 10-06 晚的新规则取代）
+
+> 新规则下的数字：v4 rev3 5 种子 val65 1.773（估计榜面约 −2.02），v5a 1.504（约 −1.8）；真实 Dev 上传 v4 旧常数 = −2.3626。见 `STATUS.md`、`t2-work/V5_NOTES.md`。
 
 每张卡的复合分 ÷ M0 的复合分（三个分量先各自除以 M0 再加权），单卡裁剪到 [0, 4]，90 张可本地还原真实值的卡**算术**平均，越低越好，
 1.000 = M0。由 `t2-work/v4_eval.py` 计算，并被 `t2-work/audit_metric.py`（直接调官方 verifier）独立复核为逐卡零差。
@@ -697,19 +705,17 @@ ratio、按题族的几何均值，写进 `scores_v3.csv`。
 
 ## 未决事项
 
-| 事项 | 状态（2026-10-06 晚） |
+| 事项 | 状态（2026-10-07） |
 |---|---|
-| 规则合规（v2.6.0）、月度步数、rationale、看门狗 | **完成**，`t2-work/submission/CHECKLIST.md` |
-| 引擎 v4 + 独立审计 | **完成**，默认 profile |
-| 镜像构建与平台同等限制测试 | **完成**（GitHub Actions），T2 104/104、T4 11/11，digest 已填 |
-| Track 4 | **完成**，`t4-work/STATUS.md` |
-| 核对 `research/F4-events.md` | **完成**，31/31 行改写 |
-| GHCR 包改公开 + 匿名拉取验证 | **人工待办** |
-| 队长批准入队、确认队伍编号 | **人工待办** |
-| 打包（Team Key）并在 CodaBench 上传 | **人工待办**，10-12 20:00 UTC 前 |
-| T4 的 Final 描述文件 | 待准备（仿照 `t2-work/submission/submission.final.json`） |
-| 本机 Docker | 起不来（WSL2 `HCS_E_SERVICE_NOT_AVAILABLE`），不影响提交 |
-| F2 的文本方向层 / House 模型 | 未采用：没有过验证的信号，House 默认关 |
+| 规则合规、引擎 v4 + 审计、镜像构建、Track 4、F4 事件表 | **完成**（10-06，WORKLOG §11） |
+| GHCR 包公开 + 匿名拉取 + 发布演练（runsc/runc） | **完成**（10-07，`RELEASE_REHEARSAL.md`） |
+| CodaBench 首批 Dev 上传 | **完成**：T2 −2.3626，T4 0.5394；后续 5 个待出分（`STATUS.md`） |
+| T2 按新规则重选常数 | **完成**：v4 rev3（main 默认） |
+| T2 Final 选 v5a / v5a_h / rev3 | **待定**，等 T2#26 Q2；选 v5a* 时需补对应的 final 描述文件 |
+| T4 Final | **定为 C**（`t4-work/submission/submission.c.final.json`） |
+| 仓库可见性（当前 PUBLIC） | **待老板决定**，建议转私有并加队长为 collaborator |
+| Final 资源公告（单 unit 时限、House 上限） | 主办方 10-13 前公布，出来后核对超时参数 |
+| 本机 Docker | 起不来（WSL2），不影响提交，镜像走 CI |
 | 14/104 题无法本地打分 | EM transfer 题、月度宏观题、最晚两个 as-of。只检查门槛 |
 
 ---
