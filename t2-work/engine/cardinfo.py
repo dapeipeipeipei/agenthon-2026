@@ -63,5 +63,24 @@ def _read(text_dir: pathlib.Path) -> dict[str, Any]:
     periods = tgt.get("observation_periods")
     if not (isinstance(periods, list) and all(isinstance(x, str) for x in periods)):
         periods = None
-    return {"unit_id": unit_id, "family": family, "observation_periods": periods,
+    return {"unit_id": unit_id, "family": family, "observation_periods": periods, "panels": _panels(card, spec, meta),
             "horizons": [int(h) for h in (tgt.get("horizons") or card.get("targets", {}).get("horizons") or [])]}
+
+
+def _panels(card: dict[str, Any], spec: dict[str, Any], meta: dict[str, Any]) -> list[str]:
+    """Declared panel ids, target panel first (v6 asset-class fallback only): metadata.asset_panel,
+    [panels].panel_ids, the spec's panels[].panel_id, then the metadata tags. Never raises."""
+    out: list[str] = []
+    try:
+        pan = card.get("panels")
+        cands = [meta.get("asset_panel")]
+        cands += list(pan.get("panel_ids") or []) if isinstance(pan, dict) else []
+        cands += [x.get("panel_id") for x in (spec.get("panels") or []) if isinstance(x, dict)]
+        tags = meta.get("tags")
+        cands += list(tags) if isinstance(tags, list) else []
+        for c in cands:
+            if isinstance(c, str) and c and c not in out:
+                out.append(c)
+    except Exception:  # noqa: BLE001
+        pass
+    return out

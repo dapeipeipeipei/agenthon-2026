@@ -115,13 +115,20 @@ def _f4_row(profile: Any, row: tuple) -> tuple[tuple, str | None]:
     return row, src
 
 
-def family_knobs(profile: Any, family: str | None) -> dict[str, Any]:
+def family_knobs(profile: Any, family: str | None, asset_class: str | None = None) -> dict[str, Any]:
     """Per-family (width, tail_p, tail_k, asym, ev_width[, drift_frac]) with a family-agnostic
-    "default" row; a row without drift_frac uses profile.v4_drift."""
+    "default" row; a row without drift_frac uses profile.v4_drift.
+    v6: a (family, asset class) row of profile.v6_class_rows, when the card has one class and the
+    profile has that row, replaces the family row (its skew applies as written, no v5_rate_skew)."""
     table = {r[0]: tuple(r[1:]) for r in profile.v4_family}
     row = table.get(family or "", table.get("default", (1.0, 0.0, 1.0, 0.0, False)))
     f4_src = None
-    if family == "F4":
+    crows = {(r[0], r[1]): tuple(r[2:]) for r in (getattr(profile, "v6_class_rows", ()) or ())}
+    class_row = bool(family and asset_class and (family, asset_class) in crows)
+    if class_row:
+        row = crows[(family, asset_class)]
+        row = tuple(row) + (float(profile.v4_drift), 0.0, 0.0, 0.5)[len(row) - 5:]
+    elif family == "F4":
         row, f4_src = _f4_row(profile, row)
     w, p, k, asym, evw = row[:5]
     drift = float(row[5]) if len(row) > 5 else float(profile.v4_drift)
@@ -138,7 +145,8 @@ def family_knobs(profile: Any, family: str | None) -> dict[str, Any]:
     split_q = float(row[8]) if len(row) > 8 else 0.5
     return {"width": float(w), "tail_p": float(p), "tail_k": float(k), "asym": float(asym),
             "ev_width": bool(evw), "drift_frac": drift, "ln_s": ln_s, "skew": skew, "split_q": split_q,
-            "row": "family" if (family or "") in table else "default", "f4_override": f4_src}
+            "row": "family_class" if class_row else ("family" if (family or "") in table else "default"),
+            "asset_class": asset_class, "f4_override": f4_src}
 
 
 def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int, seed: int,
@@ -150,7 +158,13 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     card = (feats or {}).get("card") or {}
     family = card.get("family")
     obs_periods = card.get("observation_periods")
-    fk = family_knobs(profile, family)
+    acls = None
+    if getattr(profile, "v6_class_rows", ()):
+        from .assets import card_class
+        acls = card_class([a.asset for a in inputs], card.get("panels"))
+    fk = family_knobs(profile, family, acls)
+    # v5_rate_skew scales the family row's skew for yields; a v6 class row's skew is already per class
+    rate_skew = 1.0 if fk["row"] == "family_class" else float(getattr(profile, "v5_rate_skew", 1.0))
     names = [a.asset for a in inputs]
     for a in inputs:
         if a.raw is None or len(a.raw) < 3:
@@ -256,7 +270,7 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     if plan:
         from .assets import is_rate
         dirs0 = plan.get("direction", {})
-        rate_on = float(getattr(profile, "v5_rate_skew", 1.0)) != 0.0
+        rate_on = rate_skew != 0.0
         det = {a.asset: int(dirs0.get(a.asset, 0)) for a in inputs
                if fk["split_q"] != 0.5 and (rate_on or not is_rate(a.asset))}
         det = {a: d for a, d in det.items() if d}
@@ -302,7 +316,7 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         from .assets import is_rate
         for j, a in enumerate(inputs):
             d = int(dirs.get(a.asset, 0))
-            sk = fk["skew"] * (float(getattr(profile, "v5_rate_skew", 1.0)) if is_rate(a.asset) else 1.0)
+            sk = fk["skew"] * (rate_skew if is_rate(a.asset) else 1.0)
             signed = d * sk
             if signed == 0.0 and hz and hz.get("skew_dir"):
                 hd = int(hz["skew_dir"].get(a.asset, 0))

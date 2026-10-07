@@ -106,6 +106,9 @@ class Profile:
     #: the families in v5_house_split_fams and targets whose direction the stress table leaves open
     v5_house_q_max: float = 0.5
     v5_house_split_fams: tuple = ()
+    #: v6: (family, asset class, width, tail_p, tail_k, asym, ev_width, drift_frac, ln_s, skew) rows
+    #: that replace the family row on single-class cards (engine/assets.card_class); () = off
+    v6_class_rows: tuple = ()
 
     @property
     def effective_multiplier(self) -> float:

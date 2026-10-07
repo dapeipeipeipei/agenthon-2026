@@ -1,0 +1,34 @@
+rule argmin, free fields width_skew (0, 7)
+groups: ('F1', 'factors'):1, ('F1', 'fx'):6, ('F1', 'rates'):11, ('F2', 'fx'):11, ('F2', 'rates'):12, ('F3', 'factors'):3, ('F3', 'fx'):5, ('F3', 'rates'):8, ('F4', 'factors'):11, ('F4', 'fx'):8, ('F4', 'rates'):10, None:4
+  [LOEO 2003-2009] inner k* = inf  inner curve: 0:2.0757 0.5:2.0195 1:1.9800 2:1.9274 4:1.8729 8:1.8337 16:1.8152 32:1.8070 inf:1.8039
+     rows: (none = v5a)
+     test v6 1.3921  v5a 1.3921  (n=16)
+  [LOEO 2010-2014] inner k* = inf  inner curve: 0:1.7404 0.5:1.7141 1:1.6970 2:1.6735 4:1.6438 8:1.6198 16:1.6076 32:1.6020 inf:1.5982
+     rows: (none = v5a)
+     test v6 2.2218  v5a 2.2218  (n=19)
+  [LOEO 2015-2018] inner k* = 8  inner curve: 0:2.0266 0.5:1.9810 1:1.9507 2:1.9132 4:1.8782 8:1.8648 16:1.8665 32:1.8730 inf:1.8875
+     rows: F1/factors: w0.9755 p0 d1 lns0 sk0; F1/fx: w0.9564 p0 d1 lns0 sk0; F1/rates: w1 p0 d1 lns0 sk0.1167; F2/fx: w1.5069 p0 d1 lns0 sk0.1389; F2/rates: w1.3945 p0 d1 lns0 sk0; F3/factors: w1.0263 p0 d0.5 lns0 sk0; F3/fx: w1.1447 p0 d0.5 lns0 sk0; F3/rates: w1.1097 p0 d0.5 lns0 sk0; F4/factors: w2.2195 p0 d1 lns0 sk1.2333; F4/fx: w1.8888 p0 d1 lns0 sk1.4286; F4/rates: w2.264 p0 d1 lns0 sk0
+     test v6 1.0908  v5a 1.0520  (n=17)
+  [LOEO 2019-2021] inner k* = inf  inner curve: 0:1.7347 0.5:1.6995 1:1.6727 2:1.6341 4:1.5882 8:1.5521 16:1.5322 32:1.5217 inf:1.5129
+     rows: (none = v5a)
+     test v6 2.6553  v5a 2.6553  (n=17)
+  [LOEO 2022-2024] inner k* = 8  inner curve: 0:1.9602 0.5:1.9070 1:1.8742 2:1.8403 4:1.8124 8:1.8001 16:1.8063 32:1.8200 inf:1.8478
+     rows: F1/factors: w0.9755 p0 d1 lns0 sk0; F1/fx: w0.9088 p0 d1 lns0 sk0; F1/rates: w1.0544 p0 d1 lns0 sk0.2778; F2/fx: w1.4937 p0 d1 lns0 sk0.1324; F2/rates: w1.479 p0 d1 lns0 sk0; F3/factors: w1.0461 p0 d0.5 lns0 sk0; F3/fx: w0.9564 p0 d0.5 lns0 sk0; F3/rates: w1.1004 p0 d0.5 lns0 sk0; F4/factors: w1.6932 p0 d1 lns0 sk1.5789; F4/fx: w1.8888 p0 d1 lns0 sk1.4286; F4/rates: w2 p0 d1 lns0 sk0.1167
+     test v6 1.4260  v5a 1.3454  (n=21)
+[argmin] LOEO held-out v6  all 1.7569 | F1 0.8878 F2 1.7999 F3 1.3393 F4 2.5501 | val65 1.5248
+[argmin] LOEO held-out v5a all 1.7307 | F1 0.8973 F2 1.7858 F3 1.3257 F4 2.4837 | val65 1.5043
+[argmin] LOEO diff v6-v5a mean +0.0261  paired se 0.0116  cards better 11 worse 25
+     fixed k=0: LOEO v6 all 1.8571 | F1 0.8890 F2 2.0757 F3 1.4243 F4 2.5830 | val65 1.5177
+     fixed k=2: LOEO v6 all 1.7849 | F1 0.8817 F2 1.9420 F3 1.3676 F4 2.5086 | val65 1.4861
+     fixed k=8: LOEO v6 all 1.7323 | F1 0.8815 F2 1.8279 F3 1.3414 F4 2.4543 | val65 1.4741
+     fixed k=32: LOEO v6 all 1.7228 | F1 0.8893 F2 1.7911 F3 1.3302 F4 2.4567 | val65 1.4868
+  [forward <=2018 -> >=2019] inner k* = 16  inner curve: 0:1.8998 0.5:1.8019 1:1.7374 2:1.6654 4:1.6097 8:1.5765 16:1.5651 32:1.5704 inf:1.5821
+     rows: F1/fx: w0.9791 p0 d1 lns0 sk0.05; F1/rates: w1.0836 p0 d1 lns0 sk0.09; F2/fx: w1.411 p0 d1 lns0 sk0.09; F2/rates: w1.3543 p0 d1 lns0 sk0; F3/fx: w0.987 p0 d0.5 lns0 sk0; F4/factors: w1.8171 p0 d1 lns0 sk1.3333; F4/fx: w1.9374 p0 d1 lns0 sk1.2381; F4/rates: w1.9374 p0 d1 lns0 sk0
+     test v6 1.9171  v5a 1.9314  (n=38)
+[argmin] forward held-out v6  all 1.9171 | F1 0.8842 F2 1.3632 F3 1.3852 F4 3.4684 | val25 1.5871
+[argmin] forward held-out v5a all 1.9314 | F1 0.8989 F2 1.3574 F3 1.3827 F4 3.5190 | val25 1.6275
+[argmin] forward diff v6-v5a mean -0.0143  paired se 0.0259  cards better 9 worse 17
+     fixed k=0: forward v6 all 1.9771 | F1 0.8893 F2 1.4292 F3 1.4362 F4 3.5591 | val25 1.5777
+     fixed k=2: forward v6 all 1.9386 | F1 0.8806 F2 1.4005 F3 1.3984 F4 3.4983 | val25 1.5634
+     fixed k=8: forward v6 all 1.9174 | F1 0.8782 F2 1.3732 F3 1.3876 F4 3.4610 | val25 1.5728
+     fixed k=32: forward v6 all 1.9208 | F1 0.8897 F2 1.3577 F3 1.3839 F4 3.4847 | val25 1.6016

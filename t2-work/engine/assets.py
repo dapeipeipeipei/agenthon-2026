@@ -61,3 +61,34 @@ def is_rate(asset: str) -> bool:
     """Government-yield target (UST tenors). Their stress direction is genuinely two-sided -- flight
     to quality (down) vs. an inflation/hawkish repricing (up) -- so v5 can treat their skew apart."""
     return bool(_UST.match(str(asset).strip().upper()))
+
+
+# ----------------------------------------------------------------------------- v6: asset class
+#: Asset class of a target id (v6 per-(family, asset class) rows). Asset ids only; the declared
+#: panel is a fallback for ids this table does not know (cardinfo "panels"), and anything still
+#: unknown or a card that mixes classes gets None = the family row.
+_CLASS_RULES: list[tuple[re.Pattern[str], str]] = [
+    (_UST, "rates"),
+    (re.compile(r"^(MKT|MKTRF|MKT_RF|HML|SMB|MOM|UMD|BAB|RMW|CMA|QMJ|STR|LTR)$"), "factors"),
+    (re.compile(r"^(EUR|GBP|AUD|NZD|JPY|CHF|CAD|NOK|SEK|DKK|CNY|CNH|BRL|INR|MXN|ZAR|TRY|KRW|IDR|RUB|PLN|"
+                r"HUF|CZK|CLP|COP|PEN|PHP|THB|MYR|TWD|SGD|HKD|ILS|ARS|EGP|NGN|VND|RON|SAR|AED|QAR)$"), "fx"),
+    (re.compile(r"^(NFP|PAYEMS|PAYROLL|UNRATE|UNEMP|CPI|PCE|PPI|CORE|INDPRO|RETAIL|GDP|ICSA|HOUST)"), "macro"),
+]
+PANEL_CLASS = {"rates_daily": "rates", "g10_fx_daily": "fx", "em_transfer_early": "fx",
+               "factors_daily": "factors", "macro_monthly": "macro"}
+
+
+def asset_class(asset: str) -> str | None:
+    a = str(asset).strip().upper()
+    for pat, c in _CLASS_RULES:
+        if pat.match(a):
+            return c
+    return None
+
+
+def card_class(assets: list[str], panels: list[str] | None = None) -> str | None:
+    """One class for the whole card, or None (mixed classes / unknown ids without a single known
+    declared panel). Ids decide; the declared panel only fills ids the table does not know."""
+    fill = next((PANEL_CLASS[p] for p in (panels or []) if p in PANEL_CLASS), None)   # target panel first
+    cls = {asset_class(a) or fill for a in assets}
+    return cls.pop() if len(cls) == 1 and None not in cls else None

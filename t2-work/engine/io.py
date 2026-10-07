@@ -771,7 +771,10 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
     # ---- 5. adjustments
     L += ["", "## 5. Adjustments", ""]
     L.append(f"**5a. Family calibration.** The card states family **{family or 'unknown'}** "
-             f"({'its own row' if fk.get('row') == 'family' else 'no family row: the baseline-like default row'}). "
+             + (f"and its targets are all of asset class **{fk.get('asset_class')}** (target ids; declared panel as "
+                "fallback), so the family x asset-class row is used. " if fk.get('row') == 'family_class' else
+                f"({'its own row' if fk.get('row') == 'family' else 'no family row: the baseline-like default row'}). ")
+             + 
              f"The row's constants are fixed in the image (engine/model.py profile {(stats.get('profile') or {}).get('name', 'v4')}, chosen once by "
              "cross-validation across all practice cards of the family, never per unit): "
              f"width x{_f(fk.get('width'), '.4g')}, scale mixture p = {_f(fk.get('tail_p'), '.3g')}, "
