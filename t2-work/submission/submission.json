@@ -9,10 +9,10 @@
   "image": {
     "registry": "ghcr.io",
     "repository": "dapeipeipeipei/jinpei-t2",
-    "digest": "sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74"
+    "digest": "sha256:56ec5652f39f1c6e10c4b8c59d606c398ea0fb80aa1046ee2dea2fd701500c47"
   },
   "image_access": "public",
   "models": [],
   "license": "Apache-2.0",
-  "descriptor_digest": "sha256:9a1d0737ecb59123fa673dc10a1afd08c93ca16c0daec829df86dfa40a5de345"
+  "descriptor_digest": "sha256:b151d928b34db8d87c5980c7a04fa8a9c2a30c24ad3d4f4ab812b8f2e2fbfc61"
 }
