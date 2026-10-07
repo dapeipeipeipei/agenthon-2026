@@ -133,7 +133,10 @@ jobs:
           print("docker config used for pulls has no credentials:", c)
           PY
           : > "$REH/pull.tsv"
+          # each image is pulled COLD (image store emptied first, so shared base layers are not
+          # reused), then T2 is pulled again so both are present for the runs
           for ref in "$T2_IMAGE" "$T4_IMAGE"; do
+            docker image prune -af >/dev/null
             docker image inspect "$ref" >/dev/null 2>&1 && { echo "image already present -- not a cold pull"; exit 1; }
             t0=$(date +%s.%N); docker pull --platform linux/amd64 "$ref"; t1=$(date +%s.%N)
             secs=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
@@ -146,8 +149,8 @@ jobs:
             label=$(docker image inspect "$ref" --format '{{ index .Config.Labels "qfbench2.interface_version" }} user={{.Config.User}} entrypoint={{json .Config.Entrypoint}} arch={{.Architecture}}')
             printf '%s\t%s\t%s\t%s\t%s\n' "$ref" "$secs" "$comp" "$size" "$label" | tee -a "$REH/pull.tsv"
           done
-          bash t2-work/pack/verify_anonymous_pull.sh --digest "${T2_IMAGE#*@}" | tee "$REH/anon-t2.txt"
-          bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t4 --digest "${T4_IMAGE#*@}" | tee "$REH/anon-t4.txt"
+          docker pull -q --platform linux/amd64 "$T2_IMAGE"
+          docker image ls --digests
 
       - name: runsc smoke (verbs resolve on PATH under gVisor with platform flags)
         id: runsc_smoke
@@ -169,6 +172,12 @@ jobs:
           python -m pip install -q --upgrade pip
           pip install -q "$TOOLKIT" "jsonschema==4.23.0"
           pip install -q --no-deps -e track4-analysis-public
+
+      - name: Anonymous registry walk of both digests (t2-work/pack/verify_anonymous_pull.sh)
+        run: |
+          # must run after make_venv.sh: without the venv the script's python lookup exits silently
+          bash t2-work/pack/verify_anonymous_pull.sh --digest "${T2_IMAGE#*@}" | tee "$REH/anon-t2.txt"
+          bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t4 --digest "${T4_IMAGE#*@}" | tee "$REH/anon-t4.txt"
 
       - name: Judge tokenizers for the T4 400-token claim cap (tokenizer files only)
         continue-on-error: true
