@@ -278,8 +278,30 @@ jobs:
                   same_pq += fa.get("forecast.parquet") is not None and fa.get("forecast.parquet") == fb.get("forecast.parquet")
                   if fa != fb:
                       diffs[u] = sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))
+              # for every differing JSON file: which key paths differ (e.g. a wall-clock field)
+              def flat(o, pre=""):
+                  if isinstance(o, dict):
+                      r = {}
+                      for k, v in o.items(): r.update(flat(v, f"{pre}.{k}" if pre else k))
+                      return r
+                  if isinstance(o, list):
+                      r = {}
+                      for i, v in enumerate(o): r.update(flat(v, f"{pre}[{i}]"))
+                      return r
+                  return {pre: o}
+              keypaths = {}
+              for u, fs in diffs.items():
+                  for f in fs:
+                      if f.endswith(".json") and (a / u / f).is_file() and (b / u / f).is_file():
+                          ja, jb = flat(json.loads((a / u / f).read_text())), flat(json.loads((b / u / f).read_text()))
+                          for k in set(ja) | set(jb):
+                              if ja.get(k) != jb.get(k): keypaths[f"{f}:{k}"] = keypaths.get(f"{f}:{k}", 0) + 1
+                      else:
+                          keypaths[f"{f}:<non-json or missing>"] = keypaths.get(f"{f}:<non-json or missing>", 0) + 1
               rep["t2"]["determinism"] = {"units": len(units), "all_files_identical": same_all,
-                                          "parquet_identical": same_pq, "differing_files": diffs}
+                                          "parquet_identical": same_pq,
+                                          "units_with_differing_files": len(diffs),
+                                          "differing_key_paths_by_unit_count": keypaths}
           # ---- T4
           co.REQUIRED = ("answer.json",)
           for rt in ("runc", "runsc"):
@@ -343,6 +365,7 @@ jobs:
             ${{ runner.temp }}/reh/t2/*/summary.json
             ${{ runner.temp }}/reh/t2/*/run.env
             ${{ runner.temp }}/reh/t2/*/logs/**
+            ${{ runner.temp }}/reh/t2/*/out/**
             ${{ runner.temp }}/reh/t4/*/results.json
             ${{ runner.temp }}/reh/t4/*/ours/**
           retention-days: 30
