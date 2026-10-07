@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import math
 import re
+import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .corpus import Doc, Unit
-from .tables import Series, Table, column_series, find_tables, is_dateish, norm_tokens, vintage_columns
+from .corpus import Doc, Unit, parse_date
+from .tables import _DATEISH, Series, Table, column_series, find_tables, is_dateish, norm_tokens, vintage_columns
 
 Span = tuple[str, int, int]
 
@@ -93,6 +94,9 @@ class VintageSignal:
     header_span: tuple[int, int]
     age_matched: list[float] = field(default_factory=list)  # revisions of the same age as the next one
     next_age: int | None = None
+    by_age: dict = field(default_factory=dict)      # age -> revisions (jump transitions removed)
+    vintage_gap_days: float | None = None           # median spacing of the vintage columns
+    dropped_jumps: int = 0                          # vintage transitions dropped as one-off level shifts
 
 
 def vintage_signal(unit: Unit, entity: dict, cache: dict) -> VintageSignal | None:
@@ -115,8 +119,8 @@ def vintage_signal(unit: Unit, entity: dict, cache: dict) -> VintageSignal | Non
                     break
             if hit is None:
                 continue
-            revs: list[float] = []
-            by_age: dict[int, list[float]] = {}
+            # every consecutive revision with its transition (column pair), age and relative size
+            obs: list[tuple[int, int | None, float, float]] = []
             for row in range(len(t.rows)):
                 vals = [t.column(j)[row] for j in vcols]
                 first = next((i for i, v in enumerate(vals) if v is not None), None)
@@ -125,16 +129,37 @@ def vintage_signal(unit: Unit, entity: dict, cache: dict) -> VintageSignal | Non
                 # a row whose first value appears after the first vintage column starts at its
                 # first print, so the age of each later revision is known exactly
                 known_age = first > 0 and all(v is None for v in vals[:first])
-                prev, age = None, 0
-                for v in vals[first:]:
+                prev, prev_i, age = None, None, 0
+                for i in range(first, len(vals)):
+                    v = vals[i]
                     if v is None:
                         continue
                     if prev is not None:
                         age += 1
-                        revs.append(v - prev)
-                        if known_age:
-                            by_age.setdefault(age, []).append(v - prev)
-                    prev = v
+                        rel = (v - prev) / abs(prev) if prev else 0.0
+                        obs.append((i, age if known_age else None, v - prev, rel))
+                    prev, prev_i = v, i
+            # A transition whose typical revision is far larger than the table's usual one is a
+            # one-off level shift (annual / comprehensive / benchmark revision), not the routine
+            # revision process the next release will follow: drop it (robust, MAD-style).
+            by_tr: dict[int, list[float]] = {}
+            for o in obs:
+                by_tr.setdefault(o[0], []).append(abs(o[3]))
+            level = {tr: statistics.fmean(xs) for tr, xs in by_tr.items()}
+            jumps: set[int] = set()
+            for tr, lv in level.items():
+                others = [x for k, x in level.items() if k != tr]
+                ref = statistics.median(others) if others else 0.0
+                if len(by_tr[tr]) >= 3 and lv > 0 and others and lv > 6.0 * max(ref, 1e-12):
+                    jumps.add(tr)
+            mags = [abs(o[3]) for o in obs if o[0] not in jumps and o[3] != 0]
+            base = statistics.median(mags) if mags else 0.0
+            keep = [o for o in obs if o[0] not in jumps and not (base > 0 and abs(o[3]) > 20.0 * base)]
+            revs = [o[2] for o in keep]
+            by_age: dict[int, list[float]] = {}
+            for o in keep:
+                if o[1] is not None:
+                    by_age.setdefault(o[1], []).append(o[2])
             mine_all = [t.column(j)[hit] for j in vcols]
             mine = [v for v in mine_all if v is not None]
             if not mine:
@@ -145,6 +170,13 @@ def vintage_signal(unit: Unit, entity: dict, cache: dict) -> VintageSignal | Non
             sig = VintageSignal(doc.doc_id, keys[hit], mine, revs, t.row_spans[hit], t.header_span)
             sig.age_matched = matched if len(matched) >= 2 else []
             sig.next_age = next_age
+            sig.by_age = by_age
+            sig.dropped_jumps = len(jumps)
+            vdates = [parse_date(_DATEISH.search(t.header[j]).group(1) + ("-01" if len(_DATEISH.search(t.header[j]).group(1)) == 7 else ""))
+                      for j in vcols if _DATEISH.search(t.header[j])]
+            vdates = [d for d in vdates if d is not None]
+            gaps = [(b - a).days for a, b in zip(vdates, vdates[1:]) if (b - a).days > 0]
+            sig.vintage_gap_days = statistics.median(gaps) if gaps else None
             return sig
     return None
 
@@ -393,3 +425,109 @@ def notes_span(unit: Unit, doc_id: str, needle_tokens: set[str], names: tuple[st
 
 def finite(x: float) -> bool:
     return isinstance(x, (int, float)) and math.isfinite(x)
+
+
+# --------------------------------------------------------------------------- high-frequency proxies
+
+_GENERIC = {"all", "types", "type", "total", "index", "price", "prices", "rate", "rates", "change", "percent",
+            "pct", "level", "series", "value", "values", "usd", "monthly", "weekly", "daily", "data", "items",
+            "item", "less", "and", "sa", "nsa", "first", "print", "estimate", "us", "united", "states"}
+
+
+@dataclass
+class ProxySignal:
+    doc_id: str
+    label: str
+    point: float          # target forecast implied by the proxy
+    resid_sd: float       # in-sample residual sd of the monthly mapping
+    r: float              # correlation of the monthly mapping
+    n: int                # month pairs used
+    a: float
+    b: float
+    x_target: float       # proxy monthly % change for the target month (partial month allowed)
+    weeks_in_target: int
+    span: Span
+
+
+def _month(key: str) -> str | None:
+    m = re.match(r"^(\d{4}-\d{2})", key.strip())
+    return m.group(1) if m else None
+
+
+def _next_month(ym: str) -> str:
+    y, m = int(ym[:4]), int(ym[5:7])
+    return f"{y + (m == 12):04d}-{(m % 12) + 1:02d}"
+
+
+def proxy_signal(unit: Unit, entity: dict, series: Series, cache: dict) -> ProxySignal | None:
+    """In-unit mapping from a higher-frequency series in the corpus to a monthly target.
+
+    Conditions (all generic): the target history is monthly ("YYYY-MM" keys); another table the
+    entity may cite has dated rows at least ~2x as frequent, one numeric column, and its document
+    names a distinctive word of the entity's name; its monthly averages' % changes line up with at
+    least 6 target months; the fitted correlation is at least 0.7. The forecast is the fitted
+    a + b x for the target month, x from the proxy observations already in that month."""
+    keys = [_month(k) for k in series.keys]
+    if not keys or any(k is None for k in keys) or len(set(keys)) != len(keys):
+        return None
+    if any(len(k.strip()) > 7 for k in series.keys):
+        return None  # daily/weekly target keys: not a monthly target
+    name_toks = norm_tokens(str(entity.get("name") or "")) | norm_tokens(series.label)
+    name_toks = {t for t in name_toks if t not in _GENERIC and not t.isdigit() and len(t) >= 4}
+    if not name_toks:
+        return None
+    target_month = None
+    for k, v in entity.items():
+        if isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}", v.strip()) and v.strip() > keys[-1] and "latest" not in k.lower():
+            target_month = v.strip()
+            break
+    target_month = target_month or _next_month(keys[-1])
+    best: ProxySignal | None = None
+    for doc in unit.docs_for(entity["entity_id"]):
+        if doc.doc_id == series.doc_id:
+            continue
+        head = next((ln for ln in doc.text.split(chr(10)) if ln.strip()), "")[:300]  # the title line
+        if not (norm_tokens(head) & name_toks):
+            continue
+        for t in tables_for(unit, cache).get(doc.doc_id, []):
+            if len(t.header) != 2:
+                continue
+            dkeys = t.key_column()
+            if not dkeys or not all(re.match(r"^\d{4}-\d{2}-\d{2}$", k) for k in dkeys):
+                continue
+            col = t.column(1)
+            by_m: dict[str, list[float]] = {}
+            for k, v in zip(dkeys, col):
+                if v is not None and v > 0:
+                    by_m.setdefault(k[:7], []).append(v)
+            if len(by_m) < 7 or statistics.median(len(x) for x in by_m.values()) < 2:
+                continue
+            months = sorted(by_m)
+            avg = {m: statistics.fmean(by_m[m]) for m in months}
+            pct = {m: (avg[m] / avg[p] - 1.0) * 100.0 for p, m in zip(months, months[1:])}
+            tgt = dict(zip(keys, series.values))
+            pairs = [(pct[m], tgt[m]) for m in keys if m in pct]
+            if len(pairs) < 6 or target_month not in pct:
+                continue
+            xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
+            mx, my = statistics.fmean(xs), statistics.fmean(ys)
+            sxx = sum((x - mx) ** 2 for x in xs)
+            syy = sum((y - my) ** 2 for y in ys)
+            if sxx <= 0 or syy <= 0:
+                continue
+            b = sum((x - mx) * (y - my) for x, y in pairs) / sxx
+            a = my - b * mx
+            r = b * math.sqrt(sxx / syy)
+            if r < 0.7:
+                continue
+            res = [y - (a + b * x) for x, y in pairs]
+            n = len(pairs)
+            sd = math.sqrt(sum(e * e for e in res) / max(n - 2, 1)) * math.sqrt(1 + 1 / n)
+            x_t = pct[target_month]
+            # the last proxy row (the latest observation) is the verbatim evidence
+            last_i = max(i for i, k in enumerate(dkeys) if k[:7] == target_month)
+            cand = ProxySignal(doc.doc_id, t.header[1], a + b * x_t, sd, r, n, a, b, x_t,
+                               len(by_m[target_month]), (doc.doc_id, *t.row_spans[last_i]))
+            if best is None or cand.r > best.r:
+                best = cand
+    return best

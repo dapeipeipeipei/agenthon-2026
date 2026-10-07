@@ -43,7 +43,7 @@ import urllib.request
 
 from . import explain as _explain
 from .corpus import Unit
-from .predict import Pred, _label_semantics
+from .predict import Pred, _label_semantics, make_consistent
 from .retrieve import Passage, _segments, bm25_search, task_drivers, tokens
 
 #: Request budget (the House allows 25 admitted requests per unit).
@@ -63,9 +63,9 @@ REASONS_MIN_LEFT_S = 70.0   # start the reasons call only with at least this muc
 PARALLEL = 3
 
 #: Blend weights toward the model (no-signal rows / rows with a deterministic signal).
-W_NOSIGNAL = 0.6
-W_SIGNAL = 0.35
-LABEL_CONF_NOSIGNAL = 0.5
+W_NOSIGNAL = 0.5
+W_SIGNAL = 0.3
+LABEL_CONF_NOSIGNAL = 0.6
 LABEL_CONF_SIGNAL = 0.75
 ENVELOPE_HW = 8.0
 NO_SIGNAL = frozenset({"carry_forward", "no_change", "zero_default", "prior_probability", "fallback"})
@@ -456,14 +456,16 @@ def _entity_line(ent: dict, pr: Pred) -> str:
 
 
 SYSTEM_PRED = (
-    "You are a senior quantitative analyst standing on the task's cutoff date. You forecast each "
-    "entity's target from the task statement, the entity table, a simple statistical baseline and "
-    "numbered passages quoted from the frozen pre-cutoff corpus. Use the passages and general "
-    "domain knowledge of how such quantities behave; do not use knowledge of anything that "
-    "happened after the cutoff date. Keep the baseline when the passages give no reason to move "
-    "it; move it when they do. Give forecasts in exactly the units the task asks for. The 90% "
-    "interval must contain the outcome 9 times in 10: a miss costs 20 times its distance, width "
-    "costs its size. Reply with ONE JSON object and nothing else."
+    "You are a senior quantitative analyst standing on the task's cutoff date. The outcomes you "
+    "forecast happen AFTER that date and are UNKNOWN: you do not know them, and anything you seem "
+    "to remember about later events must be ignored. Reason ONLY from the task statement, the "
+    "entity table, the statistical baseline and the numbered passages quoted from the frozen "
+    "pre-cutoff corpus, applying general domain knowledge of how such quantities behave. Keep the "
+    "baseline when the passages give no concrete reason to move it, and say so with a low "
+    "confidence; move it only when a passage does. Give forecasts in exactly the units the task "
+    "asks for. The 90% interval must contain the outcome 9 times in 10: a miss costs 20 times its "
+    "distance, width costs its size, so prefer a wider interval when unsure. Reply with ONE JSON "
+    "object and nothing else."
 )
 
 _PRED_FORMAT = (
@@ -558,6 +560,11 @@ def apply_item(unit: Unit, pr: Pred, it: dict, pool: _Pool, allowed: set[str]) -
         if conf >= (LABEL_CONF_SIGNAL if signal else LABEL_CONF_NOSIGNAL):
             pr.label = lab
             done["label"] = True
+    if unit.target_type == "classification" and not prob:
+        try:  # the point must sit on the label's side of its threshold
+            make_consistent(pr, next(e for e in unit.entities if e["entity_id"] == pr.entity_id), _label_semantics(unit))
+        except Exception:  # noqa: BLE001
+            pass
     if prob and pr.label:
         # an event label and its probability must agree (the reasoning judge reads both)
         sem = _label_semantics(unit).get(pr.label)
@@ -591,8 +598,11 @@ def apply_item(unit: Unit, pr: Pred, it: dict, pool: _Pool, allowed: set[str]) -
 
 SYSTEM_REASONS = (
     "You are a senior quantitative analyst writing the reasoning behind forecasts made on the "
-    "task's cutoff date. Argue only from the numbered pre-cutoff passages and general domain "
-    "knowledge; never mention anything after the cutoff date. Reply with ONE JSON object and "
+    "task's cutoff date. The outcomes are unknown at that date. Argue ONLY from the numbered "
+    "pre-cutoff passages and general economic mechanisms; never state or hint at what happened "
+    "after the cutoff date. Each reason: one passage stating a concrete figure (the premise), the "
+    "economic mechanism by which that fact moves the forecast (because X, therefore Y), and what "
+    "it implies for the submitted answers, consistent with them. Reply with ONE JSON object and "
     "nothing else."
 )
 
@@ -616,8 +626,8 @@ def _reasons_messages(unit: Unit, preds: list[Pred], pool: _Pool, ids: list[str]
         parts.append(line)
     parts.append("PASSAGES:\n" + "\n".join(pool.render(i) for i in ids))
     parts.append(
-        'Write the 3 most important, distinct reasons behind these answers, covering the drivers the '
-        'task names. Return exactly: {"reasons": [{"premise": "<ONE passage id whose text states the '
+        'Write exactly 3 reasons behind these answers, each about a DIFFERENT driver (cover the drivers '
+        'the task names), each premise a different passage that contains a figure. Return exactly: {"reasons": [{"premise": "<ONE passage id whose text states the '
         'fact>", "also_cite": ["<up to 2 more passage ids>"], "mechanism": "<why that fact moves the '
         'answer, with the passage figures, at most 80 words>", "implication": "<what it implies for '
         'the named entities, at most 40 words>", "entities": ["<entity ids this reason covers>"]}]}'
@@ -718,9 +728,9 @@ def enhance(unit: Unit, preds: list[Pred], t_start: float) -> tuple[dict, list[d
     report: dict = {"house": "off"}
     if not enabled() or not preds:
         return report, None
-    deadline = t_start + _env_float("T4_HOUSE_BUDGET", PHASE_BUDGET_S)
+    deadline = t_start + min(500.0, _env_float("T4_HOUSE_BUDGET", PHASE_BUDGET_S))
     parallel = int(_env_float("T4_HOUSE_PARALLEL", PARALLEL))
-    budget = _Budget(MAX_REQUESTS)
+    budget = _Budget(min(24, int(_env_float("T4_HOUSE_MAX_REQUESTS", MAX_REQUESTS))))
     log: list[str] = []
     report = {"house": "on", "requests": 0, "pred_calls": 0, "pred_ok": 0, "points": 0, "labels": 0,
               "evidence": 0, "reasons": 0, "log": log}

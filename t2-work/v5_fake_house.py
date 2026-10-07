@@ -3,8 +3,8 @@ the platform: OpenAI-compatible POST /v1/chat/completions, bearer required, dete
 
     PYTHONUTF8=1 .venv/Scripts/python t2-work/v5_fake_house.py --port 18080 [--mode mixed|garbage|slow]
 
-Replies (mode mixed): the open-book question gets a well-formed answer whose move size and directions
-are a hash of the prompt (so they are arbitrary, like a useless reader) with a verbatim quote from
+Replies (mode mixed): the open-book question gets a well-formed answer whose event/bias flags,
+directions and probabilities are a hash of the prompt (so they are arbitrary, like a useless reader) with a verbatim quote from
 doc 1; the closed-book probe answers "unknown"/low. Counts requests per prompt to the log.
 Never used by the engine itself; the image contains no such code.
 """
@@ -45,9 +45,9 @@ class H(BaseHTTPRequestHandler):
         doc = user.split("[doc 1]", 1)[1].split("\n", 1)[1] if "[doc 1]" in user else ""
         words = doc.split()
         quote = " ".join(words[3:13]) if len(words) > 14 else ""
-        ans = {"move_size": hb[0] % 4,
-               "direction": {k: ("up", "down", "unclear")[hb[1 + i] % 3] for i, k in enumerate(keys)},
-               "confidence": ("medium", "high")[hb[9] % 2],
+        ans = {"scheduled_event_in_window": bool(hb[0] % 2), "stated_policy_bias": bool(hb[2] % 2),
+               "direction": {k: ("up", "down", "unclear")[hb[3 + i] % 3] for i, k in enumerate(keys)},
+               "probability": {k: round(0.5 + (hb[10 + i] % 50) / 100, 2) for i, k in enumerate(keys)},
                "evidence": [{"doc": 1, "quote": quote}]}
         return self._ok(json.dumps(ans))
 
