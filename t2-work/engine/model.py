@@ -106,6 +106,12 @@ class Profile:
     #: the families in v5_house_split_fams and targets whose direction the stress table leaves open
     v5_house_q_max: float = 0.5
     v5_house_split_fams: tuple = ()
+    #: F2-market (t2-work/F2MKT_NOTES.md): panel-only direction cue applied as a calibrated split on the
+    #: families in mkt_fams, only for targets the stress table / skew leave open. mkt_cue: "" (off) |
+    #: "tsmom" (C1) | "eh" (C2, rates only) | "tsmom_fx_eh_rates"; q in [0.5, mkt_q_max].
+    mkt_cue: str = ""
+    mkt_q_max: float = 0.6
+    mkt_fams: tuple = ()
 
     @property
     def effective_multiplier(self) -> float:
@@ -182,6 +188,8 @@ class AssetInput:
     last_date: pd.Timestamp
     notes: dict[str, Any] = field(default_factory=dict)
     raw: pd.Series | None = None  # v4: the panel series itself (level or per-step return), <= as-of
+    #: F2-market (engine/market_cues.py): panel-only direction cues, read only by a profile with mkt_cue
+    market: dict[str, Any] | None = None
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -281,6 +289,9 @@ def prepare(
             out.append(_transfer_input(a, s, panels, asof, set(assets), rng))
             continue
         out.append(AssetInput(a, float(s.iloc[-1]), d.dropna(), infer_freq(s), "diff", s.index[-1], raw=s))
+    from . import market_cues
+    for x in out:   # panel-only cues (never raise); consumed only by a profile with mkt_cue set
+        x.market = market_cues.cues(panels, x.asset, x.raw, x.kind, asof)
     return out
 
 

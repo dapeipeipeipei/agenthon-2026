@@ -267,6 +267,25 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
             if hd:
                 qs = [float(hz.get("split_q", {}).get(a, 0.5)) for a in hd]
                 groups.append(("house", hd, float(np.mean(qs))))
+        # F2-market (engine/market_cues.py, t2-work/F2MKT_NOTES.md): panel-only cue, only on the
+        # profile's families and only for targets no other group / the table skew already directs.
+        mcue = str(getattr(profile, "mkt_cue", "") or "")
+        if mcue and family in tuple(getattr(profile, "mkt_fams", ()) or ()):
+            taken = set(det) | {a for g in groups for a in g[1]}
+            qmax = float(getattr(profile, "mkt_q_max", 0.6))
+            md, mq = {}, []
+            for a in inputs:
+                if a.asset in taken or (fk["skew"] and int(dirs0.get(a.asset, 0))
+                                        and (rate_on or not is_rate(a.asset))):
+                    continue
+                use = ("eh" if is_rate(a.asset) else "tsmom") if mcue == "tsmom_fx_eh_rates" else mcue
+                d, tconf, _ = (a.market or {}).get(use, (0, 0.0, ""))
+                if not d:
+                    continue
+                md[a.asset] = int(d)
+                mq.append(qmax if use == "eh" else 0.5 + (qmax - 0.5) * min(float(tconf), 1.0))
+            if md:
+                groups.append(("market", md, float(np.mean(mq))))
         last = steps[max(horizons)]
         for name, dvec, q in groups:
             q = float(min(max(q, 0.0), 1.0))
