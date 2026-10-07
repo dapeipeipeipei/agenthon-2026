@@ -91,3 +91,25 @@ scores on the practice units themselves are in-sample. Our record:
 * **Real platform feedback used:** the aggregate Development leaderboard value of our first T4
   upload (0.5394, reported by the team owner on 2026-10-07). No per-unit outcome was obtained from it.
 * Nothing unit-specific (no unit id, entity id, date or outcome) is in either image.
+
+## Candidates C and D (v0.4, 2026-10-07)
+
+Same structure as A/B: candidate C (`submission.c*.json`, image `sha256:c9b5ddcd…`) makes no
+network call (`models: []`); candidate D (`submission.d*.json`, image `sha256:140251fb…`) is the
+same code with `T4_USE_HOUSE=1` and the House row in `models[]`. New hand-chosen constants:
+
+* vintage tables: a transition whose mean relative revision exceeds 6x the median of the other
+  transitions is treated as a one-off level shift and excluded; robust centre = median (n < 5) or
+  mean within 3 MADs; band half-width 1.8 robust sd x sqrt(releases to resolution);
+* high-frequency proxy: used only with >= 6 overlapping months and correlation >= 0.7, blend
+  weight (r - 0.6) / 0.3 capped at 1;
+* event-window return band: sd 6.5 % when the task names earnings/results (5 % otherwise);
+* House (D only): blend 0.5 (no signal) / 0.3 (signal) x (0.5 + 0.5 conf), label bars 0.6 / 0.75.
+
+**Data used to check them (practice units, in-sample exception above):** the verified
+first-release outcomes collected by `t4-work/harness/headroom_truth.py` on 2026-10-07 (sources
+listed in `t4-work/HEADROOM.md` section 4: FRED / ALFRED first-release vintages, TreasuryDirect
+auction results, CFTC Socrata COT 2024-11-26 report, SEC XBRL first-filed diluted EPS; credit and
+post-earnings outcomes from the public record). They were used only by the local harness
+(`run_local.py`, `headroom_eval.py`) to compare candidates; no constant was grid-searched, and
+none of this data is in either image.

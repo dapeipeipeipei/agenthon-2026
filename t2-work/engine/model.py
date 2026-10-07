@@ -94,10 +94,18 @@ class Profile:
     #: width x exp(v5_house_width x s), s in {-1, 0, +1} from the model's move-size reading, only for
     #: the families in v5_house_width_fams; skew of v5_house_skew[family] x sd_h per unit scale in the
     #: model's direction, only for assets whose deterministic signed skew is 0.
+    #: v5 F4 preset name (engine/v4.py F4_PRESETS; "" = the F4 row of v4_family) and an F4 width
+    #: override (0 = keep). Both can also be overridden by JINPEI_T2_F4_MODE / JINPEI_T2_F4_WIDTH.
+    v5_f4: str = ""
+    v5_f4_width: float = 0.0
     v5_house: bool = False
     v5_house_width: float = 0.0
     v5_house_width_fams: tuple = ()
     v5_house_skew: tuple = ()
+    #: v5b (revised): House direction applied as a calibrated split, q = min(p, v5_house_q_max), only for
+    #: the families in v5_house_split_fams and targets whose direction the stress table leaves open
+    v5_house_q_max: float = 0.5
+    v5_house_split_fams: tuple = ()
 
     @property
     def effective_multiplier(self) -> float:
@@ -585,12 +593,15 @@ def gaussian_fallback(
     samples = np.nan_to_num(samples, nan=0.0, posinf=0.0, neginf=0.0)
     return samples, {"assets": per, "steps": steps, "path_len": max(steps.values()),
                      "block_len": "n/a", "recent_window": "n/a", "n_rows": "n/a", "seed": seed}
-# v5b (2026-10-07): v5a + the bounded House reader (engine/house.py assess_v5). Bounds from the oracle
-# ablation (t2-work/v5_house_oracle.py, V5_NOTES.md): each knob's cost with a USELESS (random) reader
-# is <= ~0.01 on the all-card mean (worst case ~= v5a), break-even direction accuracy ~0.55.
-#   width  x exp(0.1 x s), s in {-1, 0, +.5, +1}, families F2 and F4 only (the text-led families);
-#   skew   0.25 sd_h per unit path scale in the reader's direction, F2 (all targets) and F4 yields
-#          (the only F4 targets whose stress direction the table leaves open).
-# Without MODEL_* (or on any House failure) v5b draws are bit-identical to v5a.
-PROFILES["v5b"] = replace(PROFILES["v5a"], name="v5b", v5_house=True, v5_house_width=0.1,
-                          v5_house_width_fams=("F2", "F4"), v5_house_skew=(("F2", 0.25), ("F4", 0.25)))
+# v5a_h: the hedge setting of candidate A (sealed F4 windows possibly NOT event-selected, T2#26):
+# same skew mode, F4 width 1.5 (calm-world F4 1.57 vs rev3 1.47; k=1 F4 2.90 vs 3.24).
+PROFILES["v5a_h"] = replace(PROFILES["v5a"], name="v5a_h", v5_f4_width=1.5)
+# v5b / v5b_h: v5a / v5a_h + the House reader (engine/house.py assess_v5): direction with a
+# probability, gated on an in-window scheduled event + stated policy bias + a verbatim quote +
+# the closed-book recall probe, applied as a calibrated split q = min(p, 0.6) on targets whose
+# direction the stress table leaves open (all families; F4 non-yield targets keep the table).
+# Bound from t2-work/v5_house_oracle.py. Without MODEL_* (or on any House failure) the draws are
+# bit-identical to v5a / v5a_h.
+PROFILES["v5b"] = replace(PROFILES["v5a"], name="v5b", v5_house=True, v5_house_q_max=0.6,
+                          v5_house_split_fams=("F1", "F2", "F3", "F4"))
+PROFILES["v5b_h"] = replace(PROFILES["v5b"], name="v5b_h", v5_f4_width=1.5)

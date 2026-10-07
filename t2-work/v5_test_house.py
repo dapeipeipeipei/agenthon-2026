@@ -29,7 +29,7 @@ PROXY_VARS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_prox
 
 
 class Fake(BaseHTTPRequestHandler):
-    open_mode = "ok"        # ok | noquote | low | garbage | 500 | 401 | slow
+    open_mode = "ok"        # ok | noquote | low | noevent | garbage | 500 | 401 | slow
     closed_mode = "unknown"  # unknown | agree | disagree | garbage
     seen: list[dict] = []
 
@@ -69,8 +69,9 @@ class Fake(BaseHTTPRequestHandler):
             return self._ok("Yields will rise to 0.9% by March.")
         doc = user.split("[doc 1]", 1)[1].split("\n", 1)[1]
         quote = " ".join(doc.split()[5:15]) if m != "noquote" else "this sentence is not in any of the documents"
-        conf = "low" if m == "low" else "high"
-        return self._ok(json.dumps({"move_size": 3, "direction": {k: "up" for k in keys}, "confidence": conf,
+        prob = 0.52 if m == "low" else 0.9
+        return self._ok(json.dumps({"scheduled_event_in_window": m != "noevent", "stated_policy_bias": True,
+                                    "direction": {k: "up" for k in keys}, "probability": {k: prob for k in keys},
                                     "evidence": [{"doc": 1, "quote": quote}]}))
 
     def _ok(self, content):
@@ -86,9 +87,7 @@ class Fake(BaseHTTPRequestHandler):
 
 
 def v5b_like():
-    return model.PROFILES.get("v5b") or model.replace(model.PROFILES["v5a"], name="v5b-test", v5_house=True,
-                                                     v5_house_width=0.2, v5_house_width_fams=("F2", "F4"),
-                                                     v5_house_skew=(("F2", 0.5), ("F4", 0.5)))
+    return model.PROFILES["v5b"]
 
 
 class V5House(unittest.TestCase):
@@ -191,27 +190,28 @@ class V5House(unittest.TestCase):
         self.assertTrue(all(s["proxied"] for s in Fake.seen))
 
     # ------------------------------------------------------------------ gates
-    def test_direction_needs_quote_and_confidence(self):
-        for mode in ("noquote", "low"):
+    def test_direction_needs_event_quote_and_probability(self):
+        for mode in ("noquote", "low", "noevent"):
             Fake.seen.clear()
             Fake.open_mode = mode
             r = self.assess()
             self.assertIsNotNone(r)
-            self.assertEqual(set(r["skew_dir"].values()), {0}, mode)
+            self.assertEqual(r["split_dir"], {}, mode)
             self.assertEqual(len(Fake.seen), 1, mode)     # no direction -> no probe needed
-            self.assertGreater(r["widen"], 1.0)            # the move-size reading still counts
+            self.assertEqual(r["widen"], 1.0)
 
     def test_recall_probe_drops_remembered_direction(self):
         Fake.closed_mode = "agree"
         r = self.assess()
-        self.assertEqual(set(r["skew_dir"].values()), {0})
+        self.assertEqual(r["split_dir"], {})
         self.assertEqual(r["recall_check"]["dropped"], self.u["assets"])
         Fake.closed_mode = "disagree"
         r = self.assess()
-        self.assertEqual(set(r["skew_dir"].values()), {1})
+        self.assertEqual(r["split_dir"], {a: 1 for a in self.u["assets"]})
+        self.assertEqual(r["split_q"], {a: self.prof.v5_house_q_max for a in self.u["assets"]})
         Fake.closed_mode = "garbage"
         r = self.assess()
-        self.assertEqual(set(r["skew_dir"].values()), {0})
+        self.assertEqual(r["split_dir"], {})
         self.assertEqual(r["recall_check"]["probe"], "failed")
 
     # ------------------------------------------------------------------ bounds in the engine
@@ -221,23 +221,25 @@ class V5House(unittest.TestCase):
         b, st = E.simulate_unit(self.u, self.prof)
         adj = {x["name"]: x for x in st["derivation"]["adjustments"]}
         self.assertIn("house_model", adj)
-        bw = self.prof.v5_house_width
-        self.assertLessEqual(adj["house_model"]["widen"], np.exp(bw) + 1e-12)
-        b_sk = dict(self.prof.v5_house_skew)["F4"]
+        self.assertEqual(adj["house_model"]["widen"], 1.0)
+        sp = adj["stress_side_split_house"]
+        self.assertLessEqual(sp["q"], self.prof.v5_house_q_max)
         sd_h = float(np.std(a[:, -1]))
-        shift = float(np.median(b[:, -1]) - np.median(a[:, -1]))
-        self.assertGreater(shift, 0.0)                                   # "up" reading on a yield
-        self.assertLess(shift, 1.5 * b_sk * np.exp(bw) * sd_h)           # bounded by the profile
+        up = float(np.mean(b[:, -1] > np.median(a[:, -1])))
+        self.assertGreater(up, 0.55)                                     # "up" reading on a yield
+        self.assertLess(up, self.prof.v5_house_q_max + 0.03)             # bounded by q_max
+        self.assertLess(abs(float(np.mean(b[:, -1]) - np.mean(a[:, -1]))), 0.5 * sd_h)
+        self.assertAlmostEqual(float(np.std(b[:, -1])), sd_h, delta=0.05 * sd_h)   # no widening
         self.assertEqual(st["derivation"]["adjustments"][0]["requests"], 2)
 
     def test_non_rate_f4_asset_keeps_table_direction(self):
         u = next(x for x in E.load_units() if x["unit"] == "t2-F4-gbp-brexit-2016")
         os.environ.update(self.env)
         Fake.closed_mode = "disagree"
-        a, _ = E.simulate_unit(u, model.PROFILES["v5a"])
         b, st = E.simulate_unit(u, self.prof)
-        sk = next(x for x in st["derivation"]["adjustments"] if x["name"] == "scale_linked_skew")
-        self.assertEqual(sk["from_house"], {})                          # deterministic GBP direction wins
+        names = [x["name"] for x in st["derivation"]["adjustments"]]
+        self.assertNotIn("stress_side_split_house", names)   # deterministic GBP skew wins
+        self.assertIn("scale_linked_skew", names)
 
 
 if __name__ == "__main__":
