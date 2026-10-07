@@ -1,0 +1,345 @@
+# Pre-upload release rehearsal: take the two FINAL published images exactly as the organizers will
+# (anonymous pull by digest, no registry login), and run every public unit of both tracks under the
+# platform's container settings twice -- once under gVisor (runsc) and once under the default runc,
+# which is the selected Development runtime (Agenthon2026-public/docs/DEVELOPMENT-RUNTIME.md).
+# Every output is checked with the toolkit v2.6.0 output-tree policy and the official track scorers
+# (t2-work/pack/check_outputs.py, t4-work/harness/run_local.py), runsc and runc outputs are compared
+# for byte identity, and per-unit wall time (container create -> exit) is reported against the
+# budgets (T2 1,800 s, T4 600 s). Nothing is built or pushed here; nothing logs in to GHCR.
+#
+# How the runtime and the platform's env are applied without touching the owners' scripts: a thin
+# `docker` shim placed first on PATH adds `--runtime=$REH_RUNTIME` to every `docker run`, rewrites
+# QFBENCH_NETWORK=none -> restricted (no MODEL_* variables are ever passed), and sets --cpus/--memory
+# to the runner's ceiling. local_run.sh and run_local.py then stage, mount, time and check exactly as
+# they do in t2-image.yml / t4-image.yml.
+name: release-rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      track2_ref:
+        description: "track2-forecasting-public commit for units + scorer (default: upstream main of 2026-10-06, the next evaluation update)"
+        default: "60509df4ad0756443f4af8dc9500aed99a995694"
+      track4_ref:
+        description: "track4-analysis-public commit (scorer 5.2.2)"
+        default: "1c744e1d6725340643a533f436517d72b53ca0e1"
+
+permissions:
+  contents: read      # no packages scope: GHCR is reached anonymously only
+
+env:
+  T2_IMAGE: ghcr.io/dapeipeipeipei/jinpei-t2@sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74
+  T4_IMAGE: ghcr.io/dapeipeipeipei/jinpei-t4@sha256:bf2a164756244a4ede12e5ea92bf164b60f47c2ba664f9cd955c117f8c68e01c
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+  PYTHONUTF8: "1"
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail
+
+jobs:
+  rehearsal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Public Track 2 kit (units, scorer)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track2-forecasting-public
+          ref: ${{ inputs.track2_ref }}
+          path: track2-forecasting-public
+
+      - name: Public Track 4 kit (units, scorer, baselines)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track4-analysis-public
+          ref: ${{ inputs.track4_ref }}
+          path: track4-analysis-public
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Runner facts + empty Docker credential store
+        run: |
+          R="$RUNNER_TEMP/reh"; mkdir -p "$R/dockercfg" "$R/bin"
+          echo "REH=$R" >> "$GITHUB_ENV"
+          # every docker call below uses an EMPTY config dir: no credential helper, no auths
+          echo '{}' > "$R/dockercfg/config.json"
+          echo "DOCKER_CONFIG=$R/dockercfg" >> "$GITHUB_ENV"
+          {
+            echo "runner: $(nproc) vCPU, $(free -g | awk '/Mem:/ {print $2}') GiB RAM, $(uname -r)"
+            echo "docker: $(docker version --format '{{.Server.Version}}') cgroup=$(docker info --format '{{.CgroupDriver}}/{{.CgroupVersion}}')"
+            echo "track2 kit: $(git -C track2-forecasting-public rev-parse HEAD)  units: $(ls -d track2-forecasting-public/units/*/ | wc -l)"
+            echo "track4 kit: $(git -C track4-analysis-public rev-parse HEAD)  units: $(ls track4-analysis-public/units/*/task.json | wc -l)"
+          } | tee "$R/facts.txt"
+
+      - name: Install gVisor (runsc) from gvisor.dev apt repo, register as docker runtime
+        id: gvisor
+        continue-on-error: true
+        run: |
+          set -x
+          sudo apt-get update -q
+          sudo apt-get install -y -q apt-transport-https ca-certificates curl gnupg
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list > /dev/null
+          sudo apt-get update -q && sudo apt-get install -y -q runsc
+          sudo /usr/bin/runsc install
+          sudo systemctl restart docker
+          cat /etc/docker/daemon.json
+          runsc --version | tee "$REH/runsc-version.txt"
+          docker info --format '{{json .Runtimes}}'
+
+      - name: Docker shim (adds --runtime, platform env, runner-sized quotas)
+        run: |
+          cat > "$REH/bin/docker" <<'SH'
+          #!/usr/bin/env bash
+          real=/usr/bin/docker
+          if [ "${1:-}" = run ] && [ -n "${REH_RUNTIME:-}" ]; then
+            shift
+            out=(run "--runtime=$REH_RUNTIME")
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                QFBENCH_NETWORK=*) out+=("QFBENCH_NETWORK=restricted") ;;
+                --cpus) out+=(--cpus "${REH_CPUS:-$2}"); shift ;;
+                --memory) out+=(--memory "${REH_MEMORY:-$2}"); shift ;;
+                --memory-swap) out+=(--memory-swap "${REH_MEMORY:-$2}"); shift ;;
+                *) out+=("$1") ;;
+              esac
+              shift
+            done
+            if [ -n "${REH_LOG:-}" ] && [ ! -s "$REH_LOG" ]; then printf '%q ' docker "${out[@]}" > "$REH_LOG"; echo >> "$REH_LOG"; fi
+            exec "$real" "${out[@]}"
+          fi
+          exec "$real" "$@"
+          SH
+          chmod +x "$REH/bin/docker"
+          echo "$REH/bin" >> "$GITHUB_PATH"
+          echo "REH_CPUS=$(nproc)" >> "$GITHUB_ENV"
+          echo "REH_MEMORY=14g" >> "$GITHUB_ENV"
+
+      - name: Anonymous cold pull of both final images by digest (no login)
+        run: |
+          # log out of ghcr.io in the runner's default config AND in the empty config used below
+          DOCKER_CONFIG="$HOME/.docker" docker logout ghcr.io || true
+          docker logout ghcr.io || true
+          python - <<'PY'
+          import json, os
+          c = json.load(open(os.path.join(os.environ["DOCKER_CONFIG"], "config.json")))
+          assert not c.get("auths") and not c.get("credsStore") and not c.get("credHelpers"), c
+          print("docker config used for pulls has no credentials:", c)
+          PY
+          : > "$REH/pull.tsv"
+          for ref in "$T2_IMAGE" "$T4_IMAGE"; do
+            docker image inspect "$ref" >/dev/null 2>&1 && { echo "image already present -- not a cold pull"; exit 1; }
+            t0=$(date +%s.%N); docker pull --platform linux/amd64 "$ref"; t1=$(date +%s.%N)
+            secs=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
+            size=$(docker image inspect "$ref" --format '{{.Size}}')
+            repo="${ref#ghcr.io/}"; repo="${repo%@*}"; dig="${ref#*@}"
+            tok=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" | python -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+            comp=$(curl -fsS -H "Authorization: Bearer $tok" \
+                -H 'Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
+                "https://ghcr.io/v2/$repo/manifests/$dig" | python -c 'import json,sys;m=json.load(sys.stdin);print(sum(l["size"] for l in m["layers"])+m["config"]["size"])')
+            label=$(docker image inspect "$ref" --format '{{ index .Config.Labels "qfbench2.interface_version" }} user={{.Config.User}} entrypoint={{json .Config.Entrypoint}} arch={{.Architecture}}')
+            printf '%s\t%s\t%s\t%s\t%s\n' "$ref" "$secs" "$comp" "$size" "$label" | tee -a "$REH/pull.tsv"
+          done
+          bash t2-work/pack/verify_anonymous_pull.sh --digest "${T2_IMAGE#*@}" | tee "$REH/anon-t2.txt"
+          bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t4 --digest "${T4_IMAGE#*@}" | tee "$REH/anon-t4.txt"
+
+      - name: runsc smoke (verbs resolve on PATH under gVisor with platform flags)
+        id: runsc_smoke
+        if: steps.gvisor.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for x in "$T2_IMAGE forecast" "$T4_IMAGE analyze"; do
+            set -- $x
+            /usr/bin/docker run --rm --runtime=runsc --network=none --read-only --user 65534:65534 \
+              --cap-drop=ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+              --pids-limit 256 --ulimit nofile=1024:1024 --ulimit nproc=256:256 \
+              --cpus "$REH_CPUS" --memory "$REH_MEMORY" --memory-swap "$REH_MEMORY" "$1" "$2" --help | head -n 3
+          done
+          /usr/bin/docker run --rm --runtime=runsc --network=none "$T2_IMAGE" sh -c 'dmesg 2>/dev/null | head -n 2; uname -a' || true
+
+      - name: T2/T4 checker environments (pinned venv for T2; toolkit + T4 scorer for T4)
+        run: |
+          bash t2-work/pack/make_venv.sh
+          python -m pip install -q --upgrade pip
+          pip install -q "$TOOLKIT" "jsonschema==4.23.0"
+          pip install -q --no-deps -e track4-analysis-public
+
+      - name: Judge tokenizers for the T4 400-token claim cap (tokenizer files only)
+        continue-on-error: true
+        run: |
+          pip install -q transformers sentencepiece protobuf
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          for m in ("cross-encoder/nli-deberta-v3-large", "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"):
+              snapshot_download(m, allow_patterns=["*.json", "*.model", "*.txt"])
+          PY
+
+      - name: T2 x runc -- all units, staged layout, platform flags, gates
+        id: t2_runc
+        continue-on-error: true
+        env:
+          REH_RUNTIME: runc
+          REH_LOG: ${{ runner.temp }}/reh/cmd-t2-runc.txt
+        run: |
+          bash t2-work/pack/local_run.sh --all --image "$T2_IMAGE" --runs-root "$REH/t2" --run-name runc \
+            --cpus "$REH_CPUS" --memory "$REH_MEMORY" --seed 0 --timeout 1800 | tee "$REH/t2-runc.txt"
+
+      - name: T2 x runsc -- all units, staged layout, platform flags, gates, compare with runc
+        id: t2_runsc
+        if: steps.gvisor.outcome == 'success'
+        continue-on-error: true
+        env:
+          REH_RUNTIME: runsc
+          REH_LOG: ${{ runner.temp }}/reh/cmd-t2-runsc.txt
+        run: |
+          bash t2-work/pack/local_run.sh --all --image "$T2_IMAGE" --runs-root "$REH/t2" --run-name runsc \
+            --cpus "$REH_CPUS" --memory "$REH_MEMORY" --seed 0 --timeout 1800 \
+            --compare "$REH/t2/runc/out" | tee "$REH/t2-runsc.txt"
+
+      - name: T4 x runc -- all public units, platform flags, official checks
+        id: t4_runc
+        continue-on-error: true
+        env:
+          REH_RUNTIME: runc
+          REH_LOG: ${{ runner.temp }}/reh/cmd-t4-runc.txt
+        run: |
+          python t4-work/harness/run_local.py --docker-image "$T4_IMAGE" --agents ours \
+            --out-root "$REH/t4/runc" --gate | tee "$REH/t4-runc.txt"
+
+      - name: T4 x runsc -- all public units, platform flags, official checks
+        id: t4_runsc
+        if: steps.gvisor.outcome == 'success'
+        continue-on-error: true
+        env:
+          REH_RUNTIME: runsc
+          REH_LOG: ${{ runner.temp }}/reh/cmd-t4-runsc.txt
+        run: |
+          python t4-work/harness/run_local.py --docker-image "$T4_IMAGE" --agents ours \
+            --out-root "$REH/t4/runsc" --gate | tee "$REH/t4-runsc.txt"
+
+      - name: Aggregate (admissibility, determinism runsc vs runc, timing vs budgets)
+        if: always()
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, statistics, sys
+          R = pathlib.Path(os.environ["REH"])
+          sys.path.insert(0, "t2-work/pack")
+          import check_outputs as co   # toolkit v2.6.0 output-tree policy (validate_listing)
+
+          def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+          def files(d):
+              return {p.relative_to(d).as_posix(): sha(p) for p in sorted(d.rglob("*")) if p.is_file()} if d.is_dir() else {}
+          def tstats(xs):
+              return {"n": len(xs), "max": round(max(xs), 2), "mean": round(statistics.fmean(xs), 2),
+                      "p95": round(sorted(xs)[max(0, int(0.95 * len(xs)) - 1)], 2)} if xs else {}
+
+          rep = {"facts": (R / "facts.txt").read_text() if (R / "facts.txt").exists() else "",
+                 "runsc": (R / "runsc-version.txt").read_text().strip() if (R / "runsc-version.txt").exists() else "NOT INSTALLED",
+                 "pull": [l.split("\t") for l in (R / "pull.tsv").read_text().splitlines()] if (R / "pull.tsv").exists() else [],
+                 "t2": {}, "t4": {}}
+          # ---- T2
+          for rt in ("runc", "runsc"):
+              s = R / "t2" / rt / "summary.json"
+              if not s.exists():
+                  rep["t2"][rt] = {"ran": False}; continue
+              d = json.loads(s.read_text())
+              secs = [v["seconds"] for v in d.values() if "seconds" in v]
+              slow = sorted(((v.get("seconds", 0), u) for u, v in d.items()), reverse=True)[:5]
+              rep["t2"][rt] = {"ran": True, "units": len(d), "ok": sum(v["ok"] for v in d.values()),
+                               "admissible": sum(v["admissible"] for v in d.values()),
+                               "tree_ok": sum(v["tree_ok"] for v in d.values()),
+                               "exit0": sum(v.get("exit_code", 1) == 0 for v in d.values()),
+                               "fallback": sum(bool(v.get("fallback")) for v in d.values()),
+                               "over_budget": sum(v.get("seconds", 0) > 1800 for v in d.values()),
+                               "time": tstats(secs), "slowest": slow,
+                               "failed": {u: v for u, v in d.items() if not v["ok"]}}
+          a, b = R / "t2/runc/out", R / "t2/runsc/out"
+          if a.is_dir() and b.is_dir():
+              units = sorted(p.name for p in a.iterdir() if p.is_dir())
+              same_all = same_pq = 0; diffs = {}
+              for u in units:
+                  fa, fb = files(a / u), files(b / u)
+                  same_all += fa == fb
+                  same_pq += fa.get("forecast.parquet") is not None and fa.get("forecast.parquet") == fb.get("forecast.parquet")
+                  if fa != fb:
+                      diffs[u] = sorted(k for k in set(fa) | set(fb) if fa.get(k) != fb.get(k))
+              rep["t2"]["determinism"] = {"units": len(units), "all_files_identical": same_all,
+                                          "parquet_identical": same_pq, "differing_files": diffs}
+          # ---- T4
+          co.REQUIRED = ("answer.json",)
+          for rt in ("runc", "runsc"):
+              s = R / "t4" / rt / "results.json"
+              if not s.exists():
+                  rep["t4"][rt] = {"ran": False}; continue
+              rows = [r for r in json.loads(s.read_text()) if r["agent"] == "ours"]
+              out = {}
+              for r in rows:
+                  why = []
+                  if r.get("rc") != 0 or r.get("error"): why.append(f"rc={r.get('rc')}")
+                  if r.get("schema_errors"): why.append("schema")
+                  if r.get("fallback"): why.append("fallback")
+                  if r.get("false_claims") != 0 or r.get("claim_check_error"): why.append(f"false_claims={r.get('false_claims')}")
+                  if r.get("score_error") or r.get("off_state") not in ("participant_success", "unrankable"): why.append(f"scorer={r.get('off_state')}")
+                  if r.get("reason_findings"): why.append(f"reasons={r['reason_findings']}")
+                  od = R / "t4" / rt / "ours" / r["unit"]
+                  tok, probs, _ = co.tree_check(od) if od.is_dir() else (False, ["no output dir"], {})
+                  if not tok: why.append("tree: " + "; ".join(probs))
+                  if r.get("secs", 0) > 600: why.append("over 600 s")
+                  out[r["unit"]] = {"secs": r.get("secs"), "state": r.get("off_state"), "score": r.get("off_score"), "why": why}
+              secs = [v["secs"] for v in out.values() if v["secs"] is not None]
+              rep["t4"][rt] = {"ran": True, "units": len(out), "ok": sum(not v["why"] for v in out.values()),
+                               "time": tstats(secs), "per_unit": out}
+          a, b = R / "t4/runc/ours", R / "t4/runsc/ours"
+          if a.is_dir() and b.is_dir():
+              units = sorted(p.name for p in a.iterdir() if p.is_dir())
+              same = sum(files(a / u) == files(b / u) for u in units)
+              rep["t4"]["determinism"] = {"units": len(units), "identical": same,
+                                          "differing": [u for u in units if files(a / u) != files(b / u)]}
+          (R / "rehearsal.json").write_text(json.dumps(rep, indent=1, default=str))
+
+          L = ["### Release rehearsal", "", "```", rep["facts"].strip(), f"runsc: {rep['runsc']}", "```", "",
+               "| image | cold pull s | compressed B | unpacked B | label/user/entrypoint |", "|---|---|---|---|---|"]
+          L += [f"| `{p[0][-20:]}` | {p[1]} | {p[2]} | {p[3]} | {p[4]} |" for p in rep["pull"] if len(p) >= 5]
+          L += ["", "| run | ok | max s | mean s | p95 s | budget |", "|---|---|---|---|---|---|"]
+          for tr, bud in (("t2", 1800), ("t4", 600)):
+              for rt in ("runc", "runsc"):
+                  x = rep[tr].get(rt, {})
+                  if x.get("ran"):
+                      t = x.get("time", {})
+                      L.append(f"| {tr} {rt} | {x['ok']}/{x['units']} | {t.get('max')} | {t.get('mean')} | {t.get('p95')} | {bud} |")
+                  else:
+                      L.append(f"| {tr} {rt} | not run | | | | {bud} |")
+          L += ["", "```", json.dumps({"t2": rep["t2"].get("determinism"), "t4": rep["t4"].get("determinism")}, indent=1), "```"]
+          (R / "summary.md").write_text("\n".join(L) + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f: f.write("\n".join(L) + "\n")
+          print("\n".join(L))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-rehearsal
+          path: |
+            ${{ runner.temp }}/reh/*.txt
+            ${{ runner.temp }}/reh/*.tsv
+            ${{ runner.temp }}/reh/*.json
+            ${{ runner.temp }}/reh/*.md
+            ${{ runner.temp }}/reh/t2/*/timings.tsv
+            ${{ runner.temp }}/reh/t2/*/summary.json
+            ${{ runner.temp }}/reh/t2/*/run.env
+            ${{ runner.temp }}/reh/t2/*/logs/**
+            ${{ runner.temp }}/reh/t4/*/results.json
+            ${{ runner.temp }}/reh/t4/*/ours/**
+          retention-days: 30
+
+      - name: Verdict
+        if: always()
+        run: |
+          echo "gvisor=${{ steps.gvisor.outcome }} t2_runc=${{ steps.t2_runc.outcome }} t2_runsc=${{ steps.t2_runsc.outcome }} t4_runc=${{ steps.t4_runc.outcome }} t4_runsc=${{ steps.t4_runsc.outcome }}"
+          test "${{ steps.t2_runc.outcome }}" = success && test "${{ steps.t4_runc.outcome }}" = success
