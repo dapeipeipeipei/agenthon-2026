@@ -213,7 +213,20 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         from . import house
         hz = house.assess(asof, names, horizons, feats) if house.enabled() else None
     w_house = float(hz["widen"]) if hz else 1.0
+    # v5 F4 equity-factor knobs (profile.v5_factor; asset class from engine/assets.is_factor, F4 only).
+    # Empty tuple = every draw identical to v5a: nothing below touches the rng unless a knob is set.
+    fac = dict(getattr(profile, "v5_factor", ()) or ()) if family == "F4" else {}
+    from .assets import is_factor
+    fac_cols = [j for j, a in enumerate(inputs) if is_factor(a.asset)] if fac else []
+    if fac_cols and float(fac.get("vol_blend", 0.0)):
+        b = float(fac["vol_blend"])
+        for j in fac_cols:
+            full_sd = _sd(inputs[j].increments.to_numpy(float))
+            if np.isfinite(full_sd) and full_sd > 0:
+                sd_w[j] = sd_w[j] ** (1.0 - b) * full_sd ** b
     sd_final = sd_w * tilt * fk["width"] * w_event * w_house
+    if fac_cols and float(fac.get("width", 1.0)) != 1.0:
+        sd_final[fac_cols] *= float(fac["width"])
 
     # ---- innovations (n_draws, path_len, A), unit per-step sd, zero mean
     A = len(inputs)
@@ -247,7 +260,16 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     mult = np.where(tail_mask, fk["tail_k"], 1.0)
     if fk["ln_s"] > 0:     # v5: log-normal per-path scale (drawn only when enabled: v4 draws unchanged)
         mult = mult * np.exp(fk["ln_s"] * rng.standard_normal(n_draws))
-    paths = np.cumsum(Z * mult[:, None, None] * sd_final[None, None, :], axis=1)
+    # per-(path, asset) scale: the family mixture for every column, plus the factor-only knobs
+    multA = np.repeat(mult[:, None], A, axis=1)
+    fac_tail = np.zeros(n_draws, dtype=bool)
+    if fac_cols:
+        if float(fac.get("ln_s", 0.0)) > 0:
+            multA[:, fac_cols] *= np.exp(float(fac["ln_s"]) * rng.standard_normal(n_draws))[:, None]
+        if float(fac.get("tail_p", 0.0)) > 0 and float(fac.get("tail_k", 1.0)) != 1.0:
+            fac_tail = rng.random(n_draws) < float(fac["tail_p"])
+            multA[np.ix_(fac_tail, fac_cols)] *= float(fac["tail_k"])
+    paths = np.cumsum(Z * multA[:, None, :] * sd_final[None, None, :], axis=1)
     t = np.arange(1, path_len + 1, dtype=float)
     # ---- calibrated splits (v5): reflect whole deviation paths so that a share q ends on the called
     # side at the card's last horizon (group-wise: the deterministic stress table on the family row,
@@ -261,6 +283,11 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                if fk["split_q"] != 0.5 and (rate_on or not is_rate(a.asset))}
         det = {a: d for a, d in det.items() if d}
         groups = [("table", det, fk["split_q"])] if det else []
+        if fac_cols and float(fac.get("split", 0.5)) != 0.5:
+            fd = {inputs[j].asset: int(dirs0.get(inputs[j].asset, 0)) for j in fac_cols if inputs[j].asset not in det}
+            fd = {a: d for a, d in fd.items() if d}
+            if fd:
+                groups.append(("factor", fd, float(fac["split"])))
         if hz and hz.get("split_dir"):
             hd = {a: int(d) for a, d in hz["split_dir"].items() if int(d) and a not in det
                   and not (fk["skew"] and int(dirs0.get(a, 0)) and (rate_on or not is_rate(a)))}
@@ -298,11 +325,26 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     # reading's direction at the profile's bounded size (v5b).
     skew_by_asset: dict[str, float] = {}
     house_skew: dict[str, float] = {}
+    if plan and fac_cols and float(fac.get("asym", 0.0)) and fac_tail.any():
+        for j in fac_cols:
+            d = int(dirs.get(inputs[j].asset, 0))
+            if d:
+                paths[fac_tail, :, j] += d * float(fac["asym"]) * sd_final[j] * np.sqrt(t)[None, :]
+        adjustments.append({"name": "factor_asymmetric_tail", "size_sd_h": float(fac["asym"]),
+                            "n_paths": int(fac_tail.sum()), "why": "F4 equity-factor mixture (engine/assets.is_factor)"})
     if plan:
         from .assets import is_rate
+        fac_sk = 1.0
+        if fac_cols:
+            fac_sk = float(fac.get("skew", 1.0))
+            c = float(fac.get("stress_c", 0.0))
+            if c:
+                fac_sk *= 1.0 + c * float(np.clip(float(plan.get("stress_score", 0.0)) - 2.0, 0.0, 4.0))
         for j, a in enumerate(inputs):
             d = int(dirs.get(a.asset, 0))
             sk = fk["skew"] * (float(getattr(profile, "v5_rate_skew", 1.0)) if is_rate(a.asset) else 1.0)
+            if j in fac_cols:
+                sk *= fac_sk
             signed = d * sk
             if signed == 0.0 and hz and hz.get("skew_dir"):
                 hd = int(hz["skew_dir"].get(a.asset, 0))
@@ -312,7 +354,7 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                     house_skew[a.asset] = signed
             if signed:
                 skew_by_asset[a.asset] = signed
-                paths[:, :, j] += signed * mult[:, None] * sd_final[j] * np.sqrt(t)[None, :]
+                paths[:, :, j] += signed * multA[:, j][:, None] * sd_final[j] * np.sqrt(t)[None, :]
     skew = fk["skew"]
     if skew_by_asset:
         adjustments.append({"name": "scale_linked_skew", "size_sd_h_per_unit_scale": skew,
@@ -382,7 +424,8 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         "correlation_window": (np.corrcoef(X300, rowvar=False).round(3).tolist() if A > 1 else None),
         "adjustments": adjustments,
         "final": {"effective_mixture_multiplier": eff, "w_event": w_event, "w_family": fk["width"],
-                  "w_house": w_house, "asym_shift_sd_h": asym, "skew": skew},
+                  "w_house": w_house, "asym_shift_sd_h": asym, "skew": skew,
+                  "factor_knobs": {k: float(v) for k, v in fac.items()} if fac_cols else {}},
     }
     ev = None
     if plan:

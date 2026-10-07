@@ -106,6 +106,12 @@ class Profile:
     #: the families in v5_house_split_fams and targets whose direction the stress table leaves open
     v5_house_q_max: float = 0.5
     v5_house_split_fams: tuple = ()
+    #: v5 F4 equity-factor knobs (engine/v4.py; asset class from engine/assets.is_factor, F4 cards
+    #: only): tuple of (key, value) pairs among width (multiplier on the F4 width), skew (multiplier
+    #: on the F4 skew), ln_s (factor-only log-normal scale mixture), split (stress-side split q),
+    #: vol_blend (sd = sd_window^(1-b) x sd_full^b), tail_p / tail_k / asym (factor-only mixture),
+    #: stress_c (skew x (1 + c x clip(stress_score - 2, 0, 4))). Empty = v5a, draw for draw.
+    v5_factor: tuple = ()
 
     @property
     def effective_multiplier(self) -> float:

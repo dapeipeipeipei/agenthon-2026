@@ -57,6 +57,14 @@ def classify(asset: str, inflation_dominated: bool = False) -> tuple[int, str]:
     return 0, "no mapping for this asset id: symmetric"
 
 
+_FACTOR = re.compile(r"^(MKT|MKTRF|MKT_RF|HML|SMB|MOM|UMD|BAB|RMW|CMA|QMJ)$")
+
+
+def is_factor(asset: str) -> bool:
+    """Equity factor / index daily-return series (the factors_daily panel ids)."""
+    return bool(_FACTOR.match(str(asset).strip().upper()))
+
+
 def is_rate(asset: str) -> bool:
     """Government-yield target (UST tenors). Their stress direction is genuinely two-sided -- flight
     to quality (down) vs. an inflation/hawkish repricing (up) -- so v5 can treat their skew apart."""
