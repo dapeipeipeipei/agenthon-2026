@@ -180,3 +180,23 @@ is not uploaded.
   (`t2-work/scores_engine_v4_newrule.csv`); 5-seed mean 1.975 (`v4_final_eval.py`).
 * Toolkit pin unchanged (`qfbench2-common` v2.6.0 already in Dockerfile and workflows);
   `.github/workflows/t2-image.yml` `TRACK2_REF` -> `60509df`.
+
+### Update for the v5 candidates (2026-10-07; `t2-work/V5_NOTES.md`)
+
+* Main's `DEFAULT_PROFILE` stays `v4` (revision 3). Candidates are profiles `v5a` / `v5b`, built
+  from `cand/t2-v5a` / `cand/t2-v5b` where only `DEFAULT_PROFILE` differs; the workflow
+  `t2-image.yml` also builds on pushes to `cand/t2-*`.
+* v1-v4 draws bit-identical to the previous commit (sha256 over 90 cards x v1..v4).
+* `run_all_gates.py --engine engine --platform-env --engine-args "--profile v5a"`: **104/104
+  admissible, 0 fallbacks**; official verifier (`audit_metric.py score`): all 1.7297 (n = 90),
+  validation 1.5066 (n = 65), 2 cards at the 8.0 clip, 0 inadmissible
+  (`t2-work/scores_engine_v5a_newrule.csv`).
+* Same with `--profile v5b` (platform env: no MODEL_*): **104/104, 0 fallbacks**, and every
+  `forecast.parquet` byte-identical to v5a's (104/104).
+* v5b against a local fake House route (`v5_fake_house.py`, MODEL_* set, arbitrary readings):
+  **104/104 admissible, 0 fallbacks**, 1-2 requests per unit (max 3 allowed; limit 25),
+  `language_model_calls` recorded in the meta; score 1.7452 / val 1.4953 (useless-reader cost
+  +0.016, as the oracle predicts). `v5_test_house.py` 9/9, `v4_test_house.py` 8/8.
+* A8 for v5b: the image now reads MODEL_* when present (House route through the proxy env, POST
+  `/v1/chat/completions`, bearer, thinking disabled); `models` in `submission.v5b.json` carries the
+  HOUSE-MODEL.md row and is resealed. v5a / v4: unchanged (no network, `models: []`).

@@ -81,3 +81,30 @@ At run time the engine uses only panel rows with `date <= as-of` (`engine/io.py`
 only corpus documents with `timestamp <= as-of` (`engine/events.py` `_detect`, which also drops
 undated documents), where the as-of is the earlier of `--asof` and the card's as-of
 (`engine/forecast.py` `run`).
+
+## v5 candidates (2026-10-07): profiles `v5a` and `v5b`
+
+Built from branches `cand/t2-v5a` / `cand/t2-v5b` (identical code to `main`; only
+`engine/forecast.py` `DEFAULT_PROFILE` differs). Descriptors `submission.v5a.json` (`models: []`)
+and `submission.v5b.json` (`models` = the House row of HOUSE-MODEL.md). Method and all numbers:
+`t2-work/V5_NOTES.md`.
+
+* **v5a constants** (`PROFILES["v5a"]`): the v4 revision-3 rows with the F4 row replaced by
+  (width 2.0, no mixture, drift 1.0, log-normal path scale 0, scale-linked stress-side skew 1.0) and
+  `v5_rate_skew = 0` (UST-yield targets get no table skew). Selected on the same public practice
+  units and reconstructed outcomes (all dated 2024-12-31 or earlier) by `t2-work/v5_newrule.py`
+  (880-row per-family sweep + F4 refinement under the 60509df rule; per-family 1-SE rule;
+  leave-one-era-out and forward validation). Nothing per unit is stored; `.v5_sweep.pkl` /
+  `.v5_sweep_f4rs.pkl` (local caches with reconstructed outcomes) are git-ignored and not in the
+  build context. New code: `engine/v4.py` row fields [6] `ln_s`, [7] `skew`; `engine/assets.py`
+  `is_rate` (asset-id pattern, no unit id).
+* **v5b** = v5a + `engine/house.py` `assess_v5` (House model `nvidia/nemotron-3-super-120b-a12b`,
+  revision `rl-030326-fp8`, called through the platform's House route only; base-pretraining
+  exception of HOUSE-MODEL.md; no participant tuning of the model). It reads only the unit's own
+  documents dated <= as-of (calendar years masked), asks for a move size and per-target direction
+  with verbatim quotes, and runs a closed-book recall probe that drops any direction the model also
+  states without documents. Effect bounds (width x exp(0.1 s) on F2/F4; skew 0.25 sd_h on F2 and
+  F4 yields) were chosen by `t2-work/v5_house_oracle.py` on the practice units (synthetic readings
+  derived from the reconstructed outcomes are used ONLY in that offline ablation to size the
+  bounds; nothing derived from an outcome is in the image). At most 3 requests per unit; no
+  MODEL_* or any error -> forecast identical to v5a.

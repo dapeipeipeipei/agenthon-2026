@@ -55,3 +55,9 @@ def classify(asset: str, inflation_dominated: bool = False) -> tuple[int, str]:
         if pat.match(a):
             return d, why
     return 0, "no mapping for this asset id: symmetric"
+
+
+def is_rate(asset: str) -> bool:
+    """Government-yield target (UST tenors). Their stress direction is genuinely two-sided -- flight
+    to quality (down) vs. an inflation/hawkish repricing (up) -- so v5 can treat their skew apart."""
+    return bool(_UST.match(str(asset).strip().upper()))

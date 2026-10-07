@@ -395,7 +395,9 @@ def rationale_text(
     L.append("**How this was produced.** A deterministic program (engine "
              f"{prov.get('engine_version', '?')}, profile `{prof.get('name', 'fallback')}`, seed "
              f"{stats.get('seed', prov.get('seed', '?'))}). "
-             + ("The House language model was consulted for a bounded widening only (section 5). " if house_used
+             + ("The House language model was consulted for a bounded reading only (section 5): a width scale "
+                "and, where the deterministic stress table leaves a target's direction open, a bounded skew "
+                "direction that passed a verbatim-quote check and a closed-book recall probe. " if house_used
                 else "No language model was called. ")
              + "Every number below is computed in this run from the panel rows dated on or before the as-of "
              "and the corpus documents dated on or before the as-of; no realized outcome, later data or "
@@ -769,12 +771,15 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
     L += ["", "## 5. Adjustments", ""]
     L.append(f"**5a. Family calibration.** The card states family **{family or 'unknown'}** "
              f"({'its own row' if fk.get('row') == 'family' else 'no family row: the baseline-like default row'}). "
-             "The row's constants are fixed in the image (engine/model.py profile v4, chosen once by "
+             f"The row's constants are fixed in the image (engine/model.py profile {(stats.get('profile') or {}).get('name', 'v4')}, chosen once by "
              "cross-validation across all practice cards of the family, never per unit): "
              f"width x{_f(fk.get('width'), '.4g')}, scale mixture p = {_f(fk.get('tail_p'), '.3g')}, "
              f"k = {_f(fk.get('tail_k'), '.3g')}, stress-side shift {_f(fk.get('asym'), '.3g')} x sd_h, "
              f"drift fraction {_f(fk.get('drift_frac'), '.3g')}, corpus event width "
-             f"{'on' if fk.get('ev_width') else 'off'}.")
+             f"{'on' if fk.get('ev_width') else 'off'}"
+             + (f", log-normal path-scale mixture sigma {_f(fk.get('ln_s'), '.3g')}" if float(fk.get('ln_s') or 0) else "")
+             + (f", scale-linked stress-side skew {_f(fk.get('skew'), '.3g')} x sd_h per unit path scale"
+                if float(fk.get('skew') or 0) else "") + ".")
     L += ["", "**5b. What the text corpus changed.**"]
     used: list[str] = []
     if "event_width" in adjs:
@@ -791,8 +796,11 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                     f"{rd.get('dovish')} per 1k words -> inflation_dominated = {ev.get('inflation_dominated')})")
     if "house_model" in adjs:
         x = adjs["house_model"]
-        used.append(f"House-model widening x{_f(x.get('widen'), '.3f')} and +{x.get('asym_add')} sd_h tail "
-                    f"shift ({x.get('requests')} request(s); answer {x.get('answer')})")
+        hs = (adjs.get("scale_linked_skew") or {}).get("from_house") or {}
+        used.append(f"House-model width x{_f(x.get('widen'), '.3f')}"
+                    + (f", skew direction(s) {hs} (sd_h per unit scale; only where the stress table is open)" if hs else
+                       ", no skew direction applied")
+                    + f" ({x.get('requests')} request(s); reading {x.get('answer')}; recall probe {x.get('recall_check')})")
     if used:
         L.append("The corpus reached the draws only through: " + "; ".join(used) + ".")
         if asym and ust:
@@ -821,6 +829,15 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                  + ". Direction 0 = no shift.")
     else:
         L.append("None for this family.")
+    skw = adjs.get("scale_linked_skew")
+    if skw:
+        sba = skw.get("signed_skew_by_asset") or {}
+        L.append(f"Scale-linked skew (location-scale mixture): every draw's path is shifted by signed size x its own "
+                 f"path scale x sd/step final x sqrt(t), so draws with a larger scale lean further to the stress "
+                 f"side. Signed size per asset (sd_h per unit scale): "
+                 + "; ".join(f"`{a}` {float(sba.get(a, 0.0)):+.3g}" for a in assets)
+                 + (f" (House direction for {', '.join(skw.get('from_house'))})" if skw.get("from_house") else "")
+                 + ". Government yields carry none from the table (their stress direction is two-sided).")
 
     # ---- 6. scale and shape
     L += ["", "## 6. Scale and shape", ""]
@@ -860,11 +877,15 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
     a_sz = float((asym or {}).get("size_sd_h", 0.0) or 0.0)
     dirs = (asym or {}).get("direction") or {}
     eff = float(fin.get("effective_mixture_multiplier", 1.0) or 1.0)
-    L.append("Centre = anchor + drift fraction x mu x s + E[tail shift], with E[tail shift] = (share of draws "
-             "in the mixture) x direction x shift x sd/step final x sqrt(s). Nothing else moves the centre; "
+    sba = ((adjs.get("scale_linked_skew") or {}).get("signed_skew_by_asset")) or {}
+    p_mix, k_mix, lns = float(fk.get("tail_p", 0) or 0), float(fk.get("tail_k", 1) or 1), float(fk.get("ln_s", 0) or 0)
+    e_mult = ((1 - p_mix) + p_mix * k_mix) * math.exp(0.5 * lns * lns)
+    L.append("Centre = anchor + drift fraction x mu x s + E[tail shift] + E[skew], with E[tail shift] = (share of "
+             "draws in the mixture) x direction x shift x sd/step final x sqrt(s) and E[skew] = signed skew x "
+             f"E[path scale] ({e_mult:.4f}) x sd/step final x sqrt(s). Nothing else moves the centre; "
              "the last column is the mean of the submitted draws (Monte-Carlo noise only).")
     L.append("")
-    L.append("| asset | key | s | anchor | + frac x mu x s | + E[tail shift] | = centre | draws mean |")
+    L.append("| asset | key | s | anchor | + frac x mu x s | + E[tail shift] + E[skew] | = centre | draws mean |")
     L.append("|---|---|---|---|---|---|---|---|")
     spread = []
     for j, a in enumerate(assets):
@@ -877,11 +898,13 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
         d = int(dirs.get(a, 0))
         for hi, h in enumerate(horizons):
             k = int(k_steps(a, h))
-            e_tail = p_tail * d * a_sz * sdf * math.sqrt(k)
+            e_tail = p_tail * d * a_sz * sdf * math.sqrt(k) + float(sba.get(a, 0.0)) * e_mult * sdf * math.sqrt(k)
             centre = anchor + frac * mu * k + e_tail
             mean = _f(float(np.mean(samples[:, j, hi]))) if samples is not None else "n/a"
             L.append(f"| {a} | {h} | {k} | {_f(anchor)} | {frac:g} x {mu:+.5g} x {k} = {frac * mu * k:+.5g} | "
-                     f"{p_tail:.4f} x {d:+d} x {a_sz:.4f} x {sdf:.5g} x sqrt({k}) = {e_tail:+.5g} | "
+                     f"{p_tail:.4f} x {d:+d} x {a_sz:.4f} x {sdf:.5g} x sqrt({k})"
+                     + (f" + {float(sba.get(a, 0.0)):+.3g} x {e_mult:.4f} x {sdf:.5g} x sqrt({k})" if sba.get(a) else "")
+                     + f" = {e_tail:+.5g} | "
                      f"{_f(centre)} | {mean} |")
             nominal = sdf * math.sqrt(k) * eff
             sd_draws = _f(float(np.std(samples[:, j, hi], ddof=1)), ".4g") if samples is not None else "n/a"
@@ -899,6 +922,9 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
           "width one for one (section 3 and the ledger).",
           "- A different card family selects a different calibrated row (5a); an unknown family gets the "
           "baseline-like default.",
-          "- Nothing in this file is a judgement about where the target will land; the engine has no channel "
-          "through which such a judgement could enter the draws."]
+          ("- The only judgement-like input is the House reading of section 5b, bounded by the profile and "
+           "dropped whenever the closed-book probe suggests memory of the outcome."
+           if "house_model" in adjs else
+           "- Nothing in this file is a judgement about where the target will land; the engine has no channel "
+           "through which such a judgement could enter the draws.")]
     return L

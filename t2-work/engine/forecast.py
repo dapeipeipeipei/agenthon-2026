@@ -224,7 +224,8 @@ def run(a: argparse.Namespace) -> int:
                   "set) with fixed per-family calibration (width, scale mixture, stress-side tail shift, drift "
                   "fraction) chosen by cross-validation on the practice cards; corpus keyword features only "
                   "where the family row enables them; "
-                  + ("bounded House-model widening" if house else "no language model"))
+                  + ("bounded House-model reading (width scale; skew direction only where the stress "
+                     "table leaves it open; centres untouched)" if house else "no language model"))
     elif used_profile.uses_events:
         method = ("stationary block bootstrap, recent/full vol blend, shared blocks across assets; "
                   "deterministic corpus event layer (keyword features -> width / asymmetric tail / "
@@ -250,7 +251,10 @@ def run(a: argparse.Namespace) -> int:
             "v4_resolved": ({k: (stats.get("derivation") or {}).get(k) for k in ("family", "family_knobs")}
                             if derived == "v4" else None),
             "seed": seed,
-            "language_model_calls": 0,
+            "language_model_calls": int(sum(int(x.get("requests") or 0) for x in
+                                            ((stats.get("derivation") or {}).get("adjustments") or [])
+                                            if isinstance(x, dict) and x.get("name") == "house_model")
+                                        if isinstance(stats, dict) else 0),
             "fallback": fallback is not None,
             "fallback_reason": fallback,
             "fallback_chain": fallback_chain,

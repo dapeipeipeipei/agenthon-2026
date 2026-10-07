@@ -90,8 +90,16 @@ def family_knobs(profile: Any, family: str | None) -> dict[str, Any]:
     row = table.get(family or "", table.get("default", (1.0, 0.0, 1.0, 0.0, False)))
     w, p, k, asym, evw = row[:5]
     drift = float(row[5]) if len(row) > 5 else float(profile.v4_drift)
+    # v5 extensions (optional; absent = 0 = the v4 behaviour, draw for draw):
+    #   [6] ln_s  per-path log-normal scale mixture: every path's sd x exp(ln_s * N(0,1)) (heavy tails
+    #             that keep each path's cross-horizon/cross-asset shape, so the variogram stays coherent)
+    #   [7] skew  every path shifted skew x (its own scale) x sd_final x sqrt(t) in the asset's stress
+    #             direction (engine/assets.py): a location-scale mixture whose large-scale paths lean
+    #             toward the stress side
+    ln_s = float(row[6]) if len(row) > 6 else 0.0
+    skew = float(row[7]) if len(row) > 7 else 0.0
     return {"width": float(w), "tail_p": float(p), "tail_k": float(k), "asym": float(asym),
-            "ev_width": bool(evw), "drift_frac": drift,
+            "ev_width": bool(evw), "drift_frac": drift, "ln_s": ln_s, "skew": skew,
             "row": "family" if (family or "") in table else "default"}
 
 
@@ -156,8 +164,14 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     w_event = float(plan["w_event"]) if (plan and fk["ev_width"]) else 1.0
     # optional House-model reader (engine/house.py): OFF unless JINPEI_USE_HOUSE=1 and the
     # platform injected MODEL_*; widen-only, stress-side tail size only, never the centre.
+    # v5b: the profile turns the House layer on (no env switch); it is still a no-op unless the
+    # platform injected MODEL_*, and every failure returns None = exactly the House-free forecast.
     hz = None
-    if os.environ.get("JINPEI_USE_HOUSE", "0").strip() == "1":   # house (and urllib) imported only then
+    if getattr(profile, "v5_house", False):
+        from . import house    # house (and urllib) imported only for a House profile
+        if house.enabled_v5():
+            hz = house.assess_v5(asof, names, horizons, feats, family, profile)
+    elif os.environ.get("JINPEI_USE_HOUSE", "0").strip() == "1":   # v4's optional reader (legacy switch)
         from . import house
         hz = house.assess(asof, names, horizons, feats) if house.enabled() else None
     w_house = float(hz["widen"]) if hz else 1.0
@@ -193,13 +207,15 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     # ---- per-path scale mixture + asymmetric tail shift
     tail_mask = rng.random(n_draws) < fk["tail_p"]
     mult = np.where(tail_mask, fk["tail_k"], 1.0)
+    if fk["ln_s"] > 0:     # v5: log-normal per-path scale (drawn only when enabled: v4 draws unchanged)
+        mult = mult * np.exp(fk["ln_s"] * rng.standard_normal(n_draws))
     paths = np.cumsum(Z * mult[:, None, None] * sd_final[None, None, :], axis=1)
     t = np.arange(1, path_len + 1, dtype=float)
     drift = fk["drift_frac"] * mu
     paths += drift[None, None, :] * t[None, :, None]
     adjustments: list[dict[str, Any]] = []
     dirs = (plan or {}).get("direction", {}) if plan else {}
-    asym = (fk["asym"] + (float(hz["asym_add"]) if hz else 0.0)) * (float(plan["cell_damp"]) if plan else 1.0)
+    asym = (fk["asym"] + (float(hz.get("asym_add", 0.0)) if hz else 0.0)) * (float(plan["cell_damp"]) if plan else 1.0)
     if asym and tail_mask.any() and plan:
         for j, a in enumerate(inputs):
             d = int(dirs.get(a.asset, 0))
@@ -208,6 +224,34 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         adjustments.append({"name": "asymmetric_tail", "size_sd_h": asym, "n_paths": int(tail_mask.sum()),
                             "direction": {a: int(dirs.get(a, 0)) for a in names},
                             "why": "stress-direction table (engine/assets.py) x family calibration"})
+    # scale-linked skew: deterministic part (family row x stress table, yields scaled by
+    # v5_rate_skew) plus, only where that leaves the direction open (signed skew 0), the House
+    # reading's direction at the profile's bounded size (v5b).
+    skew_by_asset: dict[str, float] = {}
+    house_skew: dict[str, float] = {}
+    if plan:
+        from .assets import is_rate
+        for j, a in enumerate(inputs):
+            d = int(dirs.get(a.asset, 0))
+            sk = fk["skew"] * (float(getattr(profile, "v5_rate_skew", 1.0)) if is_rate(a.asset) else 1.0)
+            signed = d * sk
+            if signed == 0.0 and hz and hz.get("skew_dir"):
+                hd = int(hz["skew_dir"].get(a.asset, 0))
+                hb = float(hz.get("skew_size", 0.0))
+                if hd and hb:
+                    signed = hd * hb
+                    house_skew[a.asset] = signed
+            if signed:
+                skew_by_asset[a.asset] = signed
+                paths[:, :, j] += signed * mult[:, None] * sd_final[j] * np.sqrt(t)[None, :]
+    skew = fk["skew"]
+    if skew_by_asset:
+        adjustments.append({"name": "scale_linked_skew", "size_sd_h_per_unit_scale": skew,
+                            "direction": {a: int(dirs.get(a, 0)) for a in names},
+                            "signed_skew_by_asset": skew_by_asset, "from_house": house_skew,
+                            "why": "location-scale mixture leaning to the stress side (engine/assets.py "
+                                   "direction table x family calibration; House direction only where "
+                                   "the table leaves it open)"})
 
     samples = np.empty((n_draws, A, len(horizons)))
     for j, a in enumerate(inputs):
@@ -226,13 +270,18 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                                "meeting_excess": plan["meeting_excess"],
                                "docs": _top_docs(feats)})
     if hz:
-        adjustments.insert(0, {"name": "house_model", "widen": w_house, "asym_add": hz["asym_add"],
+        adjustments.insert(0, {"name": "house_model", "widen": w_house, "asym_add": hz.get("asym_add", 0.0),
+                               "skew_dir": hz.get("skew_dir"), "skew_size": hz.get("skew_size"),
                                "answer": hz["answer"], "requests": hz["requests"],
-                               "why": "House-model reading of the dated documents (bounded, widen-only)"})
+                               "recall_check": hz.get("recall_check"),
+                               "why": hz.get("why", "House-model reading of the dated documents (bounded, widen-only)")})
+    if fk["ln_s"] > 0:
+        adjustments.append({"name": "lognormal_scale_mixture", "ln_s": fk["ln_s"],
+                            "why": "heavy-tailed per-path scale, family calibration"})
     if fk["tail_p"] > 0 and fk["tail_k"] != 1.0:
         adjustments.append({"name": "scale_mixture", "tail_p": fk["tail_p"], "tail_k": fk["tail_k"],
                             "n_paths": int(tail_mask.sum())})
-    eff = float(np.sqrt((1 - fk["tail_p"]) + fk["tail_p"] * fk["tail_k"] ** 2))
+    eff = float(np.sqrt(((1 - fk["tail_p"]) + fk["tail_p"] * fk["tail_k"] ** 2) * np.exp(2.0 * fk["ln_s"] ** 2)))
     per: dict[str, Any] = {}
     for j, a in enumerate(inputs):
         # v1-v3-shaped fields for the generic rationale writer: in v4 the "recent" and "full"
@@ -264,7 +313,7 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         "correlation_window": (np.corrcoef(X300, rowvar=False).round(3).tolist() if A > 1 else None),
         "adjustments": adjustments,
         "final": {"effective_mixture_multiplier": eff, "w_event": w_event, "w_family": fk["width"],
-                  "w_house": w_house, "asym_shift_sd_h": asym},
+                  "w_house": w_house, "asym_shift_sd_h": asym, "skew": skew},
     }
     ev = None
     if plan:

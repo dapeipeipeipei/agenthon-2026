@@ -87,6 +87,17 @@ class Profile:
     #: family -> (width, tail_p, tail_k, asym_shift, event_width_on[, drift_frac]); "default" row
     #: is used for an unknown / missing family
     v4_family: tuple = (("default", 1.0, 0.0, 1.0, 0.0, False),)
+    #: v5: multiplier on the scale-linked skew (row field [7]) for government-yield targets
+    #: (engine/assets.is_rate): 1.0 = same as every other asset, 0.0 = yields stay symmetric
+    v5_rate_skew: float = 1.0
+    #: v5b House layer (engine/house.py assess_v5): on only for a House profile AND injected MODEL_*.
+    #: width x exp(v5_house_width x s), s in {-1, 0, +1} from the model's move-size reading, only for
+    #: the families in v5_house_width_fams; skew of v5_house_skew[family] x sd_h per unit scale in the
+    #: model's direction, only for assets whose deterministic signed skew is 0.
+    v5_house: bool = False
+    v5_house_width: float = 0.0
+    v5_house_width_fams: tuple = ()
+    v5_house_skew: tuple = ()
 
     @property
     def effective_multiplier(self) -> float:
@@ -131,6 +142,21 @@ PROFILES = {
                              ("F3", 1.0, 0.0, 1.0, 0.0, False, 0.5),
                              ("F4", 2.0, 0.2, 1.5, 1.0, False, 1.0))),
 }
+# v5a (2026-10-07, t2-work/V5_NOTES.md, v5_newrule.py): v4 revision 3 with ONE row changed. F4 drops
+# the 20%-path mixture + tail-only shift for a scale-linked skew on every path: each path leans
+# 1.0 x its own scale x sd_h toward the asset's stress side (engine/assets.py table), EXCEPT
+# government yields, whose stress direction is two-sided (flight to quality vs hawkish repricing:
+# the table matches the realized public F4 yield moves on 5 of 10 cells, other assets 21 of 22),
+# so yields stay symmetric (v5_rate_skew 0). Rows grow two optional fields (ln_s, skew) -- see
+# engine/v4.py family_knobs. Held-out (leave-one-era-out, 1-SE rule, F4 cards): 2.57 vs the rev3
+# row's in-sample 3.22; forward (>= 2019) 3.44 vs 3.94. Skew kept at 1.0 (CV picks 1.25-1.5).
+# F1-F3 unchanged (their v5 shape knobs did not survive held-out).
+PROFILES["v5a"] = replace(PROFILES["v4"], name="v5a", v5_rate_skew=0.0,
+                          v4_family=(("default", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                                     ("F1", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                                     ("F2", 1.25, 0.0, 1.0, 0.0, False, 1.0),
+                                     ("F3", 1.0, 0.0, 1.0, 0.0, False, 0.5),
+                                     ("F4", 2.0, 0.0, 1.0, 0.0, False, 1.0, 0.0, 1.0)))
 
 
 def without_events(p: Profile) -> Profile:
@@ -559,3 +585,12 @@ def gaussian_fallback(
     samples = np.nan_to_num(samples, nan=0.0, posinf=0.0, neginf=0.0)
     return samples, {"assets": per, "steps": steps, "path_len": max(steps.values()),
                      "block_len": "n/a", "recent_window": "n/a", "n_rows": "n/a", "seed": seed}
+# v5b (2026-10-07): v5a + the bounded House reader (engine/house.py assess_v5). Bounds from the oracle
+# ablation (t2-work/v5_house_oracle.py, V5_NOTES.md): each knob's cost with a USELESS (random) reader
+# is <= ~0.01 on the all-card mean (worst case ~= v5a), break-even direction accuracy ~0.55.
+#   width  x exp(0.1 x s), s in {-1, 0, +.5, +1}, families F2 and F4 only (the text-led families);
+#   skew   0.25 sd_h per unit path scale in the reader's direction, F2 (all targets) and F4 yields
+#          (the only F4 targets whose stress direction the table leaves open).
+# Without MODEL_* (or on any House failure) v5b draws are bit-identical to v5a.
+PROFILES["v5b"] = replace(PROFILES["v5a"], name="v5b", v5_house=True, v5_house_width=0.1,
+                          v5_house_width_fams=("F2", "F4"), v5_house_skew=(("F2", 0.25), ("F4", 0.25)))

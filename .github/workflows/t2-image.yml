@@ -9,7 +9,7 @@ name: t2-image
 on:
   workflow_dispatch:
   push:
-    branches: [ci/t2-image]
+    branches: [ci/t2-image, "cand/t2-*"]
     paths:
       - "t2-work/engine/**"
       - "t2-work/Dockerfile"

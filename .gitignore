@@ -30,3 +30,4 @@ t2-work/scores_*.json
 t2-work/.v4_cache.pkl
 t2-work/.v4_sweep.pkl
 t2-work/.v4_newrule_sweep.pkl
+t2-work/.v5_*.pkl
