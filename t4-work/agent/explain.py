@@ -202,72 +202,193 @@ def _clean(s: str) -> bool:
     return not any(d in low for d in DENY) and "://" not in low
 
 
+def _driver_reasons(unit: Unit, preds: list[Pred], used: set) -> list[dict]:
+    """One candidate reason per driver the task statement names: the best-matching verbatim
+    passage (BM25 over the shared documents and every entity's own documents) as premise, the
+    driver and the forecast method it feeds as mechanism, the affected rows as implication."""
+    from .retrieve import bm25_search, task_drivers, tokens
+
+    drivers = task_drivers(unit)
+    if not drivers:
+        return []
+    by_id = {p.entity_id: p for p in preds}
+    tgt = tokens(unit.target_name.replace("_", " "))
+    out: list[dict] = []
+    taken: set = set(used)
+    for drv in drivers:
+        q = tokens(drv) * 2 + tgt
+        if not q:
+            continue
+        cands = list(bm25_search(unit, None, q, k=12, own_bonus=0.0, scope="all"))
+        best = None
+        for score, p in cands:
+            doc = unit.docs[p.doc_id]
+            t = _trim_span(doc.text, p.start, p.end, max_chars=600, unit=unit)
+            if t is None or (p.doc_id, t[0], t[1]) in taken:
+                continue
+            frag = doc.text[t[0]:t[1]]
+            if len(re.findall(r"[A-Za-z]{3,}", frag)) < 4:
+                continue
+            # the passage must actually speak to the driver (two of its words, or its only word)
+            # and read as text, not as a run of layout whitespace
+            dt = set(tokens(drv))
+            if len(dt & set(tokens(frag))) < min(2, len(dt)):
+                continue
+            if len(frag.split()) < 6 or sum(not c.isspace() for c in frag) < 0.75 * len(frag):
+                continue
+            best = (score, (p.doc_id, t[0], t[1]))
+            break
+        if best is None:
+            continue
+        span = best[1]
+        doc = unit.docs[span[0]]
+        scope = [p for p in preds if doc.admits(p.entity_id)]
+        if not scope:
+            continue
+        methods: dict[str, list[Pred]] = {}
+        for p in scope:
+            methods.setdefault(p.method, []).append(p)
+        main_m = max(methods.items(), key=lambda kv: (len(kv[1]), kv[0]))[0]
+        mech = (f"The task names {drv} as a driver of the outcome; this pre-cutoff passage records where it stood "
+                f"at the cutoff. ")
+        mech += _METHOD_TEXT.get(main_m, "")
+        ex = sorted(methods[main_m], key=lambda p: -p.strength)[:2]
+        for p in ex:
+            if p.facts:
+                mech += f" For {p.entity_id}: {p.facts[0]}."
+        impl_parts = [_answer_phrase(unit, p) for p in scope]
+        impl = "Implies " + "; ".join(impl_parts) + "."
+        if len(impl) > 1500:
+            impl = impl[:1490].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
+        taken.add(span)
+        out.append({
+            "premise": doc.text[span[1]:span[2]],
+            "mechanism": mech[:1500],
+            "answer_implication": impl,
+            "scope": {"entities": [p.entity_id for p in scope]},
+            "citations": [{"doc_id": span[0], "span_start": span[1], "span_end": span[2]}],
+            "_span": span,
+        })
+        if len(out) >= 3:
+            break
+    return out
+
+
+def _status_quo_label(unit: Unit) -> str | None:
+    """The label a no-information answer would give (no event / in line / flat), if any."""
+    for lab in unit.labels:
+        ll = lab.lower().replace("_", " ")
+        if any(w in ll for w in ("no event", "none", "inline", "in line", "flat", "unchanged", "no change")):
+            return lab
+    return None
+
+
+def _method_reason(unit: Unit, method: str, members: list[Pred], used: set) -> dict | None:
+    # strongest first; among equals, the row with the richer derivation (e.g. a stated going-concern
+    # doubt) gives the more informative premise
+    default = _status_quo_label(unit)
+    members = sorted(members, key=lambda p: (not (p.label and p.label != default), -round(p.strength, 3),
+                                             -len(p.facts), p.entity_id))
+    rep = next((p for p in members if _premise_span(unit, p, used) and _premise_span(unit, p, used) not in used), None)
+    rep = rep or next((p for p in members if _premise_span(unit, p, used)), None)
+    if rep is None:
+        return None
+    ps = _premise_span(unit, rep, used)
+    doc = unit.docs[ps[0]]
+    premise = doc.text[ps[1]:ps[2]]
+    facts = "; ".join(rep.facts[:3])
+    mech = _METHOD_TEXT[method]
+    if facts:
+        mech += f" For {rep.entity_id}: {facts}."
+    others = [p for p in members if p is not rep and p.facts]
+    seen_facts = {rep.facts[0]} if rep.facts else set()
+    for p in others[:6]:
+        if p.facts[0] in seen_facts:
+            continue  # the same generic sentence for every row says nothing new
+        seen_facts.add(p.facts[0])
+        extra = f" For {p.entity_id}: {p.facts[0]}."
+        if len(mech) + len(extra) > 1400:
+            break
+        mech += extra
+    impl_parts = [_answer_phrase(unit, p) for p in members]
+    impl = "Implies " + "; ".join(impl_parts) + "."
+    if len(impl) > 1500:
+        impl = impl[:1490].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
+    cites = [{"doc_id": ps[0], "span_start": ps[1], "span_end": ps[2]}]
+    for p in members:
+        if len(cites) >= 3:
+            break
+        q = _premise_span(unit, p, used | {ps})
+        if q and q[0] in unit.docs and all((c["doc_id"], c["span_start"], c["span_end"]) != q for c in cites):
+            cites.append({"doc_id": q[0], "span_start": q[1], "span_end": q[2]})
+    return {
+        "premise": premise,
+        "mechanism": mech,
+        "answer_implication": impl,
+        "scope": {"entities": [p.entity_id for p in members]},
+        "citations": cites,
+        "_span": ps,
+    }
+
+
 def build_reasons(unit: Unit, preds: list[Pred]) -> list[dict]:
+    """Up to three distinct reasons: the strongest forecast method's reason first, then the
+    drivers the task statement names (each with its own best-matching verbatim premise), then
+    further method reasons; with too few, the strongest single rows get their own reason."""
     groups: dict[str, list[Pred]] = {}
     for pr in preds:
         if pr.method in _METHOD_TEXT:
             groups.setdefault(pr.method, []).append(pr)
     order = sorted(groups.items(), key=lambda kv: (-sum(p.strength for p in kv[1]) - 0.01 * len(kv[1]), kv[0]))
     order = [(m, sorted(ms, key=lambda p: (-p.strength, p.entity_id))) for m, ms in order]
-    # Fewer than three methods: give the strongest single rows their own reason, so up to three
-    # distinct, specific reasons are submitted (a target reason nobody covers scores zero).
-    while len(order) < 3:
-        k = max(range(len(order)), key=lambda i: len(order[i][1]), default=None)
-        if k is None or len(order[k][1]) < 2:
-            break
-        m, ms = order[k]
-        order[k] = (m, ms[1:])
-        order.insert(k, (m, ms[:1]))
+
+    used: set = set()
+    cands: list[dict] = []
+    if order:
+        r = _method_reason(unit, order[0][0], order[0][1], used)
+        if r:
+            cands.append(r)
+            used.add(r["_span"])
+    try:
+        drv = _driver_reasons(unit, preds, used)
+    except Exception:  # noqa: BLE001 - driver reasons are an extra; never lose the others
+        drv = []
+    rest = list(order[1:])
+    while len(cands) < 6 and (drv or rest):
+        if drv:
+            r = drv.pop(0)
+            if r["_span"] not in used:
+                cands.append(r)
+                used.add(r["_span"])
+        if rest:
+            m, ms = rest.pop(0)
+            r = _method_reason(unit, m, ms, used)
+            if r:
+                cands.append(r)
+                used.add(r["_span"])
+    # Fewer than three: give the strongest single rows of the largest group their own reason.
+    if len(cands) < 3 and order:
+        m, ms = max(order, key=lambda kv: len(kv[1]))
+        for p in ms[:3]:
+            if len(cands) >= 3 or len(ms) < 2:
+                break
+            r = _method_reason(unit, m, [p], used)
+            if r and r["_span"] not in used:
+                cands.append(r)
+                used.add(r["_span"])
+
     reasons: list[dict] = []
     ev_bytes = 0
-    used: set = set()
-    for method, members in order:
+    for r in cands:
         if len(reasons) >= 3:
             break
-        members = sorted(members, key=lambda p: -p.strength)
-        rep = next((p for p in members if _premise_span(unit, p, used) and _premise_span(unit, p, used) not in used), None)
-        rep = rep or next((p for p in members if _premise_span(unit, p, used)), None)
-        if rep is None:
+        reason = {"reason_id": f"r{len(reasons) + 1}", **{k: v for k, v in r.items() if k != "_span"}}
+        if not (_clean(reason["premise"]) and _clean(reason["mechanism"]) and _clean(reason["answer_implication"])):
             continue
-        ps = _premise_span(unit, rep, used)
-        doc = unit.docs[ps[0]]
-        premise = doc.text[ps[1]:ps[2]]
-        facts = "; ".join(rep.facts[:3])
-        mech = _METHOD_TEXT[method]
-        if facts:
-            mech += f" For {rep.entity_id}: {facts}."
-        others = [p for p in members if p is not rep and p.facts][:3]
-        for p in others:
-            extra = f" For {p.entity_id}: {p.facts[0]}."
-            if len(mech) + len(extra) > 1400:
-                break
-            mech += extra
-        impl_parts = [_answer_phrase(unit, p) for p in members]
-        impl = "Implies " + "; ".join(impl_parts) + "."
-        if len(impl) > 1500:
-            impl = impl[:1490].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
-        cites = [{"doc_id": ps[0], "span_start": ps[1], "span_end": ps[2]}]
-        for p in members:
-            if len(cites) >= 3:
-                break
-            q = _premise_span(unit, p, used | {ps})
-            if q and q[0] in unit.docs and all((c["doc_id"], c["span_start"], c["span_end"]) != q for c in cites):
-                cites.append({"doc_id": q[0], "span_start": q[1], "span_end": q[2]})
-        reason = {
-            "reason_id": f"r{len(reasons) + 1}",
-            "premise": premise,
-            "mechanism": mech,
-            "answer_implication": impl,
-            "scope": {"entities": [p.entity_id for p in members]},
-            "citations": cites,
-        }
-        if not (_clean(premise) and _clean(mech) and _clean(impl)):
-            continue
-        core = [{k: r[k] for k in ("reason_id", "premise", "mechanism", "answer_implication")} for r in reasons + [reason]]
-        ev = sum(len(unit.docs[c["doc_id"]].text[c["span_start"]:c["span_end"]].encode("utf-8")) + 100 for c in cites)
+        core = [{k: x[k] for k in ("reason_id", "premise", "mechanism", "answer_implication")} for x in reasons + [reason]]
+        ev = sum(len(unit.docs[c["doc_id"]].text[c["span_start"]:c["span_end"]].encode("utf-8")) + 100 for c in reason["citations"])
         if _bytes(core) > REASON_BYTES_BUDGET or ev_bytes + ev > EVIDENCE_BYTES_BUDGET:
             continue
         ev_bytes += ev
-        used.add(ps)
         reasons.append(reason)
     return reasons

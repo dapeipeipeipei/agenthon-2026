@@ -9,7 +9,7 @@ from .corpus import Unit, task_table_text
 from .explain import build_claims, build_reasons, _task_row_claim
 from .predict import Pred
 
-AGENT_VERSION = "t4-agent 0.2.0"
+AGENT_VERSION = "t4-agent 0.3.0"
 
 #: The reasoning grader's cap on the per-entity answer it reads (entity_id + declared answer
 #: fields, compact JSON UTF-8 bytes). Over it, the unit's reasoning is not judged at all.
@@ -39,15 +39,16 @@ def _numbers(pr: Pred, sig: int) -> tuple[float, float, float]:
     return point, min(lo, point, hi), max(hi, point, lo)
 
 
-def _compact_numbers(pr: Pred) -> tuple[float, float, float]:
-    """The fewest significant digits (>= 2) whose rounding moves the point by at most 0.5% of the
-    band and widens the band by at most 1%, so shortening never costs measurable score."""
+def _compact_numbers(pr: Pred, point_tol: float = 0.005, width_tol: float = 1.01) -> tuple[float, float, float]:
+    """The fewest significant digits (>= 2) whose rounding moves the point by at most `point_tol`
+    of the band and widens the band by at most `width_tol` (defaults: 0.5% / 1%, so shortening
+    never costs measurable score)."""
     p6, lo6, hi6 = _numbers(pr, 6)
     width = hi6 - lo6
     out = (p6, lo6, hi6)
     for sig in (2, 3, 4, 5):
         p, lo, hi = _numbers(pr, sig)
-        if width > 0 and abs(p - p6) <= 0.005 * width and (hi - lo) <= 1.01 * width:
+        if width > 0 and abs(p - p6) <= point_tol * width and (hi - lo) <= width_tol * width:
             out = (p, lo, hi)
             break
     # a whole number is written without ".0" (JSON number either way)
@@ -61,12 +62,16 @@ def _judge_answer_bytes(rows: list[dict]) -> int:
     return len(json.dumps(proj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")) - 2
 
 
-def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_notes: dict | None = None) -> dict:
+def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_notes: dict | None = None,
+                 reasons_override: list[dict] | None = None) -> dict:
     rows = []
-    for compact in (False, True):
+    # full precision; then the cost-free compaction; then, only if the reasoning grader's answer
+    # cap is still exceeded, looser rounding (point within 2% / 5% of the band, band at most 5% /
+    # 10% wider): a unit over the cap gets no reasoning grade at all
+    for tol in (None, (0.005, 1.01), (0.02, 1.05), (0.05, 1.10)):
         rows = []
         for pr in preds:
-            point, lo, hi = _compact_numbers(pr) if compact else _numbers(pr, 6)
+            point, lo, hi = _numbers(pr, 6) if tol is None else _compact_numbers(pr, *tol)
             row: dict = {"entity_id": pr.entity_id, "point_forecast": point}
             if isinstance(pr.label, str) and pr.label and (unit.target_type == "classification" or unit.labels):
                 row["label"] = pr.label
@@ -81,7 +86,7 @@ def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_n
     ans: dict = {"task_id": unit.task_id, "entity_predictions": rows}
     if reasons:
         try:
-            rs = build_reasons(unit, preds)
+            rs = reasons_override if reasons_override else build_reasons(unit, preds)
             if rs:
                 ans["submitted_reasons"] = rs
         except Exception:  # noqa: BLE001 - reasons are optional; never risk the answer for them

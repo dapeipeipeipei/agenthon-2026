@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-analysis-dev",
+  "team_id": "team-00000000000000000000000000000000",
+  "track": "analysis",
+  "phase": "dev",
+  "category": "api",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "dapeipeipeipei/jinpei-t4",
+    "digest": "sha256:8ab8388e7cf5bfa441c4902b2cfb914bd27c5ebaf440f1358d3c5718b6fc5470"
+  },
+  "image_access": "public",
+  "models": [
+    {
+      "name": "nvidia/nemotron-3-super-120b-a12b",
+      "version": "rl-030326-fp8",
+      "revision": "rl-030326-fp8",
+      "training_cutoff": "unpublished",
+      "access": "api"
+    }
+  ],
+  "license": "Apache-2.0",
+  "descriptor_digest": "sha256:5815555805982e26ab2ef9e66854340c82fad00b1221566b7ed0c0b2625c787f"
+}

@@ -79,6 +79,9 @@ jobs:
       - name: House layer against a mock endpoint (agent from source)
         run: python t4-work/harness/mock_house.py | tee -a t4-ci-out/summary.txt
 
+      - name: House route in the image (mock server; the image's T4_USE_HOUSE decides on/off)
+        run: python t4-work/harness/house_in_image.py --image t4-local:ci --out-root t4-ci-out/house-in-image | tee -a t4-ci-out/summary.txt
+
       - name: Verb contract (no args / --help) in the image
         run: |
           docker run --rm --network=none t4-local:ci analyze --help | head -5
