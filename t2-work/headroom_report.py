@@ -96,7 +96,7 @@ def main() -> None:
     # ---------------------------------------------------------------- -1.34
     print("\n## What -1.34 needs (board = -(65 x val65 + 6 x x6) / 71)\n")
     print("| mean on the 6 unscorable cards (x6) | val65 needed for -1.34 |\n|---|---|")
-    for x6 in (8.0, 6.2, 5.86, 4.0, 2.0):
+    for x6 in (8.0, 6.2, 5.86, 4.0, 2.0, 0.0):
         print(f"| {x6} | {(1.34 * 71 - 6 * x6) / 65:.3f} |")
     print("\n(6.2 = M0's implied mean on them from its -2.6412 row; 5.86 = v4 10-06 implied from our -2.35.)")
 

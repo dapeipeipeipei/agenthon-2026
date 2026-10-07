@@ -23,7 +23,8 @@ Oracles are hindsight bounds built on M0's Gaussian, not forecasts.
    hindsight width** only reaches 1.679 (val65 1.500, board ≈ −1.71): −0.29 is the ceiling of all
    width/tail work, and a realistic magnitude signal captures little of it (below).
 3. **−1.34 is not reachable without direction (outcome-like) information.** It needs val65 ≈ 0.89
-   (if the 6 unscorable cards stay near M0's 6.2) – 0.92 (at our 5.86). Bounds on val65:
+   (if the 6 unscorable cards stay near M0's 6.2) – 0.92 (at our 5.86); even if those 6 scored 0 it
+   needs 1.46. Bounds on val65:
    per-card width 1.50; **magnitude AND path shape known exactly, sign unknown (+/-|y−m| two-point): 1.19
    (board ≈ −1.36)**; sign known + per-card width 0.745; centre known 0.49. So the Dev leaders must be
    getting both the direction and the size of the moves right on many cards — consistent with a House
@@ -126,6 +127,7 @@ Full tables (`PYTHONUTF8=1 .venv/Scripts/python t2-work/headroom_report.py`):
 | 5.86 | 0.923 |
 | 4.0 | 1.094 |
 | 2.0 | 1.279 |
+| 0.0 | 1.464 |
 
 (6.2 = M0's implied mean on them from its -2.6412 row; 5.86 = v4 10-06 implied from our -2.35.)
 
