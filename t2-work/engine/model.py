@@ -106,6 +106,16 @@ class Profile:
     #: the families in v5_house_split_fams and targets whose direction the stress table leaves open
     v5_house_q_max: float = 0.5
     v5_house_split_fams: tuple = ()
+    #: v5a_f4r (t2-work/F4R_NOTES.md): F4 government-yield targets only (engine.assets.is_rate); 0 / "" = off.
+    #: v5_rate_floor  per-step sd >= floor x the asset's full-history sd (yield vol mean-reverts)
+    #: v5_rate_width  own F4 width for yields (0 = the F4 row's width)
+    #: v5_rate_bimodal  symmetric +/- scale-linked shift (two-sided branches, sign drawn per path)
+    #: v5_rate_regime  yield stress direction from the corpus regime (v3 | pace | pace_fs), used by
+    #:                 the skew only when v5_rate_skew != 0
+    v5_rate_floor: float = 0.0
+    v5_rate_width: float = 0.0
+    v5_rate_bimodal: float = 0.0
+    v5_rate_regime: str = ""
 
     @property
     def effective_multiplier(self) -> float:

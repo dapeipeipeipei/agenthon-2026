@@ -302,3 +302,55 @@ def summary_line(f: dict[str, Any]) -> str:
             f"stress_score {f.get('stress_score')}, binary_score {f.get('binary_score')}, "
             f"inflation_dominated {f.get('inflation_dominated')}, meeting_in_window {f.get('meeting_in_window')} "
             f"(last FOMC statement {f.get('last_statement')}, {f.get('statement_age_days')} days old).")
+
+
+# ----------------------------------------------------------------------------- F4 rates regime (v5a_f4r line)
+#: Generic wording for the rates-regime question "is the stress inflation / hawkish-dominated
+#: (yields UP) or growth / financial-stress dominated (yields DOWN)?". Patterns are the generic
+#: ones of research/F4-events-audit.md (purchase-pace / taper wording, bank fragility, emergency
+#: easing); no proper nouns. Computed lazily (rate_regime) and ONLY for a profile that asks for it,
+#: so detect() and every v1-v5 feature dict stay byte-identical.
+TERMS_RATES: dict[str, list[tuple[str, float]]] = {
+    "hawk_pace": [
+        (r"\b(?:reduc\w*|slow\w*|adjust\w* down|moderat\w*|taper\w*) (?:in )?the (?:monthly )?pace of "
+         r"(?:its |our )?(?:net )?(?:asset )?purchases", 1.0),
+        (r"\bpace of purchases would be adjusted down\b", 1.0), (r"\bbring the program to a close\b", 1.0),
+        (r"\bexceeded (?:its |the )?2 percent\b", 1.0), (r"\binflation (?:has )?(?:run|running) (?:well )?above\b", 1.0),
+    ],
+    "fin_stress": [
+        (r"\bunrealized losses\b", 1.0), (r"\bafter[- ]tax loss", 1.0), (r"\bcapital rais", 0.7),
+        (r"\buninsured deposit", 1.0), (r"\bdeposit outflows?\b", 1.0), (r"\bwind[- ]?down\b", 0.7),
+        (r"\bliquidation\b", 1.0), (r"\blower(?:ed)? the target range\b", 1.0), (r"\bin the amounts needed\b", 1.0),
+        (r"\binter-?meeting\b", 1.0), (r"\bunscheduled\b", 1.0),
+    ],
+}
+_COMPILED_RATES = {fam: [(re.compile(p, re.IGNORECASE), w) for p, w in t] for fam, t in TERMS_RATES.items()}
+
+
+def rate_regime(feats: dict[str, Any] | None) -> dict[str, Any]:
+    """Recency-weighted densities (per 1k words, same weights as detect) of the rates-regime word
+    families, re-read from feats["text_dir"] with the same <= as-of leakage guard. Never raises."""
+    out = {"hawk_pace": 0.0, "fin_stress": 0.0, "ok": False}
+    try:
+        text_dir = pathlib.Path(str((feats or {}).get("text_dir", "")))
+        docs = {d["doc_id"]: d for d in (feats or {}).get("docs", [])}
+        if not docs or not text_dir.is_dir():
+            return out
+        idx = {str(d.get("doc_id", "")): d for d in _load_index(text_dir)}
+        acc = {f: 0.0 for f in TERMS_RATES}
+        w_words = 0.0
+        for did, rec in docs.items():          # only the documents detect() already accepted (<= as-of)
+            d = idx.get(did)
+            if d is None:
+                continue
+            text = _read_doc(text_dir, d)
+            w = float(rec.get("weight", 0.0))
+            w_words += w * float(rec.get("words", 0))
+            for fam, pats in _COMPILED_RATES.items():
+                acc[fam] += w * sum(wt * len(rx.findall(text)) for rx, wt in pats)
+        if w_words > 0:
+            out.update({f: round(1000.0 * acc[f] / w_words, 3) for f in TERMS_RATES})
+            out["ok"] = True
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out

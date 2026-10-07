@@ -199,6 +199,13 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                       "inflation_dominated": x.get("inflation_dominated", feats.get("inflation_dominated")),
                       "binary_score": x.get("binary_score", feats.get("binary_score"))}
     plan = plan_events(profile, feats_used, names, len(horizons)) if feats else None
+    regime = str(getattr(profile, "v5_rate_regime", "") or "")
+    if plan and regime and family == "F4" and any(_is_rate(n) for n in names):
+        plan = {**plan, "direction": dict(plan["direction"]), "direction_reason": dict(plan["direction_reason"])}
+        d, why = _rate_regime_direction(regime, feats)
+        for n in names:
+            if _is_rate(n):
+                plan["direction"][n], plan["direction_reason"][n] = d, why
     w_event = float(plan["w_event"]) if (plan and fk["ev_width"]) else 1.0
     # optional House-model reader (engine/house.py): OFF unless JINPEI_USE_HOUSE=1 and the
     # platform injected MODEL_*; widen-only, stress-side tail size only, never the centre.
@@ -214,6 +221,24 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         hz = house.assess(asof, names, horizons, feats) if house.enabled() else None
     w_house = float(hz["widen"]) if hz else 1.0
     sd_final = sd_w * tilt * fk["width"] * w_event * w_house
+    # ---- v5a_f4r: F4 government-yield targets (engine.assets.is_rate) only; every knob 0 = off = the
+    # v5a draws. Yield vol mean-reverts and is compressed in policy-anchored regimes (near the lower
+    # bound, long holds), so the trailing-window sd can be far below the vol a stress repricing brings:
+    # floor = per-step sd >= v5_rate_floor x the asset's full-history sd; width = own F4 width for yields.
+    rate_log: dict[str, Any] = {}
+    rate_j = [j for j, a in enumerate(inputs) if family == "F4" and _is_rate(a.asset)]
+    r_floor = float(getattr(profile, "v5_rate_floor", 0.0) or 0.0)
+    r_width = float(getattr(profile, "v5_rate_width", 0.0) or 0.0)
+    if rate_j and (r_floor or r_width):
+        for j in rate_j:
+            base = sd_w[j]
+            if r_floor:
+                full = _sd(inputs[j].increments.to_numpy(float))
+                if np.isfinite(full):
+                    base = max(base, r_floor * full)
+            sd_final[j] = base * tilt[j] * (r_width or fk["width"]) * w_event * w_house
+            rate_log[inputs[j].asset] = {"sd_window": float(sd_w[j]), "sd_used": float(base),
+                                         "width": r_width or fk["width"]}
 
     # ---- innovations (n_draws, path_len, A), unit per-step sd, zero mean
     A = len(inputs)
@@ -322,6 +347,22 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                                    "direction table x family calibration; House direction only where "
                                    "the table leaves it open)"})
 
+    # v5a_f4r: symmetric two-sided (bimodal) location-scale mixture for F4 yields: every path leans
+    # +/- v5_rate_bimodal x its own scale x sd_h, the sign drawn per path (one sign shared by the card's
+    # yields), i.e. both stress branches (flight to quality / hawkish repricing) at equal weight.
+    r_bi = float(getattr(profile, "v5_rate_bimodal", 0.0) or 0.0)
+    if rate_j and r_bi:
+        sgn = np.where(rng.random(n_draws) < 0.5, -1.0, 1.0)
+        for j in rate_j:
+            paths[:, :, j] += r_bi * sgn[:, None] * mult[:, None] * sd_final[j] * np.sqrt(t)[None, :]
+        adjustments.append({"name": "rate_two_sided_mixture", "size_sd_h_per_unit_scale": r_bi,
+                            "assets": [inputs[j].asset for j in rate_j],
+                            "why": "F4 yield direction is two-sided: equal-weight branches on both sides"})
+    if rate_log:
+        adjustments.append({"name": "rate_vol_floor_width", "floor_x_full_sd": r_floor, "width": r_width,
+                            "by_asset": rate_log,
+                            "why": "F4 yields: trailing vol floored at a share of the full-history vol"})
+
     samples = np.empty((n_draws, A, len(horizons)))
     for j, a in enumerate(inputs):
         for hi, h in enumerate(horizons):
@@ -405,6 +446,31 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         "events": ev, "derivation": derivation,
     }
     return samples, stats
+
+
+def _is_rate(asset: str) -> bool:
+    from .assets import is_rate
+    return is_rate(asset)
+
+
+def _rate_regime_direction(mode: str, feats: dict[str, Any] | None) -> tuple[int, str]:
+    """Yield stress direction from the corpus regime (v5a_f4r). +1 = inflation / hawkish dominated
+    (hot-print / hiking repricing), -1 = growth / financial-stress dominated (flight to quality).
+      v3       the v3 flag (rd hawkish > 1.3 rd dovish and >= 0.8) -- what assets.classify uses
+      pace     hawkish + purchase-pace / taper / "exceeded 2 percent" wording
+      pace_fs  pace, and bank-fragility / emergency-easing wording counted on the dovish side"""
+    from .events import rate_regime
+    rd = (feats or {}).get("rdensity", {}) or {}
+    hawk, dove = float(rd.get("hawkish", 0.0)), float(rd.get("dovish", 0.0))
+    if mode != "v3":
+        rr = rate_regime(feats)
+        hawk += float(rr.get("hawk_pace", 0.0))
+        if mode == "pace_fs":
+            dove += float(rr.get("fin_stress", 0.0))
+        elif mode != "pace":
+            raise ValueError(f"unknown rate regime {mode!r}")
+    up = hawk > 1.3 * dove and hawk >= 0.8
+    return (1 if up else -1), f"yield regime {mode}: hawkish {hawk:.2f} vs dovish/fin-stress {dove:.2f} -> {'UP' if up else 'DOWN'}"
 
 
 def _sd(x: np.ndarray) -> float:
