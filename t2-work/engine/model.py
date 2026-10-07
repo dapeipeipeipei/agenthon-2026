@@ -106,6 +106,12 @@ class Profile:
     #: the families in v5_house_split_fams and targets whose direction the stress table leaves open
     v5_house_q_max: float = 0.5
     v5_house_split_fams: tuple = ()
+    #: F2-diff (engine/policy_diff.py): split weight q on the called side (0.5 = off), minimum |score|
+    #: for a call, document kinds paired ("all" | "decision"), families it applies to
+    v5_diff_q: float = 0.5
+    v5_diff_thr: float = 0.0
+    v5_diff_kinds: str = "all"
+    v5_diff_fams: tuple = ()
 
     @property
     def effective_multiplier(self) -> float:
@@ -605,3 +611,9 @@ PROFILES["v5a_h"] = replace(PROFILES["v5a"], name="v5a_h", v5_f4_width=1.5)
 PROFILES["v5b"] = replace(PROFILES["v5a"], name="v5b", v5_house=True, v5_house_q_max=0.6,
                           v5_house_split_fams=("F1", "F2", "F3", "F4"))
 PROFILES["v5b_h"] = replace(PROFILES["v5b"], name="v5b_h", v5_f4_width=1.5)
+# v5a_f2diff (experiment line F2-diff, t2-work/F2DIFF_NOTES.md, f2diff_eval.py): v5a + a calibrated split
+# (q 0.6) on F2 targets from the wording change between the two latest official decisions / minutes of
+# the same institution (engine/policy_diff.py). Constants: q 0.6, thr 0, kinds "decision". Held-out gain
+# is small and not significant (5/8 calls right); without a call the draws are bit-identical to v5a.
+PROFILES["v5a_f2diff"] = replace(PROFILES["v5a"], name="v5a_f2diff", v5_diff_q=0.6, v5_diff_thr=0.0,
+                                 v5_diff_kinds="decision", v5_diff_fams=("F2",))

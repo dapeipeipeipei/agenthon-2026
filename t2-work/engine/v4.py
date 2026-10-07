@@ -261,8 +261,24 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                if fk["split_q"] != 0.5 and (rate_on or not is_rate(a.asset))}
         det = {a: d for a, d in det.items() if d}
         groups = [("table", det, fk["split_q"])] if det else []
+        # F2-diff (engine/policy_diff.py): wording change between consecutive same-kind documents of
+        # one institution -> direction; calibrated split at the profile's fixed q, only on the
+        # profile's families and on assets the stress table / skew leave open. Off (q 0.5) = no rng.
+        pdz = None
+        pq_ = float(getattr(profile, "v5_diff_q", 0.5) or 0.5)
+        if pq_ != 0.5 and family in tuple(getattr(profile, "v5_diff_fams", ()) or ()):
+            from . import policy_diff
+            pdz = policy_diff.assess((feats or {}).get("text_dir"), asof, names,
+                                     float(getattr(profile, "v5_diff_thr", 0.0)), pq_,
+                                     str(getattr(profile, "v5_diff_kinds", "all")))
+        pdd: dict[str, int] = {}
+        if pdz and pdz.get("split_dir"):
+            pdd = {a: int(d) for a, d in pdz["split_dir"].items() if int(d) and a not in det
+                   and not (fk["skew"] and int(dirs0.get(a, 0)) and (rate_on or not is_rate(a)))}
+            if pdd:
+                groups.append(("policy_diff", pdd, float(pdz["q"])))
         if hz and hz.get("split_dir"):
-            hd = {a: int(d) for a, d in hz["split_dir"].items() if int(d) and a not in det
+            hd = {a: int(d) for a, d in hz["split_dir"].items() if int(d) and a not in det and a not in pdd
                   and not (fk["skew"] and int(dirs0.get(a, 0)) and (rate_on or not is_rate(a)))}
             if hd:
                 qs = [float(hz.get("split_q", {}).get(a, 0.5)) for a in hd]
@@ -280,6 +296,10 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                 paths[flip, :, j] *= -1.0
             split_log.append({"name": f"stress_side_split_{name}", "q": q, "direction": dvec,
                               "n_reflected": int(flip.sum())})
+            if name == "policy_diff" and pdz:
+                split_log[-1].update({"score": pdz.get("score"), "institutions": pdz.get("inst"),
+                                      "why": "wording change between consecutive same-kind documents of "
+                                             "one institution (engine/policy_diff.py), calibrated split"})
     drift = fk["drift_frac"] * mu
     paths += drift[None, None, :] * t[None, :, None]
     adjustments: list[dict[str, Any]] = list(split_log)

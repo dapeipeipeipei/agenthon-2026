@@ -803,6 +803,16 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                        f"({hs.get('n_reflected')} draws reflected; only where the stress table is open)" if hs else
                        "no direction applied (gated, dropped by the recall probe, or nothing open)")
                     + f" ({x.get('requests')} request(s); reading {x.get('answer')}; recall probe {x.get('recall_check')})")
+    pdx = adjs.get("stress_side_split_policy_diff")
+    if pdx:
+        ins = pdx.get("institutions") or {}
+        used.append("the wording change between consecutive official decisions/minutes of one institution "
+                    "(engine/policy_diff.py, sentences added minus removed, hawkish minus dovish lexicon): "
+                    + "; ".join(f"{k} shift {v.get('z')} from " + ", ".join(f"{x.get('prev')} -> {x.get('latest')}"
+                                                                         for x in v.get("pairs") or [])
+                                for k, v in ins.items())
+                    + f" -> score {pdx.get('score')}, calibrated split q = {_f(pdx.get('q'), '.3g')} toward "
+                      f"{pdx.get('direction')}")
     if used:
         L.append("The corpus reached the draws only through: " + "; ".join(used) + ".")
         if asym and ust:
@@ -831,10 +841,11 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                  + ". Direction 0 = no shift.")
     else:
         L.append("None for this family.")
-    for nm in ("stress_side_split_table", "stress_side_split_house"):
+    for nm in ("stress_side_split_table", "stress_side_split_policy_diff", "stress_side_split_house"):
         sp = adjs.get(nm)
         if sp:
-            L.append(f"Calibrated split ({'stress table' if nm.endswith('table') else 'House reading'}): whole "
+            src = {"table": "stress table", "house": "House reading", "diff": "policy wording change"}[nm.rsplit("_", 1)[1]]
+            L.append(f"Calibrated split ({src}): whole "
                      f"deviation paths are reflected about the centre so that a share q = {_f(sp.get('q'), '.3g')} "
                      f"of the draws ends on the called side at the last horizon (directions {sp.get('direction')}; "
                      f"{sp.get('n_reflected')} draws reflected). Each side keeps its Gaussian shape; the mean "
