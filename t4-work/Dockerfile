@@ -1,4 +1,6 @@
-# Agenthon 2026 Track 4 (Explainability) — analyst image.
+# Agenthon 2026 Track 4 (Explainability) — analyst image, CANDIDATE B: House model ON
+# (T4_USE_HOUSE=1; used only when the platform injects MODEL_ENDPOINT/MODEL_NAME/MODEL_TOKEN,
+# otherwise identical to candidate A). The descriptor must carry the House row in models[].
 #
 # The agent is pure standard library (agent/), so the runtime image is a bare python:3.13-slim
 # plus ~100 KB of code: a small pull keeps the cold start (which counts against the 600 s unit
@@ -49,7 +51,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUTF8=1 \
     HOME=/tmp \
     PYTHONPATH=/opt/t4 \
-    T4_USE_HOUSE=0
+    T4_USE_HOUSE=1
 
 COPY agent /opt/t4/agent
 COPY bin/analyze /usr/local/bin/analyze
