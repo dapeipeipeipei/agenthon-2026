@@ -159,15 +159,16 @@ def _answer_phrase(unit: Unit, pr: Pred) -> str:
 
 
 _METHOD_TEXT = {
-    "eps_momentum": "The latest filed quarter shows the direction and size of the year-over-year change in diluted EPS; half of that change is carried into the next quarter on top of the year-earlier EPS, because earnings trends persist but partly mean-revert.",
-    "consensus_anchor": "The consensus already reflects the reported trend, so the forecast stays at consensus and the filing's year-over-year change only sets how wide the band is.",
-    "vintage_revision": "The vintage table shows how this series has been revised from one release to the next; the average past revision is applied to the latest pre-cutoff estimate, and its sign sets the revision direction.",
-    "distress_lexicon": "Going-concern doubt, recurring net losses and default or forbearance language in the company's own filing are the standard pre-cutoff solvency warnings; their density sets the probability of a credit event within the horizon.",
-    "series_level": "The next value is forecast as a blend of the latest observation and the recent average of the same series; the blend weight is the one that would have forecast this table's own history best, and the band comes from those one-step errors.",
-    "series_reversion": "Positions far from their recent average tend to move back toward it; the pull-back strength is fitted on the pre-cutoff history of all rows together, and the band is the spread of past changes over the same horizon.",
-    "carry_forward": "With no stronger pre-cutoff signal, the latest published value is carried forward unchanged.",
-    "zero_default": "No pre-cutoff document carries a quantitative signal for the size or sign of this move, so the forecast is the neutral value with a band set by the typical size of such moves over the window.",
-    "no_change": "With no pre-cutoff signal that sets the direction, the forecast is no change, with a band scaled to the level and the length of the window.",
+    "eps_momentum": "Earnings momentum: the latest filed quarter shows which way diluted EPS is moving against the year-earlier quarter, and the drivers behind that change (revenue growth, margins, share count) do not reset within one quarter, so part of the year-over-year change carries into the next quarter while the rest mean-reverts.",
+    "consensus_anchor": "The analyst consensus already prices the reported earnings trend, so the expected outcome sits at consensus; the size of the recent year-over-year swing sets how far the result can plausibly land from it.",
+    "vintage_revision": "Statistical agencies revise as late source data arrive, and for a given series the routine revisions of the same release age tend to share a sign and size; one-off annual or benchmark shifts are a different process and are not extrapolated, so the next estimate is the latest one moved by the typical routine revision.",
+    "distress_lexicon": "Liquidity and solvency: a going-concern doubt, recurring net losses and default, forbearance or restructuring language in the company's own filing mean it cannot fund its obligations from operations, and firms in that condition usually restructure or file within a year; their absence points to no event.",
+    "series_level": "The quantity is persistent but noisy: the latest reading carries information about the next one, while one-off spikes fade back toward the recent average, so the next value lies between the two, with uncertainty equal to how far such forecasts missed in the series' own pre-cutoff history.",
+    "series_proxy": "Pass-through from a faster-moving input: the corpus holds a higher-frequency series that feeds this component with a short lag and already covers part of the target month; its month-over-month change, mapped through the relationship the two series showed in prior months, sets the forecast, and the misses of that mapping set the band.",
+    "series_reversion": "Crowded positions unwind: when a level sits far from its recent average, the following changes tend to pull it back, and the typical size of past changes over the same window sets how large the move can be.",
+    "carry_forward": "Absent new information that moves it, the best estimate of the next value is the latest published one; the band reflects the usual size of surprises around such values.",
+    "zero_default": "Prices already reflect public pre-cutoff information, so without a directional signal the expected move is close to zero and the spread of outcomes is set by the typical size of such moves over the window.",
+    "no_change": "Markets already price the pre-cutoff stance and information, so without a signal that sets the direction the expected change is zero, with a spread scaled to the level and the length of the window.",
 }
 
 
@@ -258,8 +259,8 @@ def _driver_reasons(unit: Unit, preds: list[Pred], used: set) -> list[dict]:
                 mech += f" For {p.entity_id}: {p.facts[0]}."
         impl_parts = [_answer_phrase(unit, p) for p in scope]
         impl = "Implies " + "; ".join(impl_parts) + "."
-        if len(impl) > 1500:
-            impl = impl[:1490].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
+        if len(impl) > 900:
+            impl = impl[:890].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
         taken.add(span)
         out.append({
             "premise": doc.text[span[1]:span[2]],
@@ -281,6 +282,69 @@ def _status_quo_label(unit: Unit) -> str | None:
         if any(w in ll for w in ("no event", "none", "inline", "in line", "flat", "unchanged", "no change")):
             return lab
     return None
+
+
+def _extra_reasons(unit: Unit, preds: list[Pred], used: set, need: int) -> list[dict]:
+    from .retrieve import bm25_search, tokens
+
+    words = ("guidance outlook expects expected increase decrease growth revenue sales income margin "
+             "quarter compared percent billion earnings loss demand higher lower trend")
+    out: list[dict] = []
+    for pr in sorted(preds, key=lambda p: (-p.strength, p.entity_id)):
+        ent = next((e for e in unit.entities if e["entity_id"] == pr.entity_id), {})
+        q = tokens(unit.target_name.replace("_", " ")) * 2 + tokens(words) + [w for w in tokens(unit.prompt) if len(w) >= 6][:30]
+        for _, p in bm25_search(unit, pr.entity_id, q, k=30, require_digit=True):
+            doc = unit.docs[p.doc_id]
+            t = _trim_span(doc.text, p.start, p.end, max_chars=600, unit=unit)
+            if t is None or (p.doc_id, t[0], t[1]) in used:
+                continue
+            frag = doc.text[t[0]:t[1]]
+            if len(frag.split()) < 8 or sum(not c.isspace() for c in frag) < 0.75 * len(frag) or                     re.search(r"table of contents|incorporated by reference|pursuant to|exhibit \d", frag, re.I):
+                continue
+            span = (p.doc_id, t[0], t[1])
+            used.add(span)
+            name = str(ent.get("name") or pr.entity_id)
+            mech = (f"This pre-cutoff figure for {name} bears on {unit.target_name.replace('_', ' ')}: "
+                    + _METHOD_TEXT.get(pr.method, ""))
+            if pr.facts:
+                mech += f" For {pr.entity_id}: {pr.facts[0]}."
+            out.append({
+                "premise": frag,
+                "mechanism": mech[:1500],
+                "answer_implication": "Implies " + _answer_phrase(unit, pr) + ".",
+                "scope": {"entities": [pr.entity_id]},
+                "citations": [{"doc_id": span[0], "span_start": span[1], "span_end": span[2]}],
+                "_span": span,
+            })
+            break
+        if len(out) >= need:
+            break
+    if len(out) < need and preds:
+        # a single entity: more passages from the same row
+        pr = max(preds, key=lambda p: p.strength)
+        q = tokens(unit.target_name.replace("_", " ")) * 2 + tokens(words)
+        for _, p in bm25_search(unit, pr.entity_id, q, k=40, require_digit=True):
+            if len(out) >= need:
+                break
+            doc = unit.docs[p.doc_id]
+            t = _trim_span(doc.text, p.start, p.end, max_chars=600, unit=unit)
+            if t is None or (p.doc_id, t[0], t[1]) in used:
+                continue
+            frag = doc.text[t[0]:t[1]]
+            if len(frag.split()) < 8 or sum(not c.isspace() for c in frag) < 0.75 * len(frag):
+                continue
+            span = (p.doc_id, t[0], t[1])
+            used.add(span)
+            out.append({
+                "premise": frag,
+                "mechanism": (f"A further pre-cutoff data point on the drivers of {unit.target_name.replace('_', ' ')}: "
+                              + _METHOD_TEXT.get(pr.method, ""))[:1500],
+                "answer_implication": "Implies " + _answer_phrase(unit, pr) + ".",
+                "scope": {"entities": [pr.entity_id]},
+                "citations": [{"doc_id": span[0], "span_start": span[1], "span_end": span[2]}],
+                "_span": span,
+            })
+    return out
 
 
 def _method_reason(unit: Unit, method: str, members: list[Pred], used: set) -> dict | None:
@@ -312,8 +376,8 @@ def _method_reason(unit: Unit, method: str, members: list[Pred], used: set) -> d
         mech += extra
     impl_parts = [_answer_phrase(unit, p) for p in members]
     impl = "Implies " + "; ".join(impl_parts) + "."
-    if len(impl) > 1500:
-        impl = impl[:1490].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
+    if len(impl) > 900:
+        impl = impl[:890].rsplit(";", 1)[0] + "; and similarly for the remaining rows."
     cites = [{"doc_id": ps[0], "span_start": ps[1], "span_end": ps[2]}]
     for p in members:
         if len(cites) >= 3:
@@ -376,13 +440,21 @@ def build_reasons(unit: Unit, preds: list[Pred]) -> list[dict]:
             if r and r["_span"] not in used:
                 cands.append(r)
                 used.add(r["_span"])
+    # Still fewer than three (one entity, one method, no named drivers): further reasons from
+    # other figure-bearing passages of the strongest rows (always submit three; the coverage
+    # denominator is the unit's full set of target reasons).
+    if len(cands) < 3:
+        try:
+            cands += _extra_reasons(unit, preds, used, 3 - len(cands))
+        except Exception:  # noqa: BLE001
+            pass
 
     reasons: list[dict] = []
     ev_bytes = 0
     for r in cands:
         if len(reasons) >= 3:
             break
-        reason = {"reason_id": f"r{len(reasons) + 1}", **{k: v for k, v in r.items() if k != "_span"}}
+        reason = {"reason_id": f"r{len(reasons) + 1}", **{k: v for k, v in r.items() if k not in ("_span", "_filled")}}
         if not (_clean(reason["premise"]) and _clean(reason["mechanism"]) and _clean(reason["answer_implication"])):
             continue
         core = [{k: x[k] for k in ("reason_id", "premise", "mechanism", "answer_implication")} for x in reasons + [reason]]
@@ -391,4 +463,12 @@ def build_reasons(unit: Unit, preds: list[Pred]) -> list[dict]:
             continue
         ev_bytes += ev
         reasons.append(reason)
+        if len(reasons) == len(cands) and len(reasons) < 3 and not r.get("_filled"):
+            try:  # caps dropped a candidate: top up from further passages
+                more = _extra_reasons(unit, preds, used, 3 - len(reasons))
+                for m in more:
+                    m["_filled"] = True
+                cands.extend(more)
+            except Exception:  # noqa: BLE001
+                pass
     return reasons

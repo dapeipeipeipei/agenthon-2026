@@ -22,6 +22,7 @@ from .signals import (
     finite,
     keyword_spans,
     notes_span,
+    proxy_signal,
     vintage_signal,
 )
 from .tables import Series, norm_tokens
@@ -145,6 +146,53 @@ def _last_date(keys: list[str]) -> _dt.date | None:
     return None
 
 
+#: 90% band half-width in robust standard deviations (prefer wide: the interval score is far
+#: flatter above the 1.645 sigma optimum than below it).
+VINTAGE_HW = 1.8
+
+
+def _robust_center(xs: list[float]) -> float:
+    """Median for small samples; mean of the values within 3 MADs of the median otherwise."""
+    xs = [x for x in xs if finite(x)]
+    if not xs:
+        return 0.0
+    med = statistics.median(xs)
+    if len(xs) < 5:
+        return med
+    mad = statistics.median(abs(x - med) for x in xs)
+    if mad <= 0:
+        return med
+    kept = [x for x in xs if abs(x - med) <= 3.0 * 1.4826 * mad]
+    return statistics.fmean(kept) if kept else med
+
+
+def _robust_sd(xs: list[float]) -> float:
+    xs = [x for x in xs if finite(x)]
+    if len(xs) < 2:
+        return 0.0
+    med = statistics.median(xs)
+    mad = 1.4826 * statistics.median(abs(x - med) for x in xs)
+    return max(mad, _rms([x - med for x in xs]) * 0.75) if len(xs) >= 5 else _rms([x - med for x in xs])
+
+
+def _release_steps(ent: dict, gap_days: float | None) -> int:
+    """How many releases lie between the latest pre-cutoff vintage and the resolving release
+    (both read from the entity row when it names them), at the table's release spacing."""
+    vint = res = None
+    for k, val in ent.items():
+        kl = k.lower()
+        d = parse_date(val) if isinstance(val, str) else None
+        if d is None:
+            continue
+        if "vintage" in kl and vint is None:
+            vint = d
+        elif ("resolv" in kl or "release" in kl) and res is None:
+            res = d
+    if not (vint and res and gap_days and res > vint):
+        return 1
+    return int(min(6, max(1, round((res - vint).days / gap_days))))
+
+
 def _rms(xs: list[float]) -> float:
     return math.sqrt(sum(x * x for x in xs) / len(xs)) if xs else 0.0
 
@@ -243,7 +291,10 @@ def fallback_halfwidth(unit: Unit, entity: dict, point: float, anchor: tuple[str
         sd = 100.0 * level * 0.30 * math.sqrt(max(h, 1) / 365.0)
         return max(Z90 * sd * 1.75, 10.0)
     if "return" in tname or "abnormal return" in p:
-        return Z90 * 5.0 * math.sqrt(max(h, 1) / 2.0)
+        # an earnings release inside the window moves single stocks two to three times a normal
+        # day's range: use the wider event scale (the interval score punishes misses 20x)
+        event_sd = 6.5 if re.search(r"earnings|results release|report", p) else 5.0
+        return Z90 * event_sd * math.sqrt(max(h, 1) / 2.0)
     if anchor is not None and anchor[1] != 0:
         return max(abs(anchor[1]) * 0.15, 1e-3)
     if point != 0:
@@ -285,6 +336,10 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
                 s = best_series(unit, ent, cache)
                 if s is not None and len(s.values) >= 4:
                     series[eid] = s
+                    try:
+                        s.__dict__["proxy"] = proxy_signal(unit, ent, s, cache)
+                    except Exception:  # noqa: BLE001
+                        s.__dict__["proxy"] = None
         except Exception:  # noqa: BLE001 - one entity's evidence never sinks the unit
             continue
 
@@ -328,7 +383,38 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
                 pr.label = _default_label(unit, sem)
             elif not unit.labels and not (isinstance(pr.label, str) and pr.label):
                 pr.label = fallback_label(unit)
+        ents = {e["entity_id"]: e for e in unit.entities}
+        for pr in preds:
+            try:
+                make_consistent(pr, ents[pr.entity_id], sem)
+            except Exception:  # noqa: BLE001
+                pass
     return preds
+
+
+def make_consistent(pr: Pred, ent: dict, sem: dict[str, str]) -> None:
+    """Point and label must tell the same story (the reasoning judge reads both, and the point is
+    what the interval leg is centred on): when the label says 'up' (or 'down' / 'middle') relative
+    to its reference but the point sits elsewhere, move the point to the label's side - to the
+    edge plus half a forecast sd, the conditional location of the label's region - and keep the
+    band around it. A no-op where the label has no numeric reference."""
+    if "label_ref" not in pr.__dict__ or not pr.label:
+        return
+    s = sem.get(pr.label)
+    lower, upper = label_bounds(ent, pr.__dict__["label_ref"])
+    sd = max((pr.hi - pr.lo) / (2 * Z90), 1e-9)
+    p = pr.point
+    if s == "up" and not p > upper:
+        p = upper + 0.5 * sd
+    elif s == "down" and not p < lower:
+        p = lower - 0.5 * sd
+    elif s == "middle" and not (lower <= p <= upper):
+        p = min(max(p, lower), upper)
+    else:
+        return
+    pr.point = p
+    pr.lo, pr.hi = min(pr.lo, p), max(pr.hi, p)
+    pr.facts.append(f"point placed on the {pr.label} side of its threshold ({p:.4g}) so value and label agree")
 
 
 def fallback_label(unit: Unit) -> str:
@@ -368,8 +454,21 @@ def _phi(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def label_bounds(ent: dict, ref: float | None) -> tuple[float, float]:
+    """(lower, upper) edges of the middle region around `ref` for this row's threshold (equal
+    when there is no threshold): above `upper` is 'up', below `lower` is 'down'."""
+    thr = _threshold(ent)
+    base = ref if ref is not None else 0.0
+    if thr is None:
+        return base, base
+    k, t = thr
+    relative = ref is not None and ref != 0 and t < 1 and "abn" not in k.lower()
+    width = t * abs(ref) if relative else t
+    return base - width, base + width
+
+
 def _label_from_value(unit: Unit, ent: dict, sem: dict[str, str], value: float, ref: float | None,
-                      sd: float | None = None) -> str | None:
+                      sd: float | None = None, pr: "Pred | None" = None) -> str | None:
     """Map a numeric forecast to a label. With a three-way vocabulary (up / middle / down around a
     threshold) and a forecast spread `sd`, pick the label with the highest probability under a
     normal forecast distribution (ties: up, then middle), so a narrow middle band is not chosen
@@ -379,6 +478,8 @@ def _label_from_value(unit: Unit, ent: dict, sem: dict[str, str], value: float, 
     mids = [l for l, s in sem.items() if s == "middle"]
     if not ups or not downs:
         return None
+    if pr is not None:
+        pr.__dict__["label_ref"] = ref  # what the label is measured against (consistency pass)
     thr = _threshold(ent)
     if mids and thr is not None and sd is not None and sd > 0:
         k, t = thr
@@ -447,7 +548,7 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             else:
                 pr.point, pr.lo, pr.hi = eps_hat, eps_hat - Z90 * sd, eps_hat + Z90 * sd
                 if ttype == "classification":
-                    pr.label = _label_from_value(unit, ent, sem, eps_hat, prior, sd)
+                    pr.label = _label_from_value(unit, ent, sem, eps_hat, prior, sd, pr=pr)
             return
         if cons is not None:
             # consensus already prices the trend: keep it, use the trend only for the band
@@ -455,30 +556,50 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             pr.point, pr.lo, pr.hi = cons, cons - Z90 * sd, cons + Z90 * sd
             pr.method = "consensus_anchor"
             if ttype == "classification":
-                pr.label = _label_from_value(unit, ent, sem, cons, cons, sd)
+                pr.label = _label_from_value(unit, ent, sem, cons, cons, sd, pr=pr)
             return
 
     # 2) vintage revisions
     if v is not None:
         base = anchor[1] if anchor else v.values[-1]
-        revs = [r for r in (v.age_matched or v.revisions) if finite(r)]
-        mean_rev = statistics.fmean(revs) if revs else 0.0
+        steps = _release_steps(ent, v.vintage_gap_days)
+        # expected cumulative revision over the releases up to the resolving one: for each age,
+        # the robust centre of past revisions of that age (jump transitions already removed),
+        # else the robust centre of all routine revisions
+        pooled = [r for r in v.revisions if finite(r)]
+        exp_rev, used_n, matched_ages = 0.0, 0, 0
+        for k in range(steps):
+            age = (v.next_age + k) if v.next_age else None
+            rs = [r for r in v.by_age.get(age, []) if finite(r)] if age else []
+            if len(rs) >= 2:
+                matched_ages += 1
+            else:
+                rs = pooled
+            exp_rev += _robust_center(rs)
+            used_n += len(rs)
+        revs = [r for r in (v.age_matched or pooled)]
         nz = [r for r in revs if r != 0]
-        sd = _rms([r - mean_rev for r in revs]) if len(revs) >= 2 else abs(base) * 0.002
-        if sd <= 0:
-            sd = max(abs(base) * 0.001, 1e-3)
-        point = base + mean_rev
-        pr.point, pr.lo, pr.hi = point, point - Z90 * sd * 1.2, point + Z90 * sd * 1.2
+        c = _robust_center(revs) if revs else 0.0
+        spread = max(_robust_sd([r - c for r in revs]), _rms([r - c for r in revs])) if len(revs) >= 2 else abs(base) * 0.002
+        sd = max(spread * math.sqrt(steps), abs(exp_rev) * 0.5, abs(base) * 1e-4, 1e-3)
+        point = base + exp_rev
+        pr.point, pr.lo, pr.hi = point, point - VINTAGE_HW * sd, point + VINTAGE_HW * sd
         pr.method = "vintage_revision"
-        pr.strength = abs(mean_rev) / (sd + 1e-9)
+        pr.strength = abs(exp_rev) / (sd + 1e-9)
         up_share = (sum(1 for r in nz if r > 0) / len(nz)) if nz else 0.5
-        scope = f"revision number {v.next_age} of other reference months" if v.age_matched else "consecutive revisions"
-        pr.facts.append(f"{len(revs)} past {scope} in the vintage table average {mean_rev:+.4g}; {up_share:.0%} of the non-zero ones were upward")
+        scope = f"revision number {v.next_age} of other reference months" if v.age_matched else "routine revisions"
+        pr.facts.append(f"{len(revs)} past {scope} in the vintage table have a robust centre of {c:+.4g}; "
+                        f"{up_share:.0%} of the non-zero ones were upward")
+        if steps > 1:
+            pr.facts.append(f"the resolving release is about {steps} releases after the latest pre-cutoff estimate, so the expected cumulative revision is {exp_rev:+.4g}")
+        if v.dropped_jumps:
+            pr.facts.append(f"{v.dropped_jumps} one-off level shift(s) in the table (annual or benchmark revisions) were left out of the averages")
         pr.spans += [(v.doc_id, v.row_span[0], v.row_span[1])]
         if ttype == "classification":
-            if mean_rev == 0 and nz:
-                mean_rev = 1 if up_share >= 0.5 else -1
-            pr.label = _label_from_value(unit, ent, sem, base + mean_rev, base, sd) if mean_rev != 0 else None
+            direction = exp_rev
+            if direction == 0 and nz:
+                direction = 1 if up_share >= 0.5 else -1
+            pr.label = _label_from_value(unit, ent, sem, base + direction, base, sd, pr=pr) if direction != 0 else None
         return
 
     # 3) distress lexicon (event classification)
@@ -515,6 +636,17 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             pr.method = "series_level"
             tail = vals[-win:]
             pr.facts.append(f"{s.label}: last {vals[-1]:g}, trailing {len(tail)}-period mean {statistics.fmean(tail):.4g}, weight on last value {wl:.2f} (picked by backtest on all rows)")
+            px = s.__dict__.get("proxy")
+            if px is not None:
+                # a higher-frequency series in the corpus already covers part of the target month
+                w = min(1.0, max(0.0, (px.r - 0.6) / 0.3))
+                point = w * px.point + (1 - w) * point
+                sd = math.sqrt(w * px.resid_sd ** 2 + (1 - w) * sd ** 2)
+                pr.method = "series_proxy"
+                pr.facts.insert(0, f"{px.label} moved {px.x_target:+.2f}% in the target month so far ({px.weeks_in_target} observations); "
+                                   f"over {px.n} past months the target tracked it as {px.a:+.2f} + {px.b:.2f} x change (correlation {px.r:.2f}), "
+                                   f"implying {px.point:+.3g}")
+                pr.spans.insert(0, px.span)
         hw = Z90 * sd * 1.1
         pr.point, pr.lo, pr.hi = point, point - hw, point + hw
         base = 0.0 if change else (anchor[1] if anchor else vals[-1])
@@ -525,7 +657,7 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         if ns:
             pr.spans.append(ns)
         if ttype == "classification":
-            pr.label = _label_from_value(unit, ent, sem, point, base, sd)
+            pr.label = _label_from_value(unit, ent, sem, point, base, sd, pr=pr)
         if prob:
             pr.point = min(max(pr.point, 0.0), 1.0)
         return
@@ -551,4 +683,4 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
     pr.point, pr.lo, pr.hi = point, point - hw, point + hw
     if ttype == "classification":
         ref = anchor[1] if anchor else None
-        pr.label = _label_from_value(unit, ent, sem, point, ref if not change else 0.0, hw / Z90)
+        pr.label = _label_from_value(unit, ent, sem, point, ref if not change else 0.0, hw / Z90, pr=pr)
