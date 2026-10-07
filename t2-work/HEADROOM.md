@@ -59,18 +59,41 @@ Oracles are hindsight bounds built on M0's Gaussian, not forecasts.
 ## Recommendations (ranked by expected Final gain x robustness)
 
 1. **Keep v4 rev 3 widths; stop tuning width/tail shape.** Remaining honest width gain ≤ 0.03 held-out.
-2. **F4: strengthen the stress-direction tilt** to a calibrated split (q ≈ 0.65–0.7 on the stress side,
-   width ≈ 2.5–3.0) — expected ≈ −0.10 overall if sealed F4 behaves like public F4; break-even at 63%
-   direction accuracy. Cap q at 0.7 (q=0.8 costs +0.18 overall if the calls are coin flips).
+2. **F4: a calibrated stress-side split, q = 0.7 at width 2.5, if (and only if) the sealed F4 windows
+   were picked after the fact** (open question T2#26, research/COMPETITIVE.md). `headroom_f4.py` (29 F4
+   cards, outcomes scaled y = m + k (y - m), calm = y drawn from M0 itself): vs v4 rev 3 it gains
+   −0.13 / −0.26 / −0.16 on F4 at k = 0.5 / 1 / 1.5 (≈ −0.04 / −0.08 / −0.05 overall) and loses
+   +0.20 on F4 (+0.06 overall) only in the calm world. q = 0.8 / width 3 gains more on shocks (−0.49 at
+   k=1) but costs +0.65 calm — too much. If the windows were chosen ex ante, keep v4 rev 3 (or width 2.0
+   without tilt: calm 1.24 vs 1.44).
 3. **LLM text reader: ask for direction with a probability, not for "uncertainty level".** Required
    accuracy: ≥ 0.58 to pay at q=0.7, ≥ 0.53 at q=0.6. Map the model's confidence to q in [0.5, 0.7]
    (never above 0.7 without a deterministic reason, never a centre shift > 0.5 sd). Gate it to cards
    where the text names a scheduled event inside the window and a stated policy bias (hike/cut path,
    intervention, peg defence); default q = 0.5 (no change). On F1–F3 the deterministic stress table is
-   useless (≤ 0.53), so any gain there must come from the text.
+   useless (≤ 0.53), so any gain there must come from the text. Caveat: the reader's accuracy cannot be
+   measured honestly on Dev (the House model remembers 2003–2024 outcomes, so Dev accuracy is inflated);
+   a plausible honest range for text-only direction calls is 0.5–0.6 (assumption, not measured), which at q=0.6
+   is worth −0.0 to −0.03 overall. Treat it as a small, bounded bet, not the path to the Dev leaders.
 4. **Do not spend the House call on P(large move)**: within-family it needs ≥ 0.84 accuracy; at most use it
    as a bounded widen (≤ x1.5) on F2/F3 when the text describes an in-window binary event.
 5. **Clip-8 / transfer cards**: no action worth risk; they cost the same for everybody honest.
+
+---
+
+## F4 tilt under calm / scaled outcomes (`headroom_f4.py`, F4 means)
+
+F4 cards: 29 (all 90-card mean moves by x 29/90)
+
+| option | calm (y ~ M0) | k=0.5 | k=1.0 | k=1.5 |
+|---|---|---|---|---|
+| v4r3 | 1.439 | 1.830 | 3.232 | 4.605 |
+| m0w2.0 | 1.239 | 1.873 | 3.536 | 5.053 |
+| m0w3.0 | 1.739 | 2.096 | 3.371 | 4.638 |
+| split0.6w2.5 | 1.534 | 1.793 | 3.163 | 4.600 |
+| split0.7w2.5 | 1.637 | 1.703 | 2.975 | 4.442 |
+| split0.7w3.0 | 1.914 | 1.844 | 2.897 | 4.194 |
+| split0.8w3.0 | 2.086 | 1.829 | 2.744 | 4.044 |
 
 ---
 
