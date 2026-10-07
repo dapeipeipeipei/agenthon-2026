@@ -4,9 +4,12 @@ Why this exists (v4 work, 2026-10-06):
   * run_all_gates.py + score_local.py take ~5 min per configuration (one subprocess per unit) and
     compare against the shipped *reference CLI* (t2-work/out). The leaderboard does NOT divide by
     the reference CLI; it divides each component by **M0** (docs/M0-BASELINE.md: text-blind joint
-    Gaussian RW on the trailing 300 rows, drift s*mu, crc32(unit_id) seed, 500 draws, cells in
-    sorted asset/horizon order) and averages the per-card normalized composite arithmetically,
-    clipped to [0, 4] (CONCEPTS.md section 13).
+    Gaussian RW on the trailing 300 rows, drift s*mu, crc32(unit_id) seed, 500 draws) and averages
+    the per-card normalized composite arithmetically (CONCEPTS.md section 13).
+  * 2026-10-07: since upstream 60509df the divisor is M0's EXPECTED error (closed form, no outcome)
+    and the clip / failure value is 8.0 -- RULE "new", the default. RULE "old" (T2_RULE=old) keeps
+    the realized-error divisor and clip 4 for history. score_unit returns both (norm_new/norm_old);
+    "norm" is the selected rule.
   * This module rebuilds M0 per the published procedure, runs model.simulate in-process (same
     seed/draw/prepare conventions as engine.forecast.run) and scores with the official metric
     functions (qfbench2_common crps + the track's tail_pinball, single-cell renormalisation).
@@ -49,7 +52,13 @@ from qfbench2_track_forecasting.tail import tail_pinball  # noqa: E402
 
 DEFAULT_SEED = 20260909
 DEFAULT_DRAWS = 2000
-CLIP = 4.0
+# Leaderboard rule. "new" (in force since track2-forecasting-public 60509df, 2026-10-06): each
+# component divided by M0's EXPECTED error under its own forecast (M0-BASELINE 5, computed by
+# audit_metric.m0_expected_scale), composite clipped to [0, 8], failure 8. "old" (history):
+# divided by M0's error against the realized outcome, clip/failure 4. Select with T2_RULE.
+RULE = os.environ.get("T2_RULE", "new")
+CLIPS = {"new": 8.0, "old": 4.0}
+CLIP = CLIPS[RULE]
 
 
 # ----------------------------------------------------------------------------- M0 (published spec)
@@ -137,7 +146,8 @@ def components(samples: np.ndarray, y: np.ndarray, levels=(0.01, 0.05, 0.95, 0.9
             "tail": float(tail_pinball(samples, y, levels))}
 
 
-def normalized(c: dict[str, float], ref: dict[str, float], weights: tuple[float, float, float], n_cells: int) -> float:
+def normalized(c: dict[str, float], ref: dict[str, float], weights: tuple[float, float, float], n_cells: int,
+               clip: float | None = None) -> float:
     w_m, w_j, w_t = weights
     if n_cells == 1:
         live = w_m + w_t
@@ -145,7 +155,18 @@ def normalized(c: dict[str, float], ref: dict[str, float], weights: tuple[float,
     def r(k):
         return c[k] / ref[k] if ref[k] > 0 else c[k]
     # a zero/negative M0 component is stored as 1.0 (the component is not normalised)
-    return float(np.clip(w_m * r("marginal") + w_j * r("joint") + w_t * r("tail"), 0.0, CLIP))
+    return float(np.clip(w_m * r("marginal") + w_j * r("joint") + w_t * r("tail"), 0.0, CLIP if clip is None else clip))
+
+
+def ref_for(u: dict[str, Any], y: np.ndarray | None = None, rule: str | None = None) -> dict[str, float]:
+    """The divisor of `u` under `rule`. New rule: M0's expected error (independent of y). Old rule:
+    M0's realized error (against `y` when given, e.g. a stress-test counterfactual)."""
+    rule = rule or RULE
+    if rule == "new":
+        return u["m0x"]
+    if y is None:
+        return u["m0"]
+    return components(m0_samples(u), y)
 
 
 # ----------------------------------------------------------------------------- units
@@ -165,6 +186,11 @@ def _spec(unit_dir: Path) -> dict[str, Any]:
 def load_units(refresh: bool = False, only: str = "") -> list[dict[str, Any]]:
     if CACHE.exists() and not refresh:
         units = pickle.loads(CACHE.read_bytes())
+        if any(not Path(u["dir"]).is_dir() for u in units):   # upstream renamed units: rebuild
+            return load_units(True, only)
+        if any("m0x" not in u for u in units):
+            _add_expected(units)
+            CACHE.write_bytes(pickle.dumps(units))
         return [u for u in units if only in u["unit"]]
     units = []
     for rp in sorted(REALIZED_DIR.glob("*.parquet")):
@@ -195,12 +221,23 @@ def load_units(refresh: bool = False, only: str = "") -> list[dict[str, Any]]:
         u["m0p"] = {}
         m0 = m0_samples(u, params_out=u["m0p"])
         u["m0"] = components(m0, y)
+        u["split"] = str(card["task"].get("split", ""))
         refp = HERE / "out" / name / "forecast.parquet"
         if refp.exists():
             u["refcli"] = components(_load_forecast(refp, assets, horizons), y)
         units.append(u)
+    _add_expected(units)
     CACHE.write_bytes(pickle.dumps(units))
     return [u for u in units if only in u["unit"]]
+
+
+def _add_expected(units: list[dict[str, Any]]) -> None:
+    import audit_metric as A
+    for u in units:
+        if "m0x" not in u:
+            u["m0x"] = A.m0_expected_scale(Path(u["dir"]))
+        if "split" not in u:
+            u["split"] = str(u["card"]["task"].get("split", ""))
 
 
 def _load_forecast(path: Path, assets: list[str], horizons: list[int]) -> np.ndarray:
@@ -225,7 +262,10 @@ def score_unit(u: dict[str, Any], flat: np.ndarray) -> dict[str, Any]:
     c = components(flat, u["y"])
     n_cells = len(u["assets"]) * len(u["horizons"])
     out = {"unit": u["unit"], "family": u["family"], "year": u["year"], "n_cells": n_cells, **c,
-           "norm": normalized(c, u["m0"], u["weights"], n_cells)}
+           "split": u.get("split", ""),
+           "norm": normalized(c, ref_for(u), u["weights"], n_cells),
+           "norm_old": normalized(c, u["m0"], u["weights"], n_cells, CLIPS["old"]),
+           "norm_new": normalized(c, u["m0x"], u["weights"], n_cells, CLIPS["new"])}
     if "refcli" in u:
         out["norm_refcli"] = normalized(c, u["refcli"], u["weights"], n_cells)
     # calibration diagnostics: PIT of each realized cell, inside the 90% interval?
@@ -257,11 +297,14 @@ def agg(rows: list[dict[str, Any]], key: str = "norm") -> dict[str, Any]:
     out = {"all": one(rows)}
     for f in ("F1", "F2", "F3", "F4"):
         out[f] = one([r for r in rows if r["family"] == f])
+    out["val"] = one([r for r in rows if r.get("split") == "validation"])
     return out
 
 
 def fmt_agg(a: dict[str, Any], key: str = "mean") -> str:
     parts = [f"all {a['all'][key]:.4f}"] + [f"{f} {a[f][key]:.4f}" for f in ("F1", "F2", "F3", "F4") if a[f]["n"]]
+    if a.get("val", {}).get("n"):
+        parts.append(f"val{a['val']['n']} {a['val'][key]:.4f}")
     return "  ".join(parts) + f"  out90 {a['all']['outside90']:.3f} (lo {a['all']['pit_lo']:.3f} hi {a['all']['pit_hi']:.3f})"
 
 
@@ -280,6 +323,7 @@ def main() -> int:
     else:
         res = run_profile(model.PROFILES[a.profile], units)
     g = agg(res)
+    print(f"rule {RULE} (clip {CLIP:g})")
     print(f"{a.profile} vs M0   mean : {fmt_agg(g)}")
     print(f"{a.profile} vs M0   geo  : {fmt_agg(g, 'geo')}")
     if all("norm_refcli" in r for r in res):

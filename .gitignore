@@ -29,3 +29,4 @@ t2-work/scores_*.json
 # v4 evaluation caches: they contain reconstructed realized values (never commit, never ship)
 t2-work/.v4_cache.pkl
 t2-work/.v4_sweep.pkl
+t2-work/.v4_newrule_sweep.pkl

@@ -52,10 +52,13 @@ per-unit fitting.
 The default profile `v4` (`engine/model.py` `PROFILES["v4"]`, `engine/v4.py`) holds one row of
 constants per card family — (width multiplier on the trailing-window sd, tail-mixture p, k,
 stress-side shift of the mixture paths, corpus event width on/off, drift fraction):
-F1 (1.0, 0, 1, 0, off, 1.0); F2 (1.0, 0, 1, 0, off, 1.0); F3 (1.0, 0, 1, 0, off, 0.5);
-F4 (1.1, 0.2, 1.5, 1.0, off, 1.0); unknown family (1.0, 0, 1, 0, off, 1.0). The row applied on a
+F1 (1.0, 0, 1, 0, off, 1.0); F2 (1.25, 0, 1, 0, off, 1.0); F3 (1.0, 0, 1, 0, off, 0.5);
+F4 (2.0, 0.2, 1.5, 1.0, off, 1.0); unknown family (1.0, 0, 1, 0, off, 1.0). The row applied on a
 run is recorded in `forecast_meta.json` `engine.v4_resolved`. Widths were pulled toward 1.0
 (F1 0.9 -> 1.0, F4 1.25 -> 1.1) after an independent audit's stress tests (`t2-work/AUDIT_T2.md`);
+on 2026-10-07, after the organizers changed the normalisation to M0's *expected* error with an
+8.0 cap (track2-forecasting-public `60509df`), F2 1.0 -> 1.25 and F4 1.1 -> 2.0 were re-selected
+under the new rule (`t2-work/v4_newrule.py`, `V4_NOTES.md` revision 3);
 log_return targets use per-step ln(1+r). The family is the
 one printed on the card (`[metadata] category` / `forecast_spec.json card_family`), never a unit id.
 
@@ -63,11 +66,13 @@ They were **selected** on 2026-10-06 (`t2-work/v4_cv.py`, `v4_report.py`; result
 `t2-work/v4_experiments.csv`, method in `t2-work/V4_NOTES.md`) from a grid of 4 x 80 configurations
 on the same public practice units and reconstructed outcomes as above, scored with the
 leaderboard's own normalisation (component-wise ratio to a reproduction of M0 from the published
-procedure, clipped, arithmetic mean). Selection rule: per family, the least complex row within one
+procedure, clipped, arithmetic mean); revision 3 (2026-10-07) re-ran the same procedure over a
+240-row grid under the current rule (divisor = M0's expected error computed in closed form from
+the card's inputs, docs/M0-BASELINE.md section 5; clip 8). Selection rule: per family, the least complex row within one
 standard error of the best (a one-standard-error rule shrinking toward the M0-like row), checked by
 leave-one-era-out and forward (<= 2018 -> >= 2019) validation. The same cutoff, no-answer-lookup
 and in-sample statements as above apply: every outcome used is dated 2024-12-31 or earlier, no
-per-unit value, id, title or date is stored, and `t2-work/.v4_cache.pkl` / `.v4_sweep.pkl`
+per-unit value, id, title or date is stored, and `t2-work/.v4_cache.pkl` / `.v4_sweep.pkl` / `.v4_newrule_sweep.pkl`
 (local caches holding reconstructed outcomes) are not in the build context.
 
 ## Per-task cutoff behaviour

@@ -120,13 +120,16 @@ PROFILES = {
     # F1 0.9 -> 1.0 (0.9 loses to M0 if sealed F1 is 25% more volatile than the public set),
     # F4 1.25 -> 1.1 (the stress-side shift carries most of the gain; width relied on shock-heavy
     # card selection). Unknown family -> the M0-like row.
+    # 2026-10-07 (upstream 60509df: divisor = M0's EXPECTED error, clip 8 -- a proper score, so
+    # widening is no longer penalised through the divisor): F2 width 1.0 -> 1.25, F4 width
+    # 1.1 -> 2.0 (t2-work/v4_newrule.py; every era improves, 5-seed 2.236 -> 1.975; see V4_NOTES).
     "v4": Profile("v4", engine="v4", ev_width=True, ev_cell_damp=True, v4_shape="gauss",
                   v4_window=300, v4_vol_beta=0.0,
                   v4_family=(("default", 1.0, 0.0, 1.0, 0.0, False, 1.0),
                              ("F1", 1.0, 0.0, 1.0, 0.0, False, 1.0),
-                             ("F2", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                             ("F2", 1.25, 0.0, 1.0, 0.0, False, 1.0),
                              ("F3", 1.0, 0.0, 1.0, 0.0, False, 0.5),
-                             ("F4", 1.1, 0.2, 1.5, 1.0, False, 1.0))),
+                             ("F4", 2.0, 0.2, 1.5, 1.0, False, 1.0))),
 }
 
 

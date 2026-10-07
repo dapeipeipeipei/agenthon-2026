@@ -38,6 +38,8 @@ CLI (PYTHONUTF8=1, .venv):
   python t2-work/audit_metric.py boot A B                           paired cluster bootstrap A-B
   python t2-work/audit_metric.py variants                           engine variants in-process
   python t2-work/audit_metric.py check-realized
+  python t2-work/audit_metric.py m0ref                              M0 reference row (grid order)
+  Rule: T2_RULE=new (default; expected-error divisor, cap 8) or T2_RULE=old (realized divisor, cap 4).
 """
 from __future__ import annotations
 
@@ -64,8 +66,13 @@ from qfbench2_track_forecasting import scoring as S  # noqa: E402
 from qfbench2_track_forecasting.grid import flatten_realized, grid_from_card  # noqa: E402
 from qfbench2_track_forecasting.normalization import NormalizationMode, RefScale  # noqa: E402
 
-DOMAIN = (0.0, 4.0)
-FAIL_SCORE = 4.0
+# Two leaderboard rules. "new" is in force since track2-forecasting-public 60509df (2026-10-06):
+# divisor = M0's EXPECTED error (M0-BASELINE 5), cap and failure value 8.0. "old" (kept for
+# history): divisor = M0's error against the realized outcome, cap and failure value 4.0.
+RULES = {"new": {"cap": 8.0}, "old": {"cap": 4.0}}
+DEFAULT_RULE = os.environ.get("T2_RULE", "new")
+DOMAIN = (0.0, RULES[DEFAULT_RULE]["cap"])
+FAIL_SCORE = RULES[DEFAULT_RULE]["cap"]
 
 
 # ============================================================================ M0 (own implementation)
@@ -143,8 +150,12 @@ def _obs_periods(unit_dir: Path) -> list[str] | None:
     return ((json.loads(p.read_text(encoding="utf-8")).get("targets") or {}).get("observation_periods"))
 
 
-def m0_draws(unit_dir: Path, n: int = 500, seed: int | None = None, info: dict | None = None) -> np.ndarray:
-    """M0 draws in the GRID's canonical order (asset-major, declared order)."""
+def m0_dist(unit_dir: Path, order: str = "grid", info: dict | None = None) -> tuple[np.ndarray, np.ndarray, list]:
+    """M0's forecast distribution (3.1-3.8): mean vector and the covariance C its draws are sampled
+    from (3.8 matrix + 1e-10 I + 1e-9 I, or its diagonal when Cholesky fails), with the cells in
+    `order`: "grid" = card [targets] asset_ids x horizons order (M0-BASELINE 3.9 since 2026-10-06),
+    "sorted" = sorted asset id then ascending horizon (the order the pre-2026-10-06 doc stated).
+    Returns (mean, C, L, cells) where cells = [(asset, horizon, steps, why)]."""
     card = load_card(unit_dir)
     tg = card["targets"]
     assets = [str(a) for a in tg["asset_ids"]]
@@ -158,30 +169,99 @@ def m0_draws(unit_dir: Path, n: int = 500, seed: int | None = None, info: dict |
     X = frame.to_numpy(float)
     mu = X.mean(axis=0)                                   # 3.5
     sigma = np.atleast_2d(np.cov(X, rowvar=False))
-    cells = []                                            # 3.9 order: sorted asset id, horizon asc
-    for a in ids:
-        for h in sorted(hz):
-            op = obs[hz.index(h)] if obs and len(obs) == len(hz) else None
-            k, why = _panel_steps(hist[a], h, asof, op)
-            cells.append((a, h, k, why))
+    if order == "grid":
+        seq = [(a, h) for a in assets for h in hz]
+    else:
+        seq = [(a, h) for a in ids for h in sorted(hz)]
+    cells = []
+    for a, h in seq:
+        op = obs[hz.index(h)] if obs and len(obs) == len(hz) else None
+        k, why = _panel_steps(hist[a], h, asof, op)
+        cells.append((a, h, k, why))
     d = len(cells)
     ai = {a: i for i, a in enumerate(ids)}
     mean = np.array([(float(hist[a].iloc[-1]) if tt == "level" else 0.0) + k * mu[ai[a]] for a, _, k, _ in cells])
     cov = np.array([[min(ci[2], cj[2]) * sigma[ai[ci[0]], ai[cj[0]]] for cj in cells] for ci in cells])
     cov += 1e-10 * np.eye(d)
+    C = cov + 1e-9 * np.eye(d)
     try:
-        L = np.linalg.cholesky(cov + 1e-9 * np.eye(d))
+        L = np.linalg.cholesky(C)
         chol = "full"
     except np.linalg.LinAlgError:
-        L = np.diag(np.sqrt(np.diag(cov + 1e-9 * np.eye(d))))
+        C = np.diag(np.diag(C))
+        L = np.diag(np.sqrt(np.diag(C)))
         chol = "diagonal"
+    if info is not None:
+        info.update(rows=len(X), steps={(a, h): (k, w) for a, h, k, w in cells}, chol=chol,
+                    mu={a: float(mu[ai[a]]) for a in ids})
+    return mean, C, L, cells
+
+
+def m0_draws(unit_dir: Path, n: int = 500, seed: int | None = None, info: dict | None = None,
+             order: str = "sorted") -> np.ndarray:
+    """M0 draws returned in the GRID's canonical order (asset-major, declared order). `order` is the
+    order Z's columns are assigned to cells: "grid" reproduces M0 as documented since 2026-10-06
+    (the leaderboard's reference row); "sorted" (default, kept for history) is the earlier doc."""
+    card = load_card(unit_dir)
+    tg = card["targets"]
+    assets = [str(a) for a in tg["asset_ids"]]
+    hz = [int(h) for h in tg["horizons"]]
+    mean, _C, L, cells = m0_dist(unit_dir, order=order, info=info)
+    d = len(cells)
     sd = int(zlib.crc32(card["task"]["id"].encode("utf-8")) & 0x7FFFFFFF) if seed is None else seed
     Z = np.random.default_rng(sd).standard_normal((n, d))
     draws = mean + Z @ L.T
     if info is not None:
-        info.update(rows=len(X), steps={(a, h): (k, w) for a, h, k, w in cells}, chol=chol, seed=sd)
+        info["seed"] = sd
     col = {(a, h): j for j, (a, h, _, _) in enumerate(cells)}
     return draws[:, [col[(a, h)] for a in assets for h in hz]]
+
+
+# ============================================================================ expected-error scale (rule of 2026-10-06)
+
+def _e_abs_sqrt(delta: float, s: float) -> float:
+    """E|D|^(1/2), D ~ N(delta, s^2) (M0-BASELINE 5, Kummer form)."""
+    from scipy.special import gamma, hyp1f1
+    return float(np.sqrt(s) * 2 ** 0.25 * gamma(0.75) / np.sqrt(np.pi) * hyp1f1(-0.25, 0.5, -delta ** 2 / (2 * s ** 2)))
+
+
+def _e_abs(delta: float, s: float) -> float:
+    from scipy.stats import norm
+    return float(s * np.sqrt(2 / np.pi) * np.exp(-delta ** 2 / (2 * s ** 2)) + delta * (1 - 2 * norm.cdf(-delta / s)))
+
+
+def expected_scale_from(mean: np.ndarray, C: np.ndarray, levels=(0.01, 0.05, 0.95, 0.99)) -> dict:
+    """M0-BASELINE 5: the error M0 expects of itself under its own normal forecast N(mean, C).
+    marginal = mean_i sd_i/sqrt(pi); tail = mean_tau phi(z_tau) * mean_i sd_i;
+    joint = sum over ordered pairs i != j of Var(|D_ij|^(1/2)). A zero component is stored as 1.0."""
+    from scipy.stats import norm
+    sd = np.sqrt(np.diag(C))
+    marginal = float(np.mean(sd) / np.sqrt(np.pi))
+    tail = float(np.mean([norm.pdf(norm.ppf(t)) for t in levels]) * np.mean(sd))
+    d = len(mean)
+    joint = 0.0
+    for i in range(d):
+        for j in range(i + 1, d):
+            s2 = C[i, i] + C[j, j] - 2 * C[i, j]
+            if s2 <= 0:
+                continue
+            s = float(np.sqrt(s2))
+            delta = float(mean[i] - mean[j])
+            joint += 2.0 * (_e_abs(delta, s) - _e_abs_sqrt(delta, s) ** 2)
+    out = {"marginal": marginal, "joint": joint, "tail": tail}
+    return {k: (v if v > 0 else 1.0) for k, v in out.items()}
+
+
+_EXP_CACHE: dict[str, dict] = {}
+
+
+def m0_expected_scale(unit_dir: Path) -> dict:
+    if unit_dir.name not in _EXP_CACHE:
+        card = load_card(unit_dir)
+        p = card.get("scoring", {}).get("params", {})
+        mean, C, _L, _cells = m0_dist(unit_dir, order="grid")
+        _EXP_CACHE[unit_dir.name] = expected_scale_from(mean, C, tuple(p.get("tail_levels", (0.01, 0.05, 0.95, 0.99))))
+    return _EXP_CACHE[unit_dir.name]
 
 
 # ============================================================================ scoring via the official verifier
@@ -217,13 +297,20 @@ def m0_scale(unit_dir: Path) -> dict:
 
 
 def official_unit_score(unit_dir: Path, out_dir: Path, scale: dict | None = None,
-                        y: np.ndarray | None = None) -> dict:
+                        y: np.ndarray | None = None, rule: str | None = None) -> dict:
     """Run the track's own verifier (gates + metric) in ref_scale mode. Returns the unclipped
-    composite, the clipped contribution and the raw components."""
+    composite, the clipped contribution and the raw components. rule "new" (default) divides by
+    M0's expected error and clips at 8; "old" divides by M0's realized error and clips at 4."""
+    rule = rule or DEFAULT_RULE
+    cap = RULES[rule]["cap"]
     card = load_card(unit_dir)
-    if y is not None and scale is None:   # counterfactual outcome: rescale M0 against it too
-        scale = ref_scale_from(raw_components(card, m0_draws(unit_dir), y))
-    scale = scale or m0_scale(unit_dir)
+    if scale is None:
+        if rule == "new":
+            scale = m0_expected_scale(unit_dir)      # independent of the outcome
+        elif y is not None:                          # old rule, counterfactual outcome: rescale M0
+            scale = ref_scale_from(raw_components(card, m0_draws(unit_dir), y))
+        else:
+            scale = m0_scale(unit_dir)
     # The organizer reads ref_scale.json through POSIX-only O_DIRECTORY opens (normalization.py
     # _read_scale_bytes), so on Windows the scale is handed over as the same RefScale object the
     # loader would build; realized is flattened by the official flatten_realized. Everything else
@@ -236,13 +323,13 @@ def official_unit_score(unit_dir: Path, out_dir: Path, scale: dict | None = None
     try:
         v = S.build_verifier(ctx).run(ctx)
     except Exception as exc:  # noqa: BLE001
-        return {"admissible": False, "score": FAIL_SCORE, "error": f"{type(exc).__name__}: {exc}"}
+        return {"admissible": False, "score": cap, "error": f"{type(exc).__name__}: {exc}"}
     if not v.admissible:
-        return {"admissible": False, "score": FAIL_SCORE, "error": str(v.detail)[:200]}
+        return {"admissible": False, "score": cap, "error": str(v.detail)[:200]}
     d = v.detail
     comp = float(d["composite"])
     w = d["weights_effective"]
-    return {"admissible": True, "composite": comp, "score": min(max(comp, DOMAIN[0]), DOMAIN[1]),
+    return {"admissible": True, "composite": comp, "score": min(max(comp, 0.0), cap),
             "m": d["marginal"] / scale["marginal"], "j": d["joint"] / scale["joint"] if w[1] else 0.0,
             "t": d["tail"] / scale["tail"], "cells": d["cell_count"]}
 
@@ -255,6 +342,10 @@ def family(name: str) -> str:
     return name.split("-")[1] if name.startswith("t2-F") else "EX"
 
 
+def split_of(unit_dir: Path) -> str:
+    return str(load_card(unit_dir)["task"].get("split", ""))
+
+
 def asof_of(unit_dir: Path) -> str:
     return str(load_card(unit_dir)["provenance"]["data_cutoff"])[:10]
 
@@ -263,7 +354,7 @@ def score_root(out_root: Path) -> pd.DataFrame:
     rows = []
     for u in scorable_units():
         r = official_unit_score(u, out_root / u.name)
-        rows.append({"unit": u.name, "family": family(u.name), "asof": asof_of(u), **r})
+        rows.append({"unit": u.name, "family": family(u.name), "asof": asof_of(u), "split": split_of(u), **r})
     return pd.DataFrame(rows)
 
 
@@ -273,7 +364,11 @@ def summarize(df: pd.DataFrame, label: str) -> str:
         sub = df[df.family == f]
         if len(sub):
             parts.append(f"{f} {sub.score.mean():.4f}")
-    parts.append(f"clip4 {int((df.score >= 4.0).sum())} inadmissible {int((~df.admissible).sum())}")
+    if "split" in df:
+        val = df[df.split == "validation"]
+        parts.append(f"| validation {val.score.mean():.4f} (n={len(val)})")
+    cap = RULES[DEFAULT_RULE]["cap"]
+    parts.append(f"clip{cap:g} {int((df.score >= cap).sum())} inadmissible {int((~df.admissible).sum())}")
     return "  ".join(parts)
 
 
@@ -371,6 +466,17 @@ def cmd_noise() -> None:
     print(summarize(df, root.name), f"max|score-1| {float((df.score - 1).abs().max()):.2e}")
 
 
+def cmd_m0ref() -> None:
+    """M0's own reference row under the current rule: exact M0 draws (grid cell order, 500 draws,
+    crc32 seed) scored by the official verifier against M0's expected-error scale, clip 8."""
+    root = HERE / "out_audit_m0ref_grid"
+    for u in scorable_units():
+        write_forecast(root / u.name, u, m0_draws(u, order="grid"))
+    df = score_root(root)
+    df.to_csv(root / "_audit_scores.csv", index=False)
+    print(summarize(df, "M0 reference row (" + DEFAULT_RULE + ")"))
+
+
 def cmd_boot(a: str, b: str) -> None:
     da = pd.read_csv(Path(a) / "_audit_scores.csv")
     db = pd.read_csv(Path(b) / "_audit_scores.csv")
@@ -462,7 +568,7 @@ def main(argv: list[str]) -> int:
     c, rest = argv[0], argv[1:]
     {"score": lambda: cmd_score(rest), "compare": lambda: cmd_compare(rest[0]), "noise": cmd_noise,
      "boot": lambda: cmd_boot(rest[0], rest[1]), "variants": cmd_variants,
-     "check-realized": cmd_check_realized}[c]()
+     "check-realized": cmd_check_realized, "m0ref": cmd_m0ref}[c]()
     return 0
 
 

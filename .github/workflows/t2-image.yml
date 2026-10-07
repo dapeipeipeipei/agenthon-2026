@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TRACK2_REF: 2299dab3d31f5e93c10df087af86ffb0b7bfe938   # track2-forecasting-public: units + scorer
+  TRACK2_REF: 60509df4ad0756443f4af8dc9500aed99a995694   # track2-forecasting-public: units + scorer
   GHCR_OWNER: dapeipeipeipei
   GHCR_NAME: jinpei-t2
   PYTHONUTF8: "1"

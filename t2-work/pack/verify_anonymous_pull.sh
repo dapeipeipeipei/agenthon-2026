@@ -31,7 +31,10 @@ done
 is_digest "$digest" || die "not a digest: $digest"
 [[ "$repo" =~ ^[a-z0-9._/-]+$ ]] || die "repository must be lowercase owner/name: $repo"
 
-PY="$(pick_python 2>/dev/null || command -v python3 || command -v python)"
+# Project venv (.venv-docker, else .venv), else any python3/python on PATH. find_python never
+# calls die, so a missing venv falls through to PATH instead of exiting silently with status 1.
+PY="$(find_python || command -v python3 || command -v python || true)"
+[ -n "$PY" ] || die "no Python found: create the repo .venv (or run t2-work/pack/make_venv.sh), or put python3 on PATH"
 CURL=(curl -q -sS --proto '=https' --max-time 60)   # -q: ignore ~/.curlrc; curl never reads .netrc unless asked
 ACCEPT_ALL='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT

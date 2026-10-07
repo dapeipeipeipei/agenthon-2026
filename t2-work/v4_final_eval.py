@@ -5,8 +5,9 @@
 For each config and seed: per-card leaderboard score vs M0 (v4_eval). Reported: in-sample mean,
 per-era means (the fixed rows were chosen on all cards, so per-era numbers are NOT held-out;
 the held-out estimate of the selection procedure is v4_cv.py), forward (>= 2019) mean.
-Stress: y_k = c_M0 + k (y - c_M0) per cell (c_M0 = M0's centre anchor + s mu), M0 components
-recomputed against y_k, family means.
+Stress: y_k = c_M0 + k (y - c_M0) per cell (c_M0 = M0's centre anchor + s mu), family means. The
+divisor follows v4_eval.RULE: new rule (default) = M0's expected error, fixed; old rule = M0's
+error recomputed against y_k.
 """
 from __future__ import annotations
 
@@ -31,7 +32,9 @@ def with_rows(**rows):
 
 
 CONFIGS = {
-    "v4 adopted (F1 w1.0, F4 w1.1)": V4,
+    "v4 adopted (F2 w1.25, F4 w2.0)": V4,
+    "v4 of 10-06 (F2 w1.0, F4 w1.1)": with_rows(F2=("F2", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                                                F4=("F4", 1.1, 0.2, 1.5, 1.0, False, 1.0)),
     "prev v4 (F1 w0.9, F4 w1.25)": with_rows(F1=("F1", 0.9, 0.0, 1.0, 0.0, False, 1.0),
                                              F4=("F4", 1.25, 0.2, 1.5, 1.0, False, 1.0)),
     "F4 w1.0 (audit suggestion)": with_rows(F4=("F4", 1.0, 0.2, 1.5, 1.0, False, 1.0)),
@@ -69,7 +72,7 @@ def main():
         print(f"{name:32s} mean5seeds {np.mean(v):.4f} (seeds {min(spread):.4f}-{max(spread):.4f})  {fam}")
         print(f"{'':32s} eras {eras} | forward>=2019 {np.mean([v[i] for i in fwd]):.4f} ({ffam})")
     print("\nstress test: realized deviation from M0 centre x k (5-seed mean), family means")
-    for fam_name in ("F1", "F4"):
+    for fam_name in ("F1", "F2", "F4"):
         idx = [i for i, u in enumerate(units) if u["family"] == fam_name]
         print(f"  {fam_name}: k  " + "  ".join(f"{n[:24]:>24s}" for n in CONFIGS))
         for k in (0.0, 0.3, 0.5, 1.0, 1.25, 1.5):
@@ -80,7 +83,7 @@ def main():
                     for i in idx:
                         u = units[i]
                         y = cen[i] + k * (u["y"] - cen[i])
-                        ref = E.components(m0[i], y)
+                        ref = E.ref_for(u, y)   # new rule: fixed expected-error divisor
                         c = E.components(fl[i], y)
                         vals.append(E.normalized(c, ref, u["weights"], len(u["assets"]) * len(u["horizons"])))
                 cells.append(f"{np.mean(vals):24.3f}")

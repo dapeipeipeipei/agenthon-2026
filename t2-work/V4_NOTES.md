@@ -1,6 +1,51 @@
 # V4 notes — Track 2 engine profile v4 (2026-10-06)
 
-> **Revision 2 (same day, after the independent audit `AUDIT_T2.md`) — current state.**
+> **Revision 3 (2026-10-07) — the leaderboard rule changed; current state.**
+> Upstream `track2-forecasting-public` `60509df` (2026-10-06 23:04 -0400): each component is now
+> divided by the error **M0 expects of itself** (closed form from M0's mean/covariance,
+> docs/M0-BASELINE.md §5: marginal `mean sd/sqrt(pi)`, tail `mean phi(z_tau) x mean sd`, joint
+> `sum_{i!=j} Var|D_ij|^(1/2)`), no longer by M0's error on the realized outcome; cap and failure
+> value 4.0 -> **8.0**. Scorer code unchanged (comments only); M0 draws now use the card's grid cell
+> order. The score is now **proper**: widening is no longer punished through the divisor, and M0
+> itself scores far above 1 where outcomes moved more than its trailing 300 rows suggest.
+> Evaluators: `audit_metric.py` (official verifier, `m0_expected_scale`, `T2_RULE=new|old`),
+> `v4_eval.py` (`norm` = selected rule, `norm_new` / `norm_old` both kept), re-calibration in
+> `v4_newrule.py` (`sweep` 240 rows x 90 cards, `cv`, `seeds`, `stress`). Our closed-form divisor
+> reproduces the §4 exemplar (0.05260 / 0.1772 / 0.006051) and Monte-Carlo checks.
+>
+> Public board check: agenthon.net shows T2 as **-(mean)** ("higher is better ... raw loss is
+> converted"), re-scored under the new rule; M0's reference row is **-2.6412** on the 71
+> `validation` cards. Our exact M0 (grid order) on the 65 locally scorable validation cards = 2.317;
+> the 6 unscorable ones (ai-mom-2024, conflicting-texts-2024, brl/inr-transfer-2013,
+> em-transfer-joint-2013, cnh-tradewar-2018) would then average ~6.2 for M0.
+>
+> New-rule scores (5 seeds, 90 scorable cards; val65 = the validation cards we can score):
+>
+> | profile | all | F1 | F2 | F3 | F4 | val65 | est. board |
+> |---|---|---|---|---|---|---|---|
+> | M0 reference (exact) | 2.507 | 0.905 | 2.014 | 1.398 | 4.659 | 2.317 | -2.64 (actual) |
+> | v3 | 2.144 | 0.989 | 1.733 | 1.365 | 3.723 | 1.938 | ~ -2.2 to -2.3 |
+> | v4 rows of 10-06 (F2 1.0, F4 1.1) | 2.236 | 0.897 | 2.015 | 1.326 | 3.871 | 2.026 | ~ -2.3 to -2.4 |
+> | **v4 adopted (F2 1.25, F4 2.0)** | **1.975** | 0.897 | 1.786 | 1.326 | 3.240 | **1.773** | **~ -2.0 to -2.15** |
+>
+> (est. board: low end = val65 x 2.6412/2.317, high end = val65 cards plus the 6 missing cards at
+> M0's implied 6.2.) Default-seed CLI run of the adopted rows through the official verifier:
+> all 1.970, val65 1.767 (`scores_engine_v4_newrule.csv`); `run_all_gates --platform-env` 104/104,
+> 0 fallbacks. Per era (adopted vs 10-06 rows): 1.883/2.419, 2.447/2.918, 1.337/1.345,
+> 2.882/3.205, 1.398/1.417 — every era improves; forward (>= 2019) 2.062 vs 2.217.
+>
+> Selection (`v4_newrule.py cv`, held-out = the selection procedure re-run without the test
+> block): per-family 1-SE rule picks F1 1.0, F2 1.75, F3 drift 0.5, F4 2.5+mixture+shift (F4 2.0-2.5
+> in 5/5 folds); held-out eras 2.045, forward 2.107 (10-06 rows: 2.236 in-sample, forward 2.215).
+> Adopted rows are one step **more conservative** than the 1-SE choice (F2 1.25 not 1.75: 1.75
+> loses in 2022-24 and its fold selection was unstable; F4 2.0 not 2.5): calm-world test (outcomes
+> drawn from M0's own distribution, where M0 ~ 1.0) costs F2 +0.01 and F4 +0.42 (1.06 -> 1.47);
+> with public deviations halved (k = 0.5) F4 breaks even (1.84 vs 1.87), with k = 1.5 it gains 0.8.
+> So the F4 bet is: sealed F4 shocks at least half the size of the public ones. F1 and F3 rows
+> unchanged (F1 widening loses; F3 width 1.1 gains 0.004, noise). Shape variants (mixture 2.0,
+> drift 0.5, event width) within noise; not adopted.
+
+> **Revision 2 (2026-10-06, after the independent audit `AUDIT_T2.md`) — superseded by revision 3; numbers below are under the OLD rule (realized-error divisor, clip 4).**
 > (1) log_return targets: the v4 backbone now works on per-step ln(1+r) (`targets.log_return_steps`;
 > the target is the sum of ln(1+r_t)), not on the simple return rows M0 uses. Effect: 0.9220 -> 0.9219.
 > (2) Widths pulled toward 1.0 on the audit's stress tests: **F1 0.9 -> 1.0** (0.9 loses to M0 as

@@ -44,13 +44,22 @@ require_docker() {
 
 # The Python used for checking outputs and packing: the pinned .venv-docker if it exists,
 # otherwise the main dev .venv.
-pick_python() {
+# find_python prints the first one found and returns 0, or returns 1 without printing. It never
+# calls die, so it is safe inside $(...) with a fallback after `||`.
+find_python() {
   local c
   for c in "$VENV_DIR/Scripts/python.exe" "$VENV_DIR/bin/python" \
            "$ROOT_DIR/.venv/Scripts/python.exe" "$ROOT_DIR/.venv/bin/python"; do
     if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
   done
-  die "no Python environment found; run t2-work/pack/make_venv.sh first"
+  return 1
+}
+
+# pick_python: the same, but fatal when neither venv exists. NOTE: die inside $(...) only exits
+# the subshell (set -e then stops the caller with the message on stderr); never combine it with
+# `2>/dev/null || fallback` -- use find_python for that.
+pick_python() {
+  find_python || die "no Python environment found; run t2-work/pack/make_venv.sh first"
 }
 
 # Read KEY=VALUE state written by build.sh / push.sh (plain assignments only, never sourced).

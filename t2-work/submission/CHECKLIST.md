@@ -1,7 +1,9 @@
-# Track 2 compliance checklist (rules as of 2026-10-06)
+# Track 2 compliance checklist (rules as of 2026-10-07)
 
 Sources read, in ruling order (scorer/toolkit code > card.toml > starter pack > README):
-`track2-forecasting-public` @ `2299dab` (2026-10-01: SUBMISSION_CLI.md, README.md, CHANGELOG.md,
+`track2-forecasting-public` @ `60509df` (2026-10-06: expected-error divisor, cap/failure 8.0, 20
+units renamed, `[metadata].difficulty` removed, corpora expanded; scorer code unchanged except
+comments; earlier reads at `2299dab`: SUBMISSION_CLI.md, README.md, CHANGELOG.md,
 docs/MONTHLY-HORIZONS.md, RATIONALE-REVIEW.md, ARTIFACT-POLICY.md, M0-BASELINE.md, scorer source),
 `Agenthon2026-public` @ `bd01548` (2026-10-02: starter-packs/track2/*, starter-packs/CHANGELOG.md,
 docs/DEVELOPMENT-RUNTIME.md, HOUSE-MODEL.md), installed toolkit `qfbench2-common` 2.6.0
@@ -160,3 +162,21 @@ is not uploaded.
   that the hawkish/dovish balance set the stress direction, with the documents cited.
 * `t2-work/.v4_cache.pkl` and `.v4_sweep.pkl` hold reconstructed realized values: git-ignored, and
   the Dockerfile copies only `engine/` and `requirements.lock`.
+
+### Update for upstream `60509df` (2026-10-07: expected-error divisor, clip 8)
+
+* Card changes checked against the engine: `engine/cardinfo.py` reads the family from
+  `[metadata] category` (still present on all 104 cards; family read matches the id on 103/103
+  family cards); nothing in `engine/` reads `difficulty`, `design_note` or a unit id/name, so the
+  removal of `difficulty` and the 20 renamed units change no engine path.
+* v4 rows re-selected under the new rule (`t2-work/v4_newrule.py`, `V4_NOTES.md` revision 3):
+  F2 width 1.0 -> 1.25, F4 width 1.1 -> 2.0; F1/F3/default rows and v1-v3 unchanged (only the
+  `PROFILES["v4"]` literal changed).
+* `run_all_gates.py --engine engine --platform-env --out-root t2-work/out_engine_v4nr` on the
+  `60509df` units: **104/104 admissible, 0 fallbacks** (every meta `engine.v4_resolved` shows the
+  family row, e.g. F4 width 2.0, F2 width 1.25).
+* Official verifier, new rule (`audit_metric.py score t2-work/out_engine_v4nr`): all 1.970
+  (n = 90), validation 1.767 (n = 65), 3 cards at the 8.0 clip, 0 inadmissible
+  (`t2-work/scores_engine_v4_newrule.csv`); 5-seed mean 1.975 (`v4_final_eval.py`).
+* Toolkit pin unchanged (`qfbench2-common` v2.6.0 already in Dockerfile and workflows);
+  `.github/workflows/t2-image.yml` `TRACK2_REF` -> `60509df`.
