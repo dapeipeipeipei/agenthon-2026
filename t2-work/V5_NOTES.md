@@ -201,3 +201,20 @@ non-yield F4 target keeps the table direction.
 * v5b against `v5_fake_house.py` (MODEL_* set, arbitrary readings): 104/104, 0 fallbacks; 87 units
   1 request (gated), 17 units 2 (open-book + recall probe); all 1.7301 / validation 1.5065.
 * v1-v4 draws bit-identical to the previous commit.
+
+Images (GitHub Actions `t2-image.yml`, pushes to the candidate branches; every run: in-image
+**104/104** units ok with the platform's container settings, 104/104 identical to the native run,
+anonymous pull PASS, re-checked locally with `verify_anonymous_pull.sh`):
+
+| profile | branch @ commit | CI run | digest (ghcr.io/dapeipeipeipei/jinpei-t2@) | descriptor |
+|---|---|---|---|---|
+| v5a | cand/t2-v5a @ 67fd921 | 37590749308 | sha256:4cf052ac9cadb4114dbe8a9e9cdcb2f36f989b4f8c315cda70d2a099bac95b25 | submission.v5a.json (models []) |
+| v5b | cand/t2-v5b @ b7f85ef | 37590752479 | sha256:58ee9247b7426241a4b0b7c7965cc50e0b29dc44b037972ce25fc24215be9970 | submission.v5b.json (House row) |
+| v5a_h | cand/t2-v5a_h @ 2c30336 | 37590755557 | sha256:1cc9f77c3e8da4d95db0b48191ec890d4bb9d4b249175eeb51285c39f94c597b | submission.v5a_h.json (models []) |
+| v5b_h | cand/t2-v5b_h @ 75f4867 | 37590758526 | sha256:fb120f0e125fb029bcfb2dd44c00926fee7994c8ac154fbdd044c9e3ee030076 | submission.v5b_h.json (House row) |
+
+(The first v5a/v5b images of commit fa263b8, runs 37588136916 / 37588142050, are superseded.)
+
+Pack (owner, repo root; Team Key at the hidden prompt):
+`.venv\Scripts\python pack_all.py t2-v5a t2-v5b` -> ../agenthon-submissions/t2-dev-v5a.zip, t2-dev-v5b.zip
+(hedges: `pack_all.py t2-v5a_h t2-v5b_h`).

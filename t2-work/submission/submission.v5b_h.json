@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-forecasting-dev",
+  "team_id": "team-placeholder-derived-by-qfbench2-submission-pack",
+  "track": "forecasting",
+  "phase": "dev",
+  "category": "api",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "dapeipeipeipei/jinpei-t2",
+    "digest": "sha256:fb120f0e125fb029bcfb2dd44c00926fee7994c8ac154fbdd044c9e3ee030076"
+  },
+  "image_access": "public",
+  "models": [
+    {
+      "name": "nvidia/nemotron-3-super-120b-a12b",
+      "version": "rl-030326-fp8",
+      "revision": "rl-030326-fp8",
+      "training_cutoff": "unpublished",
+      "access": "api"
+    }
+  ],
+  "license": "Apache-2.0",
+  "descriptor_digest": "sha256:e64f149250501e7e3f1106ef2258759d9de24fcf4568d5dbb537402b0bc9e578"
+}
