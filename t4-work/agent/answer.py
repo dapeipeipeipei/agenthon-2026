@@ -9,7 +9,7 @@ from .corpus import Unit, task_table_text
 from .explain import build_claims, build_reasons, _task_row_claim
 from .predict import Pred
 
-AGENT_VERSION = "t4-agent 0.3.0"
+AGENT_VERSION = "t4-agent 0.4.0"
 
 #: The reasoning grader's cap on the per-entity answer it reads (entity_id + declared answer
 #: fields, compact JSON UTF-8 bytes). Over it, the unit's reasoning is not judged at all.
@@ -86,7 +86,18 @@ def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_n
     ans: dict = {"task_id": unit.task_id, "entity_predictions": rows}
     if reasons:
         try:
-            rs = reasons_override if reasons_override else build_reasons(unit, preds)
+            rs = list(reasons_override) if reasons_override else build_reasons(unit, preds)
+            if reasons_override and len(rs) < 3:
+                # top up model-written reasons with deterministic ones on other premises
+                have = {r["premise"] for r in rs}
+                for r in build_reasons(unit, preds):
+                    if len(rs) >= 3:
+                        break
+                    if r["premise"] not in have:
+                        rs.append(dict(r))
+                        have.add(r["premise"])
+                for i, r in enumerate(rs):
+                    r["reason_id"] = f"r{i + 1}"
             if rs:
                 ans["submitted_reasons"] = rs
         except Exception:  # noqa: BLE001 - reasons are optional; never risk the answer for them

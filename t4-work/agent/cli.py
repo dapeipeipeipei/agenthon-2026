@@ -91,7 +91,11 @@ def main(argv: list[str] | None = None) -> int:
     t_start = time.monotonic()
     if hasattr(signal, "SIGALRM"):
         signal.signal(signal.SIGALRM, _alarm)
-        signal.alarm(HARD_ALARM_S)
+        try:  # configurable for the Final's published limits; never above 560 s
+            alarm = int(min(560, max(60, float(os.environ.get("T4_HARD_ALARM", HARD_ALARM_S)))))
+        except ValueError:
+            alarm = HARD_ALARM_S
+        signal.alarm(alarm)
     try:
         run(args.task, args.corpus, args.out, t_start)
     except Exception as exc:  # noqa: BLE001 - last resort: still exit 0 with whatever we can

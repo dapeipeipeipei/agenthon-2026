@@ -31,7 +31,30 @@ sys.path.insert(0, str(T4))
 sys.path.insert(0, str(HERE))
 
 import winshim  # noqa: E402,F401  (Windows: emulate O_DIRECTORY/dir_fd for the scorer)
-from approx_truth import NAIVE, TRUTH  # noqa: E402
+from approx_truth import NAIVE as APPROX_NAIVE, TRUTH as APPROX_TRUTH  # noqa: E402
+
+#: Truth source per unit: VERIFIED first-release outcomes (headroom_truth.py cache, git-ignored,
+#: never read by the agent) where available, else the approximate memory-based values. The naive
+#: rule for verified units is headroom_eval's "carry" hypothesis (the author-guide naive).
+TRUTH: dict = {}
+NAIVE_ROWS: dict = {}
+TRUTH_SRC: dict = {}
+_VERIFIED = HERE / "out" / "_headroom" / "truth_verified.json"
+if _VERIFIED.is_file():
+    try:
+        import headroom_eval as _he
+
+        for _u, _rows in json.loads(_VERIFIED.read_text(encoding="utf-8")).items():
+            TRUTH[_u] = {e: (r.get("label"), r.get("y")) for e, r in _rows.items()}
+            NAIVE_ROWS[_u] = _he.naive_rows(_u, "carry")
+            TRUTH_SRC[_u] = "verified"
+    except Exception as _exc:  # noqa: BLE001
+        print(f"verified truth unusable ({_exc!r}); falling back to approx_truth", file=sys.stderr)
+        TRUTH, NAIVE_ROWS, TRUTH_SRC = {}, {}, {}
+for _u, _rows in APPROX_TRUTH.items():
+    if _u not in TRUTH:
+        TRUTH[_u] = _rows
+        TRUTH_SRC[_u] = "approx"
 
 PY = sys.executable
 
@@ -127,17 +150,21 @@ def scratch_unit(unit: Path, scratch: Path) -> Path:
             rows.append(row)
         (ref / "outcome.json").write_text(json.dumps({"outcomes": rows}), encoding="utf-8")
         task = json.loads((unit / "task.json").read_text(encoding="utf-8"))
-        nv = NAIVE[unit.name]
         preds = []
         for ent in task["entities"]:
-            src = nv.get("point")
-            p = float(ent[src]) if isinstance(src, str) else float(src or 0.0)
-            hw = nv.get("hw_abs") or abs(p) * nv.get("hw_rel", 0.1) or 1.0
+            if unit.name in NAIVE_ROWS:
+                lab, p, lo, hi = NAIVE_ROWS[unit.name][ent["entity_id"]]
+            else:
+                nv = APPROX_NAIVE[unit.name]
+                src = nv.get("point")
+                p = float(ent[src]) if isinstance(src, str) else float(src or 0.0)
+                hw = nv.get("hw_abs") or abs(p) * nv.get("hw_rel", 0.1) or 1.0
+                lo, hi, lab = p - hw, p + hw, nv.get("label")
             row = {"entity_id": ent["entity_id"], "point_forecast": p,
-                   "interval": {"level": 0.9, "lo": p - hw, "hi": p + hw},
+                   "interval": {"level": 0.9, "lo": lo, "hi": hi},
                    "claims": [{"doc_id": "task", "span_start": 0, "span_end": 1, "claim": "x"}]}
-            if nv.get("label"):
-                row["label"] = nv["label"]
+            if lab:
+                row["label"] = lab
             preds.append(row)
         (ref / "naive_answer.json").write_text(json.dumps({"task_id": task["task_id"], "entity_predictions": preds}), encoding="utf-8")
     return dst
@@ -192,7 +219,7 @@ def main() -> int:
     global DOCKER_IMAGE
     DOCKER_IMAGE = args.docker_image or None
     out_root = Path(args.out_root).resolve()  # docker -v needs an absolute host path
-    scratch = out_root / "_scratch_units"
+    scratch = out_root / ("_scratch_units_verified" if TRUTH_SRC else "_scratch_units")
     scratch.mkdir(parents=True, exist_ok=True)
 
     from baselines.guardrails_example.citation_rail import (
@@ -247,20 +274,25 @@ def main() -> int:
     by = {}
     for r in results:
         by.setdefault(r["unit"], {})[r["agent"]] = r
-    hdr = f"{'unit':34s} {'agent':9s} {'state':20s} {'score':>6s} {'pq':>5s} {'iq':>5s} {'acc':>5s} {'mae':>8s} {'cov':>5s} {'false':>5s} {'reasons':>7s}"
+    hdr = f"{'unit':34s} {'agent':9s} {'state':20s} {'score':>6s} {'pq':>5s} {'iq':>5s} {'acc':>5s} {'mae':>8s} {'cov':>5s} {'false':>5s} {'reasons':>7s} src"
     print(hdr)
-    tot = {}
+    tot: dict = {}
+    dev: dict = {}
     for u in sorted(by):
         for a in args.agents.split(","):
             r = by[u].get(a)
             if not r:
                 continue
             f = lambda k, w=5, p=2: (f"{r[k]:{w}.{p}f}" if isinstance(r.get(k), (int, float)) else " " * (w - 1) + "-")  # noqa: E731
-            print(f"{u:34s} {a:9s} {str(r.get('off_state')):20s} {f('off_score', 6, 3)} {f('off_pq')} {f('off_iq')} {f('acc')} {f('mae', 8, 3)} {f('cov')} {str(r.get('false_claims')):>5s} {r.get('n_reasons', 0):>7d}")
+            print(f"{u:34s} {a:9s} {str(r.get('off_state')):20s} {f('off_score', 6, 3)} {f('off_pq')} {f('off_iq')} {f('acc')} {f('mae', 8, 3)} {f('cov')} {str(r.get('false_claims')):>5s} {r.get('n_reasons', 0):>7d} {TRUTH_SRC.get(u, '-')}")
             if isinstance(r.get("off_score"), (int, float)):
                 tot.setdefault(a, []).append(r["off_score"])
+                if "EXAMPLE" not in u:
+                    dev.setdefault(a, []).append(r["off_score"])
     for a, xs in tot.items():
         print(f"mean analysis score over {len(xs)} locally-scorable units, {a}: {statistics.fmean(xs):.3f}  (leaderboard scale {-0.27 + 1.27 * statistics.fmean(xs):.3f})")
+    for a, xs in dev.items():
+        print(f"DEV-BOARD ESTIMATE ({len(xs)} non-EXAMPLE units), {a}: analysis {statistics.fmean(xs):.4f}  board {-0.27 + 1.27 * statistics.fmean(xs):.4f}")
 
     # admissibility gate for our agent: every unit answered, schema-valid, no fallback, no false
     # claim, not refused by the scorer, reasons clean
