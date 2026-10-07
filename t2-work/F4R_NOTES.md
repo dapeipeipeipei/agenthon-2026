@@ -126,14 +126,20 @@ rule's flip column is the mirror of its k1 column.
 The engine knobs stay in the code (all off, bit-identical) so the line can be re-run if more F4
 yield cards appear; the sealed Final set should be judged with v5a as is.
 
-### Stress table (5 seeds; rows so far — run paused by the owner, remaining rows
-### floor+w2.5 / bimodal 0.5 / dir pace_fs to be appended on resume)
+### Stress table (`f4r_exp.py stress`, 5 seeds; calm = outcomes from M0's own distribution,
+### k = realized deviation from M0's centre scaled, flip = F4 outcomes mirrored; F4r = the 10 yield cards)
 
 | config | calm all | calm F4 | calm F4r | k0.5 all | k0.5 F4 | k0.5 F4r | k1 all | k1 F4 | k1 F4r | k1.5 all | flip F4 | flip F4r |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | v5a | 1.326 | 1.902 | 1.325 | 1.002 | 1.494 | 1.827 | 1.731 | 2.484 | 3.080 | 2.898 | 5.099 | 3.071 |
 | floor 1.0 | 1.349 | 1.975 | 1.537 | 0.995 | 1.473 | 1.768 | 1.723 | 2.459 | 3.007 | 2.879 | 5.075 | 3.003 |
 | width 2.5 | 1.349 | 1.976 | 1.540 | 1.010 | 1.520 | 1.903 | 1.721 | 2.454 | 2.993 | 2.882 | 5.070 | 2.989 |
+| floor 1.0 + width 2.5 | 1.380 | 2.070 | 1.812 | 1.021 | 1.553 | 2.000 | 1.724 | 2.462 | 3.016 | 2.859 | 5.078 | 3.013 |
+| bimodal 0.5 | 1.337 | 1.937 | 1.427 | 1.004 | 1.502 | 1.851 | 1.722 | 2.457 | 3.003 | 2.889 | 5.083 | 3.028 |
+| dir pace_fs, skew 1 | 1.422 | 2.201 | 2.191 | 1.072 | 1.712 | 2.459 | 1.730 | 2.480 | 3.070 | 2.857 | 5.587 | 4.488 |
 
-Calm F4-rates +0.21 for both, k0.5 F4-rates -0.06 / +0.08, k1 -0.07 / -0.09: the gains are inside
-the seed-to-seed and card-sampling noise while the calm-world cost is not.
+Reading: every symmetric candidate costs +0.10 … +0.49 on the yield cards in the calm world and
++0.02 … +0.17 at half-size shocks, for gains of <= 0.09 at k = 1 (inside the card-sampling noise above).
+The direction rule is worse in every column except a tie at k = 1 (its flip column, 4.49 vs 3.07, is
+what a 4/10 call rate on the sealed set would look like). None of the stress columns is "not
+materially worse" at the same time as any held-out gain — the protocol's bar is not met.
