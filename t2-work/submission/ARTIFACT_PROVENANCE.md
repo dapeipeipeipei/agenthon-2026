@@ -82,29 +82,35 @@ only corpus documents with `timestamp <= as-of` (`engine/events.py` `_detect`, w
 undated documents), where the as-of is the earlier of `--asof` and the card's as-of
 (`engine/forecast.py` `run`).
 
-## v5 candidates (2026-10-07): profiles `v5a` and `v5b`
+## v5 candidates (2026-10-07): profiles `v5a`, `v5a_h`, `v5b`, `v5b_h`
 
-Built from branches `cand/t2-v5a` / `cand/t2-v5b` (identical code to `main`; only
-`engine/forecast.py` `DEFAULT_PROFILE` differs). Descriptors `submission.v5a.json` (`models: []`)
-and `submission.v5b.json` (`models` = the House row of HOUSE-MODEL.md). Method and all numbers:
+Built from branches `cand/t2-v5a`, `cand/t2-v5a_h`, `cand/t2-v5b`, `cand/t2-v5b_h` (code identical
+to `main`; only `engine/forecast.py` `DEFAULT_PROFILE` differs). Descriptors
+`submission.v5a.json` / `submission.v5a_h.json` (`models: []`) and `submission.v5b.json` /
+`submission.v5b_h.json` (`models` = the House row of HOUSE-MODEL.md). Method and numbers:
 `t2-work/V5_NOTES.md`.
 
 * **v5a constants** (`PROFILES["v5a"]`): the v4 revision-3 rows with the F4 row replaced by
   (width 2.0, no mixture, drift 1.0, log-normal path scale 0, scale-linked stress-side skew 1.0) and
-  `v5_rate_skew = 0` (UST-yield targets get no table skew). Selected on the same public practice
-  units and reconstructed outcomes (all dated 2024-12-31 or earlier) by `t2-work/v5_newrule.py`
-  (880-row per-family sweep + F4 refinement under the 60509df rule; per-family 1-SE rule;
-  leave-one-era-out and forward validation). Nothing per unit is stored; `.v5_sweep.pkl` /
-  `.v5_sweep_f4rs.pkl` (local caches with reconstructed outcomes) are git-ignored and not in the
-  build context. New code: `engine/v4.py` row fields [6] `ln_s`, [7] `skew`; `engine/assets.py`
-  `is_rate` (asset-id pattern, no unit id).
-* **v5b** = v5a + `engine/house.py` `assess_v5` (House model `nvidia/nemotron-3-super-120b-a12b`,
-  revision `rl-030326-fp8`, called through the platform's House route only; base-pretraining
-  exception of HOUSE-MODEL.md; no participant tuning of the model). It reads only the unit's own
-  documents dated <= as-of (calendar years masked), asks for a move size and per-target direction
-  with verbatim quotes, and runs a closed-book recall probe that drops any direction the model also
-  states without documents. Effect bounds (width x exp(0.1 s) on F2/F4; skew 0.25 sd_h on F2 and
-  F4 yields) were chosen by `t2-work/v5_house_oracle.py` on the practice units (synthetic readings
-  derived from the reconstructed outcomes are used ONLY in that offline ablation to size the
-  bounds; nothing derived from an outcome is in the image). At most 3 requests per unit; no
-  MODEL_* or any error -> forecast identical to v5a.
+  `v5_rate_skew = 0` (UST-yield targets get no table direction). **v5a_h**: the same with F4 width
+  1.5 (hedge for ex-ante Final windows). Selected on the same public practice units and
+  reconstructed outcomes (all dated 2024-12-31 or earlier) by `t2-work/v5_newrule.py` (880-row
+  per-family sweep + F4 refinement under the 60509df rule; per-family 1-SE rule; leave-one-era-out
+  and forward validation) and `t2-work/v5_f4_modes.py` (F4 mode x width, calm / scaled / flipped
+  outcome worlds). Nothing per unit is stored; `.v5_sweep.pkl` / `.v5_sweep_f4rs.pkl` (local caches
+  with reconstructed outcomes) are git-ignored and not in the build context. New code:
+  `engine/v4.py` row fields [6] `ln_s`, [7] `skew`, [8] `split_q`, `F4_PRESETS` and the env
+  overrides `JINPEI_T2_F4_MODE` / `JINPEI_T2_F4_WIDTH` / `JINPEI_T2_F4_Q` (not set by the image);
+  `engine/assets.py` `is_rate` (asset-id pattern, no unit id).
+* **v5b / v5b_h** = v5a / v5a_h + `engine/house.py` `assess_v5` (House model
+  `nvidia/nemotron-3-super-120b-a12b`, revision `rl-030326-fp8`, called through the platform's House
+  route only; base-pretraining exception of HOUSE-MODEL.md; no participant tuning of the model). It
+  reads only the unit's own documents dated <= as-of (calendar years masked), asks for a per-target
+  direction with a probability, an in-window scheduled event and a stated policy bias, with verbatim
+  quotes, and runs a closed-book recall probe that drops any direction the model also states without
+  documents. Effect: a calibrated split q = min(p, 0.6) on targets the stress table leaves open; no
+  width change. The bound was chosen by `t2-work/v5_house_oracle.py` on the practice units
+  (synthetic readings derived from reconstructed outcomes are used ONLY in that offline ablation to
+  size the bound; nothing derived from an outcome is in the image). At most 3 requests per unit;
+  timeouts via `JINPEI_HOUSE_TIMEOUT_S` / `JINPEI_HOUSE_BUDGET_S` (defaults 120 s / 420 s); no
+  MODEL_* or any error -> forecast identical to v5a / v5a_h.

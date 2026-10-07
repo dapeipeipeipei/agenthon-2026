@@ -395,9 +395,10 @@ def rationale_text(
     L.append("**How this was produced.** A deterministic program (engine "
              f"{prov.get('engine_version', '?')}, profile `{prof.get('name', 'fallback')}`, seed "
              f"{stats.get('seed', prov.get('seed', '?'))}). "
-             + ("The House language model was consulted for a bounded reading only (section 5): a width scale "
-                "and, where the deterministic stress table leaves a target's direction open, a bounded skew "
-                "direction that passed a verbatim-quote check and a closed-book recall probe. " if house_used
+             + ("The House language model was consulted for a bounded reading only (section 5): where the "
+                "deterministic stress table leaves a target's direction open, a direction with a probability, "
+                "used as a calibrated split (weight <= the profile bound on the called side) after an "
+                "in-window-event gate, a verbatim-quote check and a closed-book recall probe. " if house_used
                 else "No language model was called. ")
              + "Every number below is computed in this run from the panel rows dated on or before the as-of "
              "and the corpus documents dated on or before the as-of; no realized outcome, later data or "
@@ -796,10 +797,11 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                     f"{rd.get('dovish')} per 1k words -> inflation_dominated = {ev.get('inflation_dominated')})")
     if "house_model" in adjs:
         x = adjs["house_model"]
-        hs = (adjs.get("scale_linked_skew") or {}).get("from_house") or {}
-        used.append(f"House-model width x{_f(x.get('widen'), '.3f')}"
-                    + (f", skew direction(s) {hs} (sd_h per unit scale; only where the stress table is open)" if hs else
-                       ", no skew direction applied")
+        hs = adjs.get("stress_side_split_house") or {}
+        used.append("House-model reading: "
+                    + (f"calibrated split q = {_f(hs.get('q'), '.3g')} toward {hs.get('direction')} "
+                       f"({hs.get('n_reflected')} draws reflected; only where the stress table is open)" if hs else
+                       "no direction applied (gated, dropped by the recall probe, or nothing open)")
                     + f" ({x.get('requests')} request(s); reading {x.get('answer')}; recall probe {x.get('recall_check')})")
     if used:
         L.append("The corpus reached the draws only through: " + "; ".join(used) + ".")
@@ -829,6 +831,14 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                  + ". Direction 0 = no shift.")
     else:
         L.append("None for this family.")
+    for nm in ("stress_side_split_table", "stress_side_split_house"):
+        sp = adjs.get(nm)
+        if sp:
+            L.append(f"Calibrated split ({'stress table' if nm.endswith('table') else 'House reading'}): whole "
+                     f"deviation paths are reflected about the centre so that a share q = {_f(sp.get('q'), '.3g')} "
+                     f"of the draws ends on the called side at the last horizon (directions {sp.get('direction')}; "
+                     f"{sp.get('n_reflected')} draws reflected). Each side keeps its Gaussian shape; the mean "
+                     f"moves by about (2q - 1) x 0.8 x sd_h, which the ledger below does not include.")
     skw = adjs.get("scale_linked_skew")
     if skw:
         sba = skw.get("signed_skew_by_asset") or {}

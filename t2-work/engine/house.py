@@ -188,8 +188,9 @@ def assess(asof: str, assets: list[str], horizons: list[int], feats: dict[str, A
 # t2-work/v5_house_oracle.py. Any failure -> None -> the forecast is identical to the House-free one.
 
 V5_MAX_REQUESTS = 3          # open-book (+1 retry on an unusable reply) + closed-book probe; limit is 25
-V5_TIMEOUT_S = 40.0
-V5_BUDGET_S = 110.0
+# observed House latency on Dev: 18-52 s per response (research/COMPETITIVE.md); unit clock 1,800 s
+V5_TIMEOUT_S = float(os.environ.get("JINPEI_HOUSE_TIMEOUT_S", "") or 120.0)
+V5_BUDGET_S = float(os.environ.get("JINPEI_HOUSE_BUDGET_S", "") or 420.0)
 V5_MAX_TOKENS = 500
 MIN_QUOTE = 20
 
@@ -242,12 +243,14 @@ def build_open_v5(asof: str, assets: list[str], horizons: list[int],
         + "\n\n".join(parts) + "\n\n"
         "Using ONLY what these documents say (not anything you may remember about later events), "
         "return one JSON object with exactly these keys:\n"
-        '{"move_size": <integer 0-3: how large the move of the targets over the window is likely to be, '
-        "relative to their recent day-to-day volatility: 0 quieter than usual, 1 usual, 2 larger than usual, "
-        "3 a shock>, "
+        '{"scheduled_event_in_window": <true|false: the documents name a specific scheduled event that falls '
+        "inside the window (a policy meeting or decision, a data release, a vote, a deadline, an intervention)>, "
+        '"stated_policy_bias": <true|false: the documents state a clear policy lean for that event '
+        "(e.g. a hiking or cutting path, intervention, defending a peg)>, "
         f'"direction": {{{keys} each mapped to "up", "down" or "unclear": the direction the documents point to '
         "for the quoted value of that target}, "
-        '"confidence": "low" | "medium" | "high", '
+        f'"probability": {{{keys} each mapped to a number between 0.5 and 1.0: your probability that the stated '
+        "direction is right (0.5 = no idea)}, "
         '"evidence": [{"doc": <doc number>, "quote": "<exact words copied from that document>"}]}'
     )
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
@@ -279,29 +282,35 @@ def _json_obj(content: Any) -> dict[str, Any] | None:
 
 
 def parse_open_v5(content: Any, assets: list[str], excerpts: list[tuple[str, str, str]]) -> dict[str, Any] | None:
-    """Strict. {"move_size", "direction": {asset: -1/0/1}, "confidence", "quotes_ok", "raw_direction"} or None.
-    A direction survives only with confidence medium/high AND at least one verbatim quote."""
+    """Strict. {"event", "bias", "direction": {asset: -1/0/1}, "prob": {asset: p}, "quotes_ok", "raw"} or None.
+    A direction survives only if the documents name an in-window scheduled event AND a stated policy
+    bias, at least one verbatim quote (>= MIN_QUOTE chars) is found in the excerpts, and p >= 0.55."""
     obj = _json_obj(content)
     if obj is None:
         return None
-    ms = obj.get("move_size")
-    if isinstance(ms, bool) or not isinstance(ms, int) or not 0 <= ms <= 3:
-        return None
-    dr = obj.get("direction")
-    conf = obj.get("confidence")
-    if not isinstance(dr, dict) or conf not in ("low", "medium", "high"):
+    ev, bias = obj.get("scheduled_event_in_window"), obj.get("stated_policy_bias")
+    dr, pr = obj.get("direction"), obj.get("probability")
+    if not isinstance(ev, bool) or not isinstance(bias, bool) or not isinstance(dr, dict) or not isinstance(pr, dict):
         return None
     texts = [_norm(_YEAR.sub("[year]", x)) for _, _, x in excerpts]
     ok = 0
-    for ev in obj.get("evidence") or []:
-        if isinstance(ev, dict) and isinstance(ev.get("quote"), str):
-            q = _norm(ev["quote"])
+    for e in obj.get("evidence") or []:
+        if isinstance(e, dict) and isinstance(e.get("quote"), str):
+            q = _norm(e["quote"])
             if len(q) >= MIN_QUOTE and any(q in t for t in texts):
                 ok += 1
-    gate = ok > 0 and conf in ("medium", "high")
-    direction = {a: (_DIR.get(dr.get(a), 0) if gate and isinstance(dr.get(a), str) else 0) for a in assets}
-    return {"move_size": ms, "direction": direction, "confidence": conf, "quotes_ok": ok,
-            "raw_direction": {a: dr.get(a) for a in assets}}
+    gate = ev and bias and ok > 0
+    direction, prob = {}, {}
+    for a in assets:
+        d = _DIR.get(dr.get(a), 0) if isinstance(dr.get(a), str) else 0
+        p = pr.get(a)
+        p = float(p) if isinstance(p, (int, float)) and not isinstance(p, bool) else 0.5
+        p = min(max(p, 0.5), 1.0)
+        keep = gate and d != 0 and p >= 0.55
+        direction[a] = d if keep else 0
+        prob[a] = p if keep else 0.5
+    return {"event": ev, "bias": bias, "direction": direction, "prob": prob, "quotes_ok": ok,
+            "raw": {"direction": {a: dr.get(a) for a in assets}, "probability": {a: pr.get(a) for a in assets}}}
 
 
 def parse_closed_v5(content: Any, assets: list[str]) -> dict[str, Any] | None:
@@ -331,18 +340,18 @@ def recall_filter(open_ans: dict[str, Any], closed: dict[str, Any] | None) -> tu
 
 
 def effect_v5(answer: dict[str, Any], family: str | None, assets: list[str], profile: Any) -> dict[str, Any]:
-    """Bounded mapping (pure; used by the engine and by the oracle ablation).
-    width: x exp(b_w * s), s = {0: -1, 1: 0, 2: +0.5, 3: +1}[move_size], only for v5_house_width_fams;
-    skew:  the reading's direction at size v5_house_skew[family] (sd_h per unit path scale); the engine
-           applies it only where the deterministic stress table leaves the direction open."""
-    import math
-    s = {0: -1.0, 1: 0.0, 2: 0.5, 3: 1.0}.get(answer.get("move_size"), 0.0)
-    bw = float(getattr(profile, "v5_house_width", 0.0) or 0.0)
-    fams = tuple(getattr(profile, "v5_house_width_fams", ()) or ())
-    widen = float(math.exp(bw * s)) if (family in fams and bw) else 1.0
-    b = float(dict(getattr(profile, "v5_house_skew", ()) or ()).get(family or "", 0.0))
-    dirs = {a: (int(answer.get("direction", {}).get(a, 0)) if b else 0) for a in assets}
-    return {"widen": widen, "asym_add": 0.0, "skew_dir": dirs, "skew_size": b, "s": s}
+    """Bounded mapping (pure; used by the engine and by the oracle ablation): for the families in
+    v5_house_split_fams, a calibrated split on the called side with weight q = min(p, v5_house_q_max)
+    (q in [0.5, q_max]); the engine applies it only to targets whose direction the deterministic
+    table leaves open. No width change, no centre shift beyond what the split implies
+    ((2q - 1) x E|Z| <= 0.4 x 0.8 = 0.32 sd at q 0.7)."""
+    qmax = float(getattr(profile, "v5_house_q_max", 0.5) or 0.5)
+    fams = tuple(getattr(profile, "v5_house_split_fams", ()) or ())
+    on = family in fams and qmax > 0.5
+    dirs = {a: (int(answer.get("direction", {}).get(a, 0)) if on else 0) for a in assets}
+    qs = {a: (min(float(answer.get("prob", {}).get(a, 0.5)), qmax) if dirs[a] else 0.5) for a in assets}
+    return {"widen": 1.0, "asym_add": 0.0, "split_dir": {a: d for a, d in dirs.items() if d},
+            "split_q": {a: q for a, q in qs.items() if dirs[a]}}
 
 
 def assess_v5(asof: str, assets: list[str], horizons: list[int], feats: dict[str, Any] | None,
@@ -398,7 +407,8 @@ def assess_v5(asof: str, assets: list[str], horizons: list[int], feats: dict[str
         eff = effect_v5(ans, family, assets, profile)
         return {**eff, "answer": ans, "requests": n, "errors": errors, "recall_check": rc,
                 "elapsed_s": round(time.monotonic() - t0, 2),
-                "why": "House-model reading of the dated documents: bounded width scale and, where the "
-                       "deterministic stress table leaves it open, a bounded skew direction; centres untouched"}
+                "why": "House-model reading of the dated documents: a direction with a probability, used only "
+                       "as a calibrated split (q <= profile bound) where the deterministic stress table "
+                       "leaves the direction open; no width change"}
     except Exception:  # noqa: BLE001 - the House layer must never take the engine down
         return None

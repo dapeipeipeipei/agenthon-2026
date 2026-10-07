@@ -83,11 +83,46 @@ def horizon_steps(raw: pd.Series, h: int, hi: int, asof: str, window: int,
     return int(h), how + " (< 2x apart: declared horizon used)"
 
 
+#: v5 F4 presets (row tail after the family name), selectable by profile.v5_f4 or, for local
+#: experiments and quick rebuilds, the env var JINPEI_T2_F4_MODE; JINPEI_T2_F4_WIDTH / JINPEI_T2_F4_Q
+#: override the preset's width / split weight. (width, p, k, asym, ev, drift, ln_s, skew, split_q)
+F4_PRESETS = {
+    "rev3": (2.0, 0.2, 1.5, 1.0, False, 1.0, 0.0, 0.0, 0.5),    # v4 revision 3
+    "skew": (2.0, 0.0, 1.0, 0.0, False, 1.0, 0.0, 1.0, 0.5),    # v5a: scale-linked stress-side skew
+    "split": (2.5, 0.0, 1.0, 0.0, False, 1.0, 0.0, 0.0, 0.7),   # HEADROOM.md: calibrated stress-side split
+}
+
+
+def _f4_row(profile: Any, row: tuple) -> tuple[tuple, str | None]:
+    mode = os.environ.get("JINPEI_T2_F4_MODE", "").strip() or str(getattr(profile, "v5_f4", "") or "")
+    src = None
+    if mode:
+        if mode not in F4_PRESETS:
+            raise ValueError(f"unknown F4 mode {mode!r}")
+        row, src = F4_PRESETS[mode], f"preset {mode}"
+    if len(row) < 6:
+        row = tuple(row) + (float(profile.v4_drift),)
+    row = tuple(row) + (0.0, 0.0, 0.5)[len(row) - 6:]          # ln_s 0, skew 0, split_q 0.5 = off
+    w_env = os.environ.get("JINPEI_T2_F4_WIDTH", "").strip()
+    w_prof = float(getattr(profile, "v5_f4_width", 0.0) or 0.0)
+    if w_env or w_prof:
+        row = (float(w_env) if w_env else w_prof,) + row[1:]
+        src = (src or "row") + f", width {row[0]:g}"
+    q_env = os.environ.get("JINPEI_T2_F4_Q", "").strip()
+    if q_env:
+        row = row[:8] + (float(q_env),)
+        src = (src or "row") + f", split q {row[8]:g}"
+    return row, src
+
+
 def family_knobs(profile: Any, family: str | None) -> dict[str, Any]:
     """Per-family (width, tail_p, tail_k, asym, ev_width[, drift_frac]) with a family-agnostic
     "default" row; a row without drift_frac uses profile.v4_drift."""
     table = {r[0]: tuple(r[1:]) for r in profile.v4_family}
     row = table.get(family or "", table.get("default", (1.0, 0.0, 1.0, 0.0, False)))
+    f4_src = None
+    if family == "F4":
+        row, f4_src = _f4_row(profile, row)
     w, p, k, asym, evw = row[:5]
     drift = float(row[5]) if len(row) > 5 else float(profile.v4_drift)
     # v5 extensions (optional; absent = 0 = the v4 behaviour, draw for draw):
@@ -98,9 +133,12 @@ def family_knobs(profile: Any, family: str | None) -> dict[str, Any]:
     #             toward the stress side
     ln_s = float(row[6]) if len(row) > 6 else 0.0
     skew = float(row[7]) if len(row) > 7 else 0.0
+    #   [8] split_q  calibrated stress-side split: each path's deviation is reflected so that a share
+    #             split_q of the paths ends on the stress side (0.5 = off); shape of each side kept
+    split_q = float(row[8]) if len(row) > 8 else 0.5
     return {"width": float(w), "tail_p": float(p), "tail_k": float(k), "asym": float(asym),
-            "ev_width": bool(evw), "drift_frac": drift, "ln_s": ln_s, "skew": skew,
-            "row": "family" if (family or "") in table else "default"}
+            "ev_width": bool(evw), "drift_frac": drift, "ln_s": ln_s, "skew": skew, "split_q": split_q,
+            "row": "family" if (family or "") in table else "default", "f4_override": f4_src}
 
 
 def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int, seed: int,
@@ -211,9 +249,40 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
         mult = mult * np.exp(fk["ln_s"] * rng.standard_normal(n_draws))
     paths = np.cumsum(Z * mult[:, None, None] * sd_final[None, None, :], axis=1)
     t = np.arange(1, path_len + 1, dtype=float)
+    # ---- calibrated splits (v5): reflect whole deviation paths so that a share q ends on the called
+    # side at the card's last horizon (group-wise: the deterministic stress table on the family row,
+    # then the House reading on the assets the table leaves open). Rng is drawn only when active.
+    split_log: list[dict[str, Any]] = []
+    if plan:
+        from .assets import is_rate
+        dirs0 = plan.get("direction", {})
+        rate_on = float(getattr(profile, "v5_rate_skew", 1.0)) != 0.0
+        det = {a.asset: int(dirs0.get(a.asset, 0)) for a in inputs
+               if fk["split_q"] != 0.5 and (rate_on or not is_rate(a.asset))}
+        det = {a: d for a, d in det.items() if d}
+        groups = [("table", det, fk["split_q"])] if det else []
+        if hz and hz.get("split_dir"):
+            hd = {a: int(d) for a, d in hz["split_dir"].items() if int(d) and a not in det
+                  and not (fk["skew"] and int(dirs0.get(a, 0)) and (rate_on or not is_rate(a)))}
+            if hd:
+                qs = [float(hz.get("split_q", {}).get(a, 0.5)) for a in hd]
+                groups.append(("house", hd, float(np.mean(qs))))
+        last = steps[max(horizons)]
+        for name, dvec, q in groups:
+            q = float(min(max(q, 0.0), 1.0))
+            if q == 0.5:
+                continue
+            idx = [j for j, a in enumerate(inputs) if a.asset in dvec]
+            score = sum(dvec[inputs[j].asset] * paths[:, last[j] - 1, j] / sd_final[j] for j in idx)
+            want = rng.random(n_draws) < q
+            flip = (score > 0) != want
+            for j in idx:
+                paths[flip, :, j] *= -1.0
+            split_log.append({"name": f"stress_side_split_{name}", "q": q, "direction": dvec,
+                              "n_reflected": int(flip.sum())})
     drift = fk["drift_frac"] * mu
     paths += drift[None, None, :] * t[None, :, None]
-    adjustments: list[dict[str, Any]] = []
+    adjustments: list[dict[str, Any]] = list(split_log)
     dirs = (plan or {}).get("direction", {}) if plan else {}
     asym = (fk["asym"] + (float(hz.get("asym_add", 0.0)) if hz else 0.0)) * (float(plan["cell_damp"]) if plan else 1.0)
     if asym and tail_mask.any() and plan:

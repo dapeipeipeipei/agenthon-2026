@@ -8,10 +8,11 @@ The House model cannot be called locally, so the engine's House hook (engine.hou
 replaced by a deterministic stub that feeds a synthetic reading through the SAME bounded mapping the
 engine uses (engine.house.effect_v5). Synthetic readings per card, from the realized outcome
 relative to M0's centre and sd (this is an ablation of the mapping, never shipped):
-  perfect  direction = sign of the realized move at the last horizon; move size = card RMS z vs
-           its family's median card (< 0.6x -> quieter, > 1.6x -> shock, else usual)
-  random   direction uniform in {down, up}, move size uniform in {quieter, usual, shock} (3 draws)
-  wrong    the opposite direction and the opposite size bucket of `perfect`
+  perfect  direction = sign of the realized move at the last horizon, probability 1 (q = bound)
+  random   direction uniform in {down, up}, probability 1 (3 draws)
+  wrong    the opposite direction of `perfect`
+(The reading is applied as the engine applies it: a calibrated split, only on targets whose
+direction the deterministic table leaves open; in the real reader most cards are gated to "no call".)
   null     no reading (= v5a exactly)
 For a binary direction call with accuracy a the expected score is a*perfect + (1-a)*wrong per card,
 so the break-even accuracy is (wrong - null) / (wrong - perfect).
@@ -67,12 +68,15 @@ def truths(units):
 
 
 def answer(kind, t, assets, rng):
-    ms = {-1: 0, 0: 1, 1: 3}
+    """Synthetic reading in the parsed-answer format of engine.house.parse_open_v5 (gates passed,
+    probability 1.0, so q = the profile's bound)."""
     if kind == "perfect":
-        return {"move_size": ms[t["size"]], "direction": {a: t["dir"].get(a, 0) for a in assets}}
-    if kind == "wrong":
-        return {"move_size": ms[-t["size"]], "direction": {a: -t["dir"].get(a, 0) for a in assets}}
-    return {"move_size": int(rng.choice([0, 1, 3])), "direction": {a: int(rng.choice([-1, 1])) for a in assets}}
+        d = {a: t["dir"].get(a, 0) for a in assets}
+    elif kind == "wrong":
+        d = {a: -t["dir"].get(a, 0) for a in assets}
+    else:
+        d = {a: int(rng.choice([-1, 1])) for a in assets}
+    return {"direction": d, "prob": {a: 1.0 for a in assets}}
 
 
 def score(units, prof, kind, tr, seeds, rng_seed=0):
@@ -107,15 +111,12 @@ def main() -> None:
     print(line("null (= v5a)", null, units))
     configs = []
     if a.final:
-        configs.append(("v5b (all knobs, shipped bounds)", replace(model.PROFILES["v5b"], name="v5b-oracle")))
-    for bw in (0.1, 0.2, 0.3):
-        configs.append((f"width b_w {bw} (all families)", replace(base, v5_house_width=bw, v5_house_width_fams=FAMS)))
-    for bw in (0.1, 0.2):
-        configs.append((f"width b_w {bw} (F2, F4)", replace(base, v5_house_width=bw, v5_house_width_fams=("F2", "F4"))))
-    for b in (0.25, 0.5, 0.75):
-        configs.append((f"skew F2 {b}", replace(base, v5_house_skew=(("F2", b),))))
-    for b in (0.25, 0.5, 1.0):
-        configs.append((f"skew F4 (yields) {b}", replace(base, v5_house_skew=(("F4", b),))))
+        configs.append(("v5b (shipped bound)", replace(model.PROFILES["v5b"], name="v5b-oracle")))
+    all4 = ("F1", "F2", "F3", "F4")
+    for q in (0.6, 0.65, 0.7, 0.8):
+        configs.append((f"split q_max {q} (all families)", replace(base, v5_house_q_max=q, v5_house_split_fams=all4)))
+    for q in (0.6, 0.7):
+        configs.append((f"split q_max {q} (F2, F4)", replace(base, v5_house_q_max=q, v5_house_split_fams=("F2", "F4"))))
     if a.final:
         configs = configs[:1]
     for name, prof in configs:
