@@ -320,7 +320,8 @@ def _pieces(unit: Unit, doc: Doc, max_scan: int) -> list[tuple[int, int, frozens
         return cache[doc.doc_id]
     out: list[tuple[int, int, frozenset]] = []
     pos = 0
-    for piece in re.split(r"(?<=[.\n])", doc.text[:max_scan]):
+    # split after a sentence end followed by whitespace, or after a newline (never inside "3.59")
+    for piece in re.split(r"(?<=[.!?])(?=\s)|(?<=\n)", doc.text[:max_scan]):
         s, e = pos, pos + len(piece)
         pos = e
         frag = piece.strip()
@@ -362,8 +363,9 @@ def keyword_spans(unit: Unit, entity: dict, k: int = 2, max_scan: int = 400_000)
     return out
 
 
-def notes_span(unit: Unit, doc_id: str, needle_tokens: set[str]) -> Span | None:
-    """A NOTES/summary line of a table document that mentions the entity, verbatim."""
+def notes_span(unit: Unit, doc_id: str, needle_tokens: set[str], names: tuple[str, ...] = ()) -> Span | None:
+    """A NOTES/summary line of a table document that mentions the entity, verbatim. A line that
+    is ABOUT the entity ("- Food: ...") beats one that merely mentions a shared word."""
     doc = unit.docs.get(doc_id)
     if doc is None:
         return None
@@ -379,6 +381,9 @@ def notes_span(unit: Unit, doc_id: str, needle_tokens: set[str]) -> Span | None:
         ov = len(toks & needle_tokens) if needle_tokens else 0
         if ov == 0:
             continue
+        head = st.lstrip("-*• ").lower()
+        if any(n and (head.startswith(n.lower() + ":") or head.startswith(n.lower() + " (")) for n in names):
+            ov += 10
         lead = len(line) - len(line.lstrip())
         cand = (ov, (doc_id, s + lead, s + lead + len(st)))
         if best is None or cand[0] > best[0]:

@@ -520,7 +520,8 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         base = 0.0 if change else (anchor[1] if anchor else vals[-1])
         pr.strength = abs(point - base) / (sd + 1e-9)
         pr.spans.append((s.doc_id, s.row_spans[-1][0], s.row_spans[-1][1]))
-        ns = notes_span(unit, s.doc_id, norm_tokens(str(ent.get("name") or "")) | norm_tokens(s.label))
+        ns = notes_span(unit, s.doc_id, norm_tokens(str(ent.get("name") or "")) | norm_tokens(s.label),
+                        names=(str(ent.get("name") or ""), s.label))
         if ns:
             pr.spans.append(ns)
         if ttype == "classification":
