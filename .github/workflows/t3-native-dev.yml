@@ -32,7 +32,7 @@ jobs:
         run: |
           apt-get update && apt-get install -y --no-install-recommends g++ git ca-certificates && rm -rf /var/lib/apt/lists/*
           pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
-          g++ --version | head -1; ldd --version | head -1
+          g++ --version; ldd --version 2>&1 || true
 
       - uses: actions/checkout@v4
 
