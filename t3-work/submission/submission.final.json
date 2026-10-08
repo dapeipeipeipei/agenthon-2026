@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-simulation-final",
+  "team_id": "team-00000000000000000000000000000000",
+  "track": "simulation",
+  "phase": "final",
+  "category": "simulator",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "dapeipeipeipei/jinpei-t3",
+    "digest": "sha256:236d8f185b6b921236df9d587899d1bd99075bc2131bde3d78b823ec877d39f7"
+  },
+  "image_access": "public",
+  "models": [],
+  "license": "BSD-3-Clause",
+  "descriptor_digest": "sha256:5e257fd759052009215ae08a798e844cb303dd69f4c0d087e005980a9dd39a28"
+}

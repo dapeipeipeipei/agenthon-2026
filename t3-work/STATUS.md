@@ -1,21 +1,22 @@
 # T3（加速市场模拟）— 进度存档
 
-**最后更新：2026-10-08 下午**（第一天）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)。
+**最后更新：2026-10-08 晚**（第一天）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)。
 
 ## 一句话现状
 
-参考引擎（主办方 ABIDES 基线）已在本机复现并通过官方评分器 71/71；我们的 `jpsim` = 同一份引擎、输出逐字节相同、整进程快约 3 倍；镜像由 GitHub Actions 构建并在镜像内用平台参数跑全部 71 单元做字节级回归；描述文件待 CI 出 digest 后封印。
+**可以上传 Dev 了。** 参考引擎（主办方 ABIDES 基线）已在本机复现并通过官方评分器 71/71；我们的 `jpsim` = 同一份引擎、输出逐字节相同、整进程快 3.5 倍（本机）；镜像 `ghcr.io/dapeipeipeipei/jinpei-t3@sha256:236d8f18…`（CI run 37820272790，commit 84fc0126）已在 CI 里用平台参数跑完 71/71 字节级一致、重复稳定、匿名可拉；描述文件 `submission/submission.json`（dev）/`submission.final.json`（final）已封印校验。打包：`.venv\Scripts\python pack_all.py t3-dev`（老板输入 Team Key）。
 
 ## 数字（本机 i7-13700K，一进程一单元，整进程墙钟 = 启动 + import + 模拟 + 写 parquet）
 
 | | 参考引擎（abides_fork 原样） | jpsim | 倍数 |
 |---|---|---|---|
 | 官方评分器（developer verifier，g0–g3） | 71/71 PASS | 71/71 PASS | |
-| 事件/秒 算术平均（榜分口径） | **13 988** | **42 791**（第一轮）→ 第二轮见下 | ≈3.1× |
-| 中位数 | 14 004 | 45 334 | |
-| 最小（t3-s001，604 事件，固定开销主导） | 968 | 1 528 | |
-| 最大 | 18 454 | 94 640 | |
-| t3-gb-mega-throughput（1.17M 事件） | 87.0 s | ≈ 28 s | |
+| 事件/秒 算术平均（榜分口径） | **13 988** | **49 348** | **3.53×** |
+| 中位数 | 14 004 | 54 757 | |
+| 最小（t3-s001，604 事件，固定开销主导） | 968 | 1 573 | |
+| 最大（t3-mp05） | 18 454 | 77 856 | |
+| t3-gb-mega-throughput（1.17M 事件） | 87.0 s | 19.4 s | |
+| **CI 容器内**（GitHub runner，`--cpus=4 --read-only --user 65534`，daemon StartedAt→FinishedAt 窗口）均值 | 未测 | **36 739**（最小 s001 2 162，最大 gbatch-hetero 63 633；6 个 batch 单元 fork 并行 47–64k） | |
 
 两份 parquet（trace / message_trace）的 sha256 与主办方参考文件**完全相同**（71/71，`tools/check_hashes.py`）。
 
