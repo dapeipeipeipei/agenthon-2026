@@ -51,7 +51,7 @@ jobs:
           ldd /tmp/jpsim-native | grep -E "arrow|parquet|libstdc|libm"
           /tmp/jpsim-native --help
 
-      - name: Sanity: mu = log(mean_ns) agrees with numpy on this CPU for every unit
+      - name: "Sanity: mu = log(mean_ns) agrees with numpy on this CPU for every unit"
         run: |
           python - <<'PY'
           import json, pathlib, numpy as np, math, ctypes
