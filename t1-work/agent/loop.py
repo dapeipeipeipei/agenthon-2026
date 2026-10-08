@@ -24,13 +24,14 @@ import time
 from pathlib import Path
 
 from . import house, prompts
-from .outputs import (Contract, check_deliverables, contract_from_model, preview_outputs, rewrite_paths,
-                      sanitize_tree, tree_summary, write_stub)
+from .outputs import (BACKUP_MAX_BYTES, Contract, check_deliverables, contract_from_model, preview_outputs,
+                      rewrite_paths, sanitize_tree, tree_summary, write_stub)
 from .runner import RunResult, run_script
-from .unit import Unit, load_unit
+from .unit import Unit, compact_unit, load_unit
 
 FINAL_RESERVE_S = 15.0        # stubs + sanitation
 RUN_RESERVE_S = 20.0          # a run must leave at least this much before the deadline
+TOO_BIG = ("http_400", "http_413", "http_422")   # refused before admission (prompt does not fit the context window)
 
 
 def cfg() -> dict:
@@ -57,6 +58,8 @@ class Solver:
         self.t0 = t0
         self.events: list[str] = []
         self.unit: Unit | None = None
+        self.pu: Unit | None = None       # the unit as shown in prompts (swapped for a compact copy after a TOO_BIG refusal)
+        self.lock = threading.Lock()
         self.contract = Contract()
         self.deadline = t0 + self.c["unit_budget"]
         self.client: house.Client | None = None
@@ -82,7 +85,7 @@ class Solver:
     def run(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.unit = load_unit(self.task_dir)
-        u = self.unit
+        u = self.pu = self.unit
         budget = min(self.c["unit_budget"], max(120.0, u.timeout_sec - self.c["card_margin"]))
         self.deadline = self.t0 + budget
         if self.arm_alarm is not None:
@@ -91,7 +94,8 @@ class Solver:
             except Exception:  # noqa: BLE001
                 pass
         self.log(f"unit {u.unit_id}: card timeout {u.timeout_sec:.0f}s, our budget {budget:.0f}s, "
-                 f"{len(u.files)} data files, {len(u.canaries)} canary ids, mapping {len(u.mapping)} paths")
+                 f"{len(u.files)} data files, {len(u.canaries)} canary ids, mapping {len(u.mapping)} paths"
+                 + (f", checks shipped ({len(u.checks_names)} names)" if u.checks_text else ""))
         if not house.configured():
             self.log("House route not configured (MODEL_ENDPOINT/MODEL_TOKEN/MODEL_NAME missing): offline fallback")
             self.contract = contract_from_model(None, u, self.out_posix)
@@ -100,7 +104,9 @@ class Solver:
                                    call_timeout=self.c["call_timeout"])
         # 1. plan + contract
         plan_obj = None
-        r = self.client.chat(prompts.plan_messages(u, self.out_posix), max_tokens=1800, tag="plan")
+        r = self.client.chat(prompts.plan_messages(self.pu, self.out_posix), max_tokens=1800, tag="plan")
+        if r.status in TOO_BIG and self.shrink_prompts():
+            r = self.client.chat(prompts.plan_messages(self.pu, self.out_posix), max_tokens=1800, tag="plan+compact")
         if r.ok:
             plan_obj = house.extract_json(r.content)
         self.contract = contract_from_model(plan_obj, u, self.out_posix)
@@ -125,7 +131,7 @@ class Solver:
                 break
             rounds += 1
             report = self.report(res, problems)
-            new = self.get_code(prompts.repair_messages(u, self.out_posix, code, report, self.run_limit()), tag=f"repair{rounds}")
+            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, code, report, self.run_limit()), tag=f"repair{rounds}")
             if not new:
                 break
             code, res, problems = self.try_code(new, tag=f"repair{rounds}")
@@ -137,8 +143,17 @@ class Solver:
     def run_limit(self) -> int:
         return int(max(30.0, min(self.c["run_timeout"], self.remaining() - RUN_RESERVE_S)))
 
+    def shrink_prompts(self) -> bool:
+        """After a pre-admission refusal (prompt too large for the context window): show the unit
+        with short previews from now on. Returns False when already compact."""
+        if self.pu is not None and self.pu is not self.unit:
+            return False
+        self.pu = compact_unit(self.unit)
+        self.log("prompt refused as too large; switching to compact previews")
+        return True
+
     def generate_candidates(self) -> list[str]:
-        u = self.unit
+        u = self.pu
         k = self.c["candidates"]
         msgs = prompts.code_messages(u, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables)
         temps = [house.TEMPERATURE, 0.6, 0.9][:k]
@@ -159,6 +174,12 @@ class Solver:
         """A complete script from one logical call; continuation / compact retry when truncated."""
         cl = self.client
         r = cl.chat(messages, max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag, temperature=temperature)
+        if r.status in TOO_BIG and "repair" not in tag and cl.can_call(reserve=RUN_RESERVE_S + 20):
+            # only the code/compact prompts carry previews; rebuild them from the compact unit
+            with self.lock:
+                self.shrink_prompts()
+            messages = prompts.compact_messages(self.pu, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables)
+            r = cl.chat(messages, max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag + "+small", temperature=temperature)
         if not r.ok:
             self.log(f"{tag}: no reply ({r.status})")
             return None
@@ -176,7 +197,7 @@ class Solver:
                 if self.compiles(joined):
                     return joined
         if cl.can_call(reserve=RUN_RESERVE_S + 20) and "repair" not in tag:
-            r3 = cl.chat(prompts.compact_messages(self.unit, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables),
+            r3 = cl.chat(prompts.compact_messages(self.pu, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables),
                          max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag + "+compact", temperature=temperature)
             if r3.ok:
                 c3 = house.extract_code(r3.content)
@@ -227,8 +248,9 @@ class Solver:
     def try_code(self, code: str, *, tag: str) -> tuple[str, RunResult | None, list[str]]:
         code = rewrite_paths(code, self.unit, self.out_posix)
         limit = self.run_limit()
+        started = time.time()
         res = run_script(code, self.scratch, self.out_dir, timeout=limit, mem_gib=self.c["mem_gib"], threads=self.c["threads"])
-        problems = check_deliverables(self.out_dir, self.contract.deliverables)
+        problems = check_deliverables(self.out_dir, self.contract.deliverables, since=started)
         if not res.ok:
             problems = [res.report()] + problems
         self.log(f"{tag}: run {'ok' if res.ok else 'FAILED'} in {res.seconds:.0f}s (limit {limit}s); problems={len(problems)}"
@@ -254,11 +276,11 @@ class Solver:
             return
         names = [d.name for d in self.contract.deliverables]
         size = sum((self.out_dir / n).stat().st_size for n in names if (self.out_dir / n).is_file())
-        if size > 24 * (1 << 20):
+        if size > BACKUP_MAX_BYTES:
             self.log("skip review: deliverables too large to back up")
             return
         previews = preview_outputs(self.out_dir, self.contract.deliverables)
-        r = cl.chat(prompts.review_messages(self.unit, self.out_posix, code, previews, self.run_limit()),
+        r = cl.chat(prompts.review_messages(self.pu, self.out_posix, code, previews, self.run_limit()),
                     max_tokens=house.MAX_OUTPUT_TOKENS, tag="review")
         if not r.ok:
             self.log(f"review: no reply ({r.status})")

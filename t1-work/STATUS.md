@@ -5,6 +5,48 @@
 两道由假 House 给出真实解的题（`t1-EXAMPLE-bs-greeks-pde`、`t1-zero-coupon-bootstrapping`）**通过各自的官方 checker**，
 证明「计划 → 生成 → 运行 → 自检 → 复审 → 落盘」整条链是通的。**真实答题质量只有上传 Dev 才知道**（House 只能从评测容器里访问）。
 
+## 10-08 独立对抗性复审（分支 `t1/review`，未合并、未出镜像）
+
+依据：主办方 issue 全文（track1 #1–32、hub #1–8）、README/SUBMISSION_CLI/HOUSE-MODEL/DEVELOPMENT-RUNTIME/starter pack、
+本地跑 86 题 + 11 种退化模式 + 真实提示词 dump。结论：**v0.1 镜像作为盲投是"安全"的（不会 crash / no_output / 超时钟），
+但有几处会白白丢分的缺口，本分支已修；修完 86/86 exit 0、输出树合规、两道 oracle 过 checker、11 种退化模式全过、selftest ok。**
+
+修掉的问题（按严重度）：
+
+1. **自检会被上一轮候选的旧文件骗过**（`check_deliverables` 只看文件存在）：候选 0 写了部分文件后崩溃，候选 1 没写也判"全齐"，
+   修复循环提前结束。→ 现在按运行开始时间判定"本次是否重写"，旧文件算 `NOT WRITTEN by this script`。
+2. **39/86 题题面不写 `/app/output/x` 路径**（只写 "Save to /app/output/: 1. `option_values.json` ..."），正则兜底一个都抓不到；
+   plan 调用失败（House 超时/413）时合同为空 → 自检对任何 exit 0 的脚本都放行、桩文件只有 `results.json`。
+   → 加第二层抽取（反引号/粗体/标题里的裸文件名，剔除输入文件名），86 题全部能抽到；合同为空时"一个文件都没写"也算问题。
+3. **子进程用 `-I` 启动会把 `PYTHONHASHSEED=0`/`PYTHONUTF8` 全部丢掉**（-I 隐含 -E）→ 改 `-s -X utf8` 并手动清 PYTHONPATH。
+4. **"修 template.py" 类题（swap-curve-bootstrap-ois 16 KB、ewma）模型只看到前 1400 字符**，根本没法 debug → `.py/.md/.txt` 全文
+   （≤20k 字符）、小 json 全文（≤6k），总预览预算 48k；平台视角提示词中位 9k 字符、最大 38k（fx-carry），远小于任何合理上下文窗。
+5. **提示词超上下文窗会被预先拒绝**（hub#2：不计费但也没回复）→ 收到 400/413/422 后用紧凑预览重发一次（新 mock 模式 `413` 已加进 CI）。
+6. **闹钟/异常路径下子脚本可能在我们 finalize 之后继续往 /app/output 写** → 退出前 `kill_active()` 杀干净。
+7. **PID 上限 256**：主机核数远大于 16 的 quota，模型若写 `joblib n_jobs=-1`/`Pool()` 会按主机核数 fork → 子进程绑 16 个 CPU（按 pid 错开）、
+   `RLIMIT_NPROC=200`、`LOKY_MAX_CPU_COUNT`/`ARROW_IO_THREADS`/`RAYON_NUM_THREADS`=8；系统提示明说"禁用 multiprocessing/joblib"。
+8. 复审备份上限 24→16 MiB（/tmp 一共 64 MiB）。
+9. 提示词：说明脚本由 harness 保存执行、/app 只读（题面常写"保存到 /app/solve.py 再 python3 跑"，照做会 PermissionError）；
+   JSON 骨架逐键复刻（verifier 题的 `{"value": x}` 包装）、布尔用 true/false、CSV 行序/日期格式；常用数值库指引；
+   复审改成"只在能指出题面依据的确定性错误时才改，否则 OK"（原版鼓励重写，有把对改错的风险）。
+10. 若某个 roster 真把 `checks/` 挂进 /input（starter pack 明说"在就读"），自动把 checker 源码（去 canary）喂给模型并从中取交付物名；
+    平台目前不挂（issue #28），零成本。/input 布局变了（`data/` 或平铺）也能找到输入文件。
+
+核实过没问题的：`enable_thinking=false` 用法与 HOUSE-MODEL.md 一致且思考 token 确实计入 4000（#28）；`max_tokens` 超 4000 只会被夹
+不会拒；407 重试免费、429/5xx 计费、超时计费（都已按此处理）；urllib 自动走 `http_proxy`（含内嵌代理账号）；
+输出目录规则（链接/硬链接/>256/>64 MiB/大小写重名/非 NFC/权限位）全覆盖且 `chmod 644`；canary 从 instruction/card/Dockerfile
+抽取后在文本类输出里擦除；`/tmp` noexec 不影响 numba（JIT 在内存，缓存目录只是可选）；HOME=/tmp；`-B` + `PYTHONDONTWRITEBYTECODE`
+保证不留 `__pycache__`；脚本工作目录=输出目录，相对路径输出也落对地方。
+
+**仍然存在、代码解决不了的风险：**
+
+- **决赛 roster 大小与阶段钟未公布**（T1#31：13 日前才发），而 420 s/题是**烤进镜像**的（平台不传 env）。按 Dev 口径
+  86 × (420 + ~50 s 容器开销) ≈ 40,400 s < 43,200 s 没问题；若决赛题数更多或钟更短，**必须改 `JP_UNIT_BUDGET_SEC` 默认值重建镜像**，
+  算法：budget ≈ 阶段钟 / 题数 − 60 s，封顶 420。
+- 11 道 verifier 题其实是**容差比对**（rtol 0.1–0.2），不是精确值；能否过取决于模型照题面算得对不对，agent 层已保证文件/键形状。
+- 复审环节是否净增益、2 候选是否优于 1 候选 + 更多修复轮，没有 Dev 数据无法判断。
+- House 整轮宕机：每题 plan+2 候选各超时 150 s 后桩文件退出，整轮 0 分但不会 crash、不会撞钟。
+
 | 项 | 值 |
 |---|---|
 | 镜像 | `ghcr.io/dapeipeipeipei/jinpei-t1`（CI 构建；digest 见下表 / `submission/submission.json`） |

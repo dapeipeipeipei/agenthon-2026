@@ -23,11 +23,19 @@ from pathlib import Path
 CANARY_LINE = re.compile(r"^.*(BENCHMARK DATA SHOULD NEVER APPEAR|canary GUID|canary_guid).*$", re.I | re.M)
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
-#: Preview budgets (characters). The House model's context is large, but we keep prompts compact:
-#: a typical unit prompt is 6-20k characters.
+#: Preview budgets (characters). The House model's context is large (the served window is not
+#: published; a request that does not fit is refused before admission, so the loop retries with
+#: `compact_unit`), and a typical unit prompt is 6-30k characters. Script / markdown / text inputs
+#: are shown whole up to FULL_TEXT_CHARS: a "debug this template.py" unit cannot be solved from
+#: its first 60 lines.
 PREVIEW_FILE_CHARS = 1400
-PREVIEW_TOTAL_CHARS = 14000
+FULL_TEXT_CHARS = 20000
+FULL_JSON_CHARS = 6000
+PREVIEW_TOTAL_CHARS = 48000
+COMPACT_FILE_CHARS = 300
 MAX_LISTED_FILES = 80
+META_FILES = {"instruction.md", "card.toml", "manifest.json", "README.md"}
+META_DIRS = {"checks", "tests", "solution", "dev", "__pycache__"}
 
 
 @dataclass
@@ -51,6 +59,8 @@ class Unit:
     dockerfile: str = ""
     mapping: dict[str, str] = field(default_factory=dict)   # instruction path -> real path (posix)
     notes: list[str] = field(default_factory=list)
+    checks_text: str = ""               # the unit's own checker source when the platform ships it (it normally does not)
+    checks_names: list[str] = field(default_factory=list)   # output file names quoted in that checker
 
     @property
     def data_dir_posix(self) -> str:
@@ -91,28 +101,80 @@ def load_unit(task_dir: Path) -> Unit:
     dockerfile = _read_text(env_dir / "Dockerfile")
     for m in UUID_RE.findall(dockerfile):
         canaries.add(m.lower())
-    data_dir = env_dir / "data"
-    if not data_dir.is_dir():
-        data_dir = None
+    data_dir = _find_data_dir(task_dir)
     instruction = CANARY_LINE.sub("", instr_raw).strip()
     u = Unit(task_dir=task_dir, unit_id=unit_id, instruction=instruction, instruction_raw=instr_raw,
              card=card, timeout_sec=timeout, canaries=sorted(canaries), data_dir=data_dir, dockerfile=dockerfile)
-    u.files = _list_files(data_dir) if data_dir else []
+    u.files = _list_files(data_dir, is_root=data_dir in (task_dir, env_dir)) if data_dir else []
     u.mapping = _copy_mapping(dockerfile, data_dir, u.files)
     _add_previews(u)
+    _read_checks(u)
     return u
 
 
-def _list_files(data_dir: Path) -> list[DataFile]:
+def _find_data_dir(task_dir: Path) -> Path | None:
+    """`environment/data` as published; otherwise any other layout a roster might use (`data/`,
+    or files beside instruction.md), so an unexpected Final layout still exposes its inputs."""
+    for cand in (task_dir / "environment" / "data", task_dir / "data", task_dir / "environment"):
+        if cand.is_dir() and any(p.is_file() and p.name not in META_FILES and p.name != "Dockerfile" for p in cand.rglob("*")):
+            return cand
+    others = [p for p in task_dir.rglob("*") if p.is_file() and p.name not in META_FILES
+              and not (set(p.relative_to(task_dir).parts[:-1]) & META_DIRS)]
+    return task_dir if others else None
+
+
+def _list_files(data_dir: Path, is_root: bool = False) -> list[DataFile]:
     out: list[DataFile] = []
     for p in sorted(data_dir.rglob("*")):
-        if p.is_file() and not p.is_symlink():
-            try:
-                size = p.stat().st_size
-            except OSError:
-                size = -1
-            out.append(DataFile(rel=p.relative_to(data_dir).as_posix(), size=size))
+        if not p.is_file() or p.is_symlink():
+            continue
+        rel = p.relative_to(data_dir)
+        if is_root and (p.name in META_FILES and len(rel.parts) == 1 or p.name == "Dockerfile" or set(rel.parts[:-1]) & META_DIRS):
+            continue                      # the unit's own metadata when the data sits beside instruction.md
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = -1
+        out.append(DataFile(rel=rel.as_posix(), size=size))
     return out
+
+
+def _read_checks(u: Unit) -> None:
+    """The platform strips `checks/` from /input (issue #28), but the starter pack says to read it
+    whenever it is present: it is the only machine-readable statement of the output contract."""
+    checks = u.task_dir / "checks"
+    if not checks.is_dir():
+        return
+    parts = []
+    names: list[str] = []
+    inputs = {f.rel.split("/")[-1] for f in u.files}
+    for p in sorted(checks.glob("*.py")):
+        txt = CANARY_LINE.sub("", _read_text(p, 200_000))
+        for c in u.canaries:
+            txt = txt.replace(c, "<redacted>")
+        parts.append(f"--- checks/{p.name}\n{txt[:FULL_TEXT_CHARS]}")
+        for m in re.finditer(r"""['"]([A-Za-z0-9_./-]+\.(?:json|csv|parquet|pqt|png|html|txt|tsv|xlsx))['"]""", txt):
+            n = m.group(1)
+            if "/" in n and not n.startswith(("/app/output/", "/output/")):
+                continue
+            n = n.split("/")[-1]
+            if n in inputs or n in ("reward.json", "pytest_report.json", "expected.json", "checkpoints.json"):
+                continue                  # the unit's own inputs / the scorer's artifacts are not deliverables
+            if n not in names:
+                names.append(n)
+    u.checks_text = "\n".join(parts)[:FULL_TEXT_CHARS]
+    u.checks_names = names
+
+
+def compact_unit(u: Unit) -> Unit:
+    """The same unit with previews cut to a few lines each: used when a request is refused for
+    not fitting the model's context window."""
+    import copy
+
+    c = copy.copy(u)
+    c.files = [DataFile(f.rel, f.size, f.preview[:COMPACT_FILE_CHARS]) for f in u.files]
+    c.checks_text = u.checks_text[:3000]
+    return c
 
 
 # --------------------------------------------------------------------------- Dockerfile COPY mapping
@@ -226,6 +288,8 @@ def _preview_one(p: Path, rel: str) -> str:
     ext = p.suffix.lower()
     size = p.stat().st_size if p.exists() else 0
     try:
+        if ext in (".py", ".md", ".txt", ".toml", ".yaml", ".yml", ".cfg", ".ini") and size <= FULL_TEXT_CHARS:
+            return "[complete file]\n" + _read_text(p, FULL_TEXT_CHARS + 10).rstrip()
         if ext in (".csv", ".tsv", ".txt", ".md"):
             n = _count_lines(p)
             head = _text_head(p, PREVIEW_FILE_CHARS, lines=8 if ext in (".csv", ".tsv") else 20)
@@ -246,8 +310,8 @@ def _preview_one(p: Path, rel: str) -> str:
                 obj = json.loads(raw.decode("utf-8", "replace"))
             except Exception:  # noqa: BLE001
                 return _text_head(p, PREVIEW_FILE_CHARS)
-            if size <= 1200:
-                return raw.decode("utf-8", "replace")
+            if size <= FULL_JSON_CHARS:
+                return "[complete file]\n" + raw.decode("utf-8", "replace").rstrip()
             return "shape: " + _json_shape(obj)
         if ext in (".parquet", ".pqt"):
             try:
@@ -288,7 +352,7 @@ def _preview_one(p: Path, rel: str) -> str:
         if ext in (".xml", ".html", ".htm"):
             return _text_head(p, 700, lines=10)
         if ext == ".py":
-            return _text_head(p, PREVIEW_FILE_CHARS, lines=60)
+            return "[first lines of a longer script]\n" + _text_head(p, FULL_TEXT_CHARS // 2, lines=400)
         return _text_head(p, 400, lines=6)
     except Exception as exc:  # noqa: BLE001
         return f"[preview unavailable: {type(exc).__name__}]"
@@ -303,7 +367,8 @@ def _add_previews(u: Unit) -> None:
             f.preview = "[preview omitted: budget]"
             continue
         pv = _preview_one(u.data_dir / f.rel, f.rel)
-        pv = pv[:PREVIEW_FILE_CHARS]
+        cap = FULL_TEXT_CHARS if pv.startswith(("[complete file]", "[first lines")) else PREVIEW_FILE_CHARS
+        pv = pv[:min(cap, PREVIEW_TOTAL_CHARS - total)]
         # never show a canary to the model (it is in instruction.md too, which we strip)
         for c in u.canaries:
             pv = pv.replace(c, "<redacted>")
@@ -342,6 +407,31 @@ def mapping_block(u: Unit) -> str:
     if not out:
         out.append("  (no data files)")
     return "\n".join(out) + "\n"
+
+
+OUTPUT_EXTS = ("json", "csv", "parquet", "pqt", "png", "html", "htm", "txt", "tsv", "xlsx", "md", "svg", "pdf", "jpg", "jpeg")
+
+
+def named_output_files(instruction: str, input_names: set[str]) -> list[str]:
+    """Second-tier fallback: bare file names the task quotes (`summary.json`, **`greeks.csv`**) in
+    or after its output section, minus the unit's own input files. 39 of the 86 public units name
+    their deliverables only this way ("Save all results to /app/output/: 1. option_values.json ...")."""
+    text = instruction
+    m = re.search(r"^#+ .*(output|deliverable|required files|save)", text, re.I | re.M)
+    if m:
+        text = text[m.start():]
+    found: list[str] = []
+    pat = (r"`([A-Za-z0-9_][A-Za-z0-9_.-]*\.([A-Za-z0-9]{1,5}))`"            # `greeks.csv`
+           r"|\*\*([A-Za-z0-9_][A-Za-z0-9_.-]*\.([A-Za-z0-9]{1,5}))\*\*"      # **greeks.csv**
+           r"|^#+[^\n`]*?([A-Za-z0-9_][A-Za-z0-9_.-]*\.([A-Za-z0-9]{1,5}))[ \t\r]*$")   # ### 2. greeks.csv (CRLF-tolerant)
+    for m in re.finditer(pat, text, re.M):
+        name = m.group(1) or m.group(3) or m.group(5)
+        ext = (m.group(2) or m.group(4) or m.group(6)).lower()
+        if ext not in OUTPUT_EXTS or name in input_names or name.lower() in ("reward.json", "pytest_report.json", "reward.txt"):
+            continue
+        if name not in found:
+            found.append(name)
+    return found
 
 
 def regex_deliverables(instruction: str) -> list[str]:
