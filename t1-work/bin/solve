@@ -1,0 +1,4 @@
+#!/bin/sh
+# Track 1 verb. The harness runs `solve --task-dir /input --out /app/output`; no ENTRYPOINT, so this
+# script resolves from PATH and passes the verb and its arguments through to the agent package.
+exec python3 -B -m agent "$@"

@@ -1,0 +1,9 @@
+# keep the build context to the agent, its launcher and the pins
+*
+!agent/
+!agent/**
+!bin/
+!bin/solve
+!requirements.txt
+**/__pycache__
+**/*.pyc
