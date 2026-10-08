@@ -47,6 +47,8 @@ def solve(task_dir: Path, out_dir: Path) -> int:
     if hasattr(signal, "SIGALRM"):
         signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(int(budget + ALARM_GRACE_S))
+        # re-armed by the solver once the card's own timeout is known (it may be shorter)
+        solver.arm_alarm = lambda b: signal.alarm(max(1, int(b + ALARM_GRACE_S)))
     try:
         solver.run()
     except _Alarm:

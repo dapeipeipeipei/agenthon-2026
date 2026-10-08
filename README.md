@@ -51,6 +51,7 @@ agenthon/
 │   ├── submission/  ←   submission*.json（各候选的描述文件，不含任何密钥）、CHECKLIST.md（规则逐条对照）
 │   └── run_all_gates.py / v4_eval.py / audit_metric.py …  ← 本地打分台（按榜单方式打分）
 ├── t4-work/         ← Track 4（STATUS.md 有 A/B/C/D/E/E2 候选与成绩、EXP_T4NS.md 是 E/E2 的实验与审查记录、HEADROOM.md 上限分析、agent/、harness/、submission/）
+├── t1-work/         ← Track 1（10-08 新开：House 驱动的编程 agent 镜像；先读 t1-work/STATUS.md；agent/、harness/ 假 House 与本地 checker、submission/）
 ├── .github/workflows/  ← t2-image.yml、t4-image.yml、release-rehearsal.yml：云端构建镜像 + 平台同等限制下全量测试
 ├── LICENSE          ← Apache-2.0（与描述文件一致）
 └── Agenthon2026-public/  track1…track4-*-public/   ← 上游官方仓（gitignore，见「环境搭建」）

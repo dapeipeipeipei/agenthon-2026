@@ -64,6 +64,7 @@ class Solver:
         self.last_run: RunResult | None = None
         self.last_problems: list[str] = ["nothing ran"]
         self.finalized = False
+        self.arm_alarm = None       # set by cli on POSIX: re-arm the hard alarm to the final budget
 
     # ---- helpers
     def log(self, msg: str) -> None:
@@ -84,6 +85,11 @@ class Solver:
         u = self.unit
         budget = min(self.c["unit_budget"], max(120.0, u.timeout_sec - self.c["card_margin"]))
         self.deadline = self.t0 + budget
+        if self.arm_alarm is not None:
+            try:
+                self.arm_alarm(budget)
+            except Exception:  # noqa: BLE001
+                pass
         self.log(f"unit {u.unit_id}: card timeout {u.timeout_sec:.0f}s, our budget {budget:.0f}s, "
                  f"{len(u.files)} data files, {len(u.canaries)} canary ids, mapping {len(u.mapping)} paths")
         if not house.configured():
