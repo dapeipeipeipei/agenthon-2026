@@ -84,13 +84,15 @@ def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_n
     # `target_type` is optional in answer.json and only ever a liability (a mismatch with the
     # trusted card refuses the unit), so it is not written.
     ans: dict = {"task_id": unit.task_id, "entity_predictions": rows}
+    # the numbers the reasoning judge reads next to the reasons: exactly the written rows
+    submitted = {r["entity_id"]: (r["point_forecast"], r["interval"]["lo"], r["interval"]["hi"], r.get("label")) for r in rows}
     if reasons:
         try:
-            rs = list(reasons_override) if reasons_override else build_reasons(unit, preds)
+            rs = list(reasons_override) if reasons_override else build_reasons(unit, preds, submitted)
             if reasons_override and len(rs) < 3:
                 # top up model-written reasons with deterministic ones on other premises
                 have = {r["premise"] for r in rs}
-                for r in build_reasons(unit, preds):
+                for r in build_reasons(unit, preds, submitted):
                     if len(rs) >= 3:
                         break
                     if r["premise"] not in have:
