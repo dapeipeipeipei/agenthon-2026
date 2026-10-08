@@ -33,6 +33,13 @@
 | `t3-work/submission/submission.json` / `.final.json` | 待 CI digest |
 | `pack_all.py` | 已加 `t3-dev` / `t3-final` |
 
+## 使用说明（怎么跑、怎么交）
+
+1. **交 Dev**：主 checkout 里 `.venv\Scripts\python pack_all.py t3-dev` → 输入 Team Key → `../agenthon-submissions/t3-dev.zip` 上传 CodaBench（T3 赛道页）。Final 用 `t3-final`。
+2. **换镜像**：push `t3/build`（或 `workflow_dispatch`，可选 `dockerfile=t3-work/Dockerfile.pypy`、`tag_suffix=-pypy`）→ CI 全绿后从 job summary 取 digest → `python t3-work/tools/make_descriptors.py sha256:<digest>` → commit。
+3. **本地回归**（不需要 Docker）：`python t3-work/tools/run_units.py --python C:\Users\wensh\.cache\agenthon-t3\venv311\Scripts\python.exe --module jpsim --units track3-simulation-public/units --out-root <out> --pythonpath t3-work/engine`，然后 `PYTHONUTF8=1 .venv\Scripts\python t3-work/tools/check_hashes.py --units ... --out-root <out> --timing <out>/timing.json`（字节级）和 `score_local.py`（官方评分器）。
+4. **改引擎的铁律**：不改任何 `random_state`/`np.random` 抽样的次数、顺序、参数；改完必须 71/71 哈希一致。
+
 ## 本地工具
 
 - `tools/run_units.py`：一进程一单元跑任意引擎并记墙钟（参考引擎要 Python 3.11 环境，在 `C:\Users\wensh\.cache\agenthon-t3\venv311`，ABIDES 克隆+补丁在同目录 `abides/`）。
