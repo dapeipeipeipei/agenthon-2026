@@ -1,0 +1,152 @@
+# Track 1 (Coding) agent image: build for linux/amd64, run EVERY public unit inside the image with
+# the Development platform's container settings against a mock House route, check the output
+# trees the way the platform does before any checker, run each unit's own checker on what was
+# written (local pass rate, meaningful only for the mock's two oracle units), exercise the
+# degraded House modes, then push to GHCR and print the immutable digest. The pushed package is
+# PRIVATE until the owner makes it public (GitHub package settings).
+name: t1-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/t1-image, "cand/t1-*"]
+    paths:
+      - "t1-work/agent/**"
+      - "t1-work/bin/**"
+      - "t1-work/harness/**"
+      - "t1-work/Dockerfile"
+      - "t1-work/.dockerignore"
+      - "t1-work/requirements.txt"
+      - ".github/workflows/t1-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: t1-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/dapeipeipeipei/jinpei-t1
+  TRACK1_REF: 3fa6e295601b18e0427502117a26ac4fcf32cdb2   # track1-coding-public, 86 units (issue #20 roster)
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+  PYTHONUTF8: "1"
+
+defaults:
+  run:
+    shell: bash   # explicit bash => -eo pipefail, so `| tee` cannot hide a failing step
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 1 kit (units + checkers) at a pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track1-coding-public
+          ref: ${{ env.TRACK1_REF }}
+          path: track1-coding-public
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Host venv (toolkit v2.6.0 + the checkers' stack + the agent's preview deps)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$TOOLKIT" -r t1-work/requirements.txt pytest pytest-json-report pytest-timeout
+          python - <<'PY'
+          import json, pathlib, qfbench2_common
+          s = json.load(open(pathlib.Path(qfbench2_common.__file__).parent / "schemas/submission.schema.json"))
+          assert "image" in s["properties"] and s.get("additionalProperties") is False and len(s["required"]) == 12
+          print("toolkit schema current (12 keys, image object, closed vocabulary)")
+          PY
+
+      - name: Agent self-test and descriptor validation (host)
+        run: |
+          (cd t1-work && python -m agent.selftest)
+          python t1-work/descriptor_tool.py check --descriptor t1-work/submission/submission.json
+          python t1-work/descriptor_tool.py check --descriptor t1-work/submission/submission.final.json
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (linux/amd64)
+        run: |
+          docker buildx build --platform linux/amd64 --load -t t1-local:ci -f t1-work/Dockerfile t1-work
+          docker image inspect t1-local:ci --format 'label={{ index .Config.Labels "qfbench2.interface_version" }} user={{ .Config.User }} entrypoint={{ json .Config.Entrypoint }} cmd={{ json .Config.Cmd }} size={{ .Size }}'
+          test "$(docker image inspect t1-local:ci --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
+          test "$(docker image inspect t1-local:ci --format '{{ .Config.User }}')" = "65534:65534"
+          test -z "$(docker image inspect t1-local:ci --format '{{ json .Config.Volumes }}' | tr -d 'null')" || { echo "image declares a VOLUME"; exit 1; }
+
+      - name: Verb contract in the image (solve --help, no args, wrong verb, offline unit)
+        run: |
+          docker run --rm --network=none t1-local:ci solve --help | head -3
+          docker run --rm --network=none t1-local:ci | head -3
+          set +e; docker run --rm --network=none t1-local:ci forecast --x; echo "wrong verb exit=$? (expected 2)"; set -e
+          mkdir -p t1-ci-out/offline && chmod 777 t1-ci-out/offline
+          python t1-work/harness/run_units.py --docker-image t1-local:ci --offline --out-root t1-ci-out/offline \
+            --units t1-zero-coupon-bootstrapping t1-sec-10k-report-long t1-american-option-fd-new | tee -a t1-ci-out/summary.txt
+
+      - name: Every public unit in the image (platform settings) against the mock House
+        run: |
+          mkdir -p t1-ci-out/units
+          python t1-work/harness/run_units.py --docker-image t1-local:ci --out-root t1-ci-out/units --budget 240 \
+            | tee -a t1-ci-out/summary.txt
+
+      - name: Each unit's own checker on what the image wrote (local pass rate; the mock solves 2 units for real)
+        run: |
+          python t1-work/harness/check_units.py --out-root t1-ci-out/units | tee -a t1-ci-out/summary.txt
+          python - <<'PY'
+          import json
+          rows = json.load(open("t1-ci-out/units/checks.json"))
+          byname = {r["unit"]: r for r in rows}
+          for u in ("t1-EXAMPLE-bs-greeks-pde", "t1-zero-coupon-bootstrapping"):
+              assert byname[u]["status"] == "pass", f"{u}: the mock's oracle solution must pass its checker: {byname[u]}"
+          print("oracle units pass their checkers")
+          PY
+
+      - name: Degraded House modes in the image (never crash, always a valid tree)
+        run: |
+          for mode in flaky truncated think garbage 500 429 401 slow down; do
+            extra=""; [ "$mode" = slow ] && extra="--agent-env JP_CALL_TIMEOUT_SEC=6"
+            python t1-work/harness/run_units.py --docker-image t1-local:ci --mode "$mode" --budget 90 $extra \
+              --out-root "t1-ci-out/mode-$mode" --units t1-zero-coupon-bootstrapping t1-EXAMPLE-bs-greeks-pde t1-bollinger-backtest-aapl \
+              | tee -a t1-ci-out/summary.txt
+          done
+
+      - name: Push to GHCR
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag t1-local:ci "$IMAGE:${GITHUB_SHA::12}"
+          docker tag t1-local:ci "$IMAGE:ci"
+          docker push "$IMAGE:${GITHUB_SHA::12}"
+          docker push "$IMAGE:ci"
+          DIGEST=$(docker image inspect "$IMAGE:${GITHUB_SHA::12}" --format '{{ index .RepoDigests 0 }}')
+          echo "image digest: $DIGEST" | tee -a t1-ci-out/summary.txt
+          echo "### T1 image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary to job page
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^(units |local pass|image digest|unit  )" t1-ci-out/summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 40 t1-ci-out/summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t1-ci-summary
+          path: |
+            t1-ci-out/summary.txt
+            t1-ci-out/units/results.json
+            t1-ci-out/units/checks.json
+            t1-ci-out/units/*.log
+            t1-ci-out/mode-*/results.json
+          retention-days: 30

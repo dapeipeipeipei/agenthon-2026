@@ -36,3 +36,6 @@ t2-work/.v5_*.pkl
 t2-work/.v6_cache.pkl
 t2-work/gates_final_check.json
 t2-work/*_audit_scores.csv
+
+# T1 local harness outputs (regenerate with t1-work/harness/run_units.py)
+t1-work/harness/out/
