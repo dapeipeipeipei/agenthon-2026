@@ -73,7 +73,13 @@ def simulate(config_path: str | pathlib.Path, out_path: str | pathlib.Path,
     if fastsim is not None:
         from jpsim.trace_fast import message_table, trace_table
 
-        trace_arr, msg_arr = fastsim.run_scenario(scenario)
+        # The engine allocates millions of small objects and no reference cycles; the cyclic
+        # collector's generation sweeps over the live set are pure overhead (gb-mega: 1.1 s -> 0.6 s).
+        gc.disable()
+        try:
+            trace_arr, msg_arr = fastsim.run_scenario(scenario)
+        finally:
+            gc.enable()
         out_path = pathlib.Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         msg_out = out_path.parent / "message_trace.parquet"

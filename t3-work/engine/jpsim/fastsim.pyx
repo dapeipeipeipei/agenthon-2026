@@ -918,6 +918,10 @@ cdef class Sim:
                 self.causal = m.mid
                 self.ledger[e.row].seq = self.deliver_seq
                 self.deliver_seq += 1
+                if m.kind != K_MKT_CLOSE_PRICE:
+                    # delivered once and never referenced again (the close-price broadcast is the one
+                    # message object queued for several recipients): drop it, ~100 B x 1.5 M on gb-mega
+                    self.msgs[e.mid] = None
                 if r == 0:
                     self.exchange_receive(self.current_time, e.sender, m)
                 else:
