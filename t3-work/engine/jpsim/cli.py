@@ -272,11 +272,6 @@ def simulate_batch(batch_dir: str | pathlib.Path, out_dir: str | pathlib.Path,
 
 def main(argv: Optional[list[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    # pyarrow's first pa.array() call imports pandas when it is installed (0.2-0.3 s on a dev box
-    # with the reference stack); nothing on our path uses pandas and the image does not ship it, so
-    # make the lazy import fail fast everywhere. Output bytes do not depend on it (the pandas
-    # schema metadata is written explicitly by jpsim.trace_fast).
-    sys.modules.setdefault("pandas", None)  # type: ignore[assignment]
     ap = argparse.ArgumentParser(prog="jpsim")
     sp = ap.add_subparsers(dest="verb", required=True)
     s1 = sp.add_parser("simulate")

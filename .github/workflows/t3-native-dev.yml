@@ -1,0 +1,83 @@
+# Dev loop for the Python-free Track 3 binary (t3-work/engine/jpkernel/jpsim_native.cpp): build it
+# inside the runtime base image against the pyarrow 15.0.2 wheel's libarrow/libparquet, run all 71
+# public units with it, and check every output byte against the organizer's reference hashes.
+# No Docker image is built or pushed here; t3-image.yml does that.
+name: t3-native-dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [t3/kernel-cpp]
+    paths:
+      - "t3-work/engine/jpkernel/**"
+      - "t3-work/tools/run_units.py"
+      - "t3-work/tools/check_hashes.py"
+      - ".github/workflows/t3-native-dev.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container:
+      image: python:3.11-slim-bookworm
+    steps:
+      - name: Toolchain
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends g++ git ca-certificates && rm -rf /var/lib/apt/lists/*
+          pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+          g++ --version | head -1; ldd --version | head -1
+
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 3 kit (units; LFS parquet NOT fetched)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track3-simulation-public
+          ref: main
+          path: track3-simulation-public
+          lfs: false
+
+      - name: Build jpsim-native
+        run: |
+          python t3-work/engine/jpkernel/build_native.py --out /tmp/jpsim-native
+          ls -la /tmp/jpsim-native
+          ldd /tmp/jpsim-native | grep -E "arrow|parquet|libstdc|libm"
+          /tmp/jpsim-native --help
+
+      - name: Sanity: mu = log(mean_ns) agrees with numpy on this CPU for every unit
+        run: |
+          python - <<'PY'
+          import json, pathlib, numpy as np, math, ctypes
+          libm = ctypes.CDLL("libm.so.6"); libm.log.restype = ctypes.c_double; libm.log.argtypes = [ctypes.c_double]
+          bad = 0
+          for p in list(pathlib.Path("track3-simulation-public/units").glob("*/scenario.json")) + list(pathlib.Path("track3-simulation-public/units").glob("*/scenarios/*.json")):
+              s = json.loads(p.read_text()); lc = s.get("latency_config") or {}; x = float(lc.get("params", {}).get("mean_ns", 0.0))
+              if x > 0 and float(np.log(x)) != libm.log(x):
+                  bad += 1; print("MISMATCH", p, x, repr(float(np.log(x))), repr(libm.log(x)))
+          print("np.log vs glibc log mismatches:", bad)
+          raise SystemExit(bad)
+          PY
+
+      - name: Run every public unit with the native binary (one process per unit)
+        run: |
+          mkdir -p native-out
+          python t3-work/tools/run_units.py --exe /tmp/jpsim-native --units track3-simulation-public/units --out-root native-out | tee native-run.txt
+
+      - name: Byte-level check against the declared reference hashes
+        run: |
+          python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root native-out --timing native-out/timing.json | tee native-hashes.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -5 native-run.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -3 native-hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
