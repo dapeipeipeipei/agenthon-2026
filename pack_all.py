@@ -11,7 +11,8 @@ Run from the repo root:
 A short name `t2-<x>` that is not a default job means the T2 candidate descriptor
 t2-work/submission/submission.<x>.json and is packed to t2-<phase>-<x>.zip (phase read from the
 descriptor), e.g. t2-v5a -> t2-dev-v5a.zip; `t4-<x>` likewise reads
-t4-work/submission/submission.<x>.json (t4-a -> t4-dev-a.zip, t4-b -> t4-dev-b.zip). Every descriptor is checked to exist before the key is
+t4-work/submission/submission.<x>.json (t4-a -> t4-dev-a.zip, t4-b -> t4-dev-b.zip); `t3-<x>` likewise reads
+t3-work/submission/submission.<x>.json. Every descriptor is checked to exist before the key is
 asked for.
 
 The Team Key is typed at a hidden prompt; it is never printed, logged or written to disk.
@@ -32,6 +33,8 @@ DEFAULT_JOBS = {
     "t2-final.zip": ROOT / "t2-work/submission/submission.final.json",
     "t4-dev.zip": ROOT / "t4-work/submission/submission.json",
     "t4-final.zip": ROOT / "t4-work/submission/submission.final.json",
+    "t3-dev.zip": ROOT / "t3-work/submission/submission.json",
+    "t3-final.zip": ROOT / "t3-work/submission/submission.final.json",
 }
 
 
@@ -42,12 +45,12 @@ def resolve(arg: str) -> tuple[str, pathlib.Path]:
         return name, (p if p.is_absolute() else ROOT / p)
     if f"{arg}.zip" in DEFAULT_JOBS:
         return f"{arg}.zip", DEFAULT_JOBS[f"{arg}.zip"]
-    if arg.startswith(("t2-", "t4-")):
+    if arg.startswith(("t2-", "t3-", "t4-")):
         track, x = arg[:2], arg[3:]
         src = ROOT / f"{track}-work/submission/submission.{x}.json"
         phase = json.loads(src.read_text(encoding="utf-8")).get("phase", "dev") if src.is_file() else "dev"
         return f"{track}-{phase}-{x}.zip", src
-    sys.exit(f"unknown job {arg!r}: use t2-<candidate>, t4-<candidate>, a default job ({', '.join(n[:-4] for n in DEFAULT_JOBS)}) "
+    sys.exit(f"unknown job {arg!r}: use t2-<candidate>, t3-<candidate>, t4-<candidate>, a default job ({', '.join(n[:-4] for n in DEFAULT_JOBS)}) "
              "or descriptor.json=name.zip")
 
 

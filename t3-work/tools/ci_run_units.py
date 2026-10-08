@@ -46,7 +46,8 @@ def _parse_ts(s: str) -> float:
 
 def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float) -> tuple[int, float, str]:
     batch = (unit / "batch.json").is_file()
-    staging = pathlib.Path(tempfile.mkdtemp(prefix="t3in_"))
+    out = out.resolve()  # docker -v needs absolute host paths
+    staging = pathlib.Path(tempfile.mkdtemp(prefix="t3in_")).resolve()
     try:
         if batch:
             shutil.copytree(unit / "scenarios", staging / "scenarios")
