@@ -1,4 +1,5 @@
 #!/bin/sh
 # Track 3 submission verb: simulate --config /input/scenario.json --out /output/trace.parquet
 # -O: assert statements are not part of the simulation semantics (none can fail on a valid run).
-exec python -O -m jpsim.cli simulate "$@"
+# JPSIM_PYTHON selects the interpreter (pypy3 in the PyPy image, python otherwise).
+exec "${JPSIM_PYTHON:-python}" -O -m jpsim.cli simulate "$@"

@@ -1,0 +1,49 @@
+# jpsim, PyPy variant: the simulation runs on PyPy 3.9 (JIT) with numpy 1.26.4 (the baseline's
+# RandomState streams come from numpy's own C code, identical on both interpreters); pyarrow has no
+# PyPy build, so the columns are handed to Debian's CPython 3.11 + pyarrow 15.0.2 through one
+# .npz file under /output, and that writer produces the parquet files and events.json
+# (jpsim/writer.py). Everything else is identical to t3-work/Dockerfile.
+#
+# Build: docker buildx build --platform linux/amd64 -t jpsim:pypy -f t3-work/Dockerfile.pypy t3-work
+
+FROM --platform=linux/amd64 pypy:3.9-7.3.16-bookworm
+
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
+
+ENV PYTHONDONTWRITEBYTECODE=0 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    HOME=/tmp \
+    PYTHONPATH=/opt/jpsim \
+    JPSIM_PYTHON=pypy3 \
+    JPSIM_WRITER=/usr/bin/python3 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1
+
+# PyPy side: numpy only. CPython side (Debian python3.11): numpy + pyarrow for the writer.
+RUN pypy3 -m pip install --no-cache-dir "numpy==1.26.4" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+
+COPY engine /opt/jpsim
+COPY bin/simulate /usr/local/bin/simulate
+COPY bin/simulate-batch /usr/local/bin/simulate-batch
+
+RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
+ && find /opt/jpsim -type d -exec chmod 0755 {} + \
+ && find /opt/jpsim -type f -exec chmod 0644 {} + \
+ && pypy3 -m compileall -q -o 0 -o 1 /opt/jpsim \
+ && python3 -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim \
+ && pypy3 -c "import sys; sys.modules['pandas']=None; sys.modules['pyarrow']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; print('pypy import ok:', sys.version.split()[0])" \
+ && python3 -c "import jpsim.writer, jpsim.trace_fast, pyarrow; print('writer import ok', pyarrow.__version__)"
+
+WORKDIR /tmp
+USER 65534:65534
+CMD ["simulate", "--help"]

@@ -54,6 +54,7 @@ def simulate(config_path: str | pathlib.Path, out_path: str | pathlib.Path,
              seed: Optional[int] = None) -> dict[str, Any]:
     """Run one scenario; write trace.parquet, message_trace.parquet and events.json next to it."""
     t_start = time.perf_counter()
+    t_epoch = time.time()
     from abides_core import abides
 
     from jpsim.config import build_config
@@ -76,6 +77,30 @@ def simulate(config_path: str | pathlib.Path, out_path: str | pathlib.Path,
 
     out_path = pathlib.Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = os.environ.get("JPSIM_WRITER")
+    if writer:
+        # Two-interpreter image: this process (PyPy, no pyarrow) hands the columns to a CPython
+        # writer through one .npz under the output directory, which the writer deletes.
+        from jpsim.trace_fast import message_arrays, save_handoff, trace_arrays
+
+        handoff = out_path.parent / ".jpsim-handoff.npz"
+        meta = out_path.parent / ".jpsim-meta.json"
+        save_handoff(str(handoff), trace_arrays(end_state["agents"]), message_arrays(end_state))
+        meta.write_text(json.dumps({
+            "scenario_id": str(scenario["scenario_id"]), "seed": int(scenario["seed"]),
+            "t_start": t_epoch, "peak_memory_bytes": _peak_rss_bytes(),
+        }))
+        import subprocess
+
+        proc = subprocess.run([writer, "-O", "-m", "jpsim.writer", str(handoff), str(out_path), str(meta)],
+                              capture_output=True, text=True)
+        for p in (handoff, meta):
+            if p.exists():
+                p.unlink()
+        if proc.returncode != 0:
+            raise SystemExit(f"jpsim writer failed: {proc.stderr[-2000:]}")
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
     trace = build_trace(end_state["agents"])
     message_trace = build_message_trace(end_state)
     write_parquet(trace, str(out_path))

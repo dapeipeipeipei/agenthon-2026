@@ -16,7 +16,7 @@ WORKDIR /opt/jpsim
 RUN python - <<'PY'
 import pathlib, subprocess, sys
 mods = [l.strip() for l in pathlib.Path("/opt/cython_modules.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
-cmd = [sys.executable, "-m", "cython", "-3", "--directive", "language_level=3,binding=True,embedsignature=False,always_allow_keywords=True", *mods]
+cmd = [sys.executable, "-m", "cython", "-3", "--directive", "language_level=3,binding=True,embedsignature=False,always_allow_keywords=True,annotation_typing=False", *mods]
 print(" ".join(cmd)); subprocess.check_call(cmd)
 PY
 RUN python - <<'PY'
