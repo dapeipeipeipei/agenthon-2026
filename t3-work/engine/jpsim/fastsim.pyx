@@ -732,9 +732,13 @@ cdef class Sim:
             r.mkt_closed = current_time > self.mkt_close
             self.exch_send(sender, r)
         elif msg.kind == K_LIMIT_ORDER:
-            self.handle_limit_order(copy_order(msg.order))
+            # Python: handle_limit_order(copy_order(message.order)). The sender never reads its
+            # original object again (its ORDER_SUBMITTED row was captured at placement and it holds
+            # a separate copy in self.orders), so the working copy can be the message's object.
+            self.handle_limit_order(msg.order)
         elif msg.kind == K_CANCEL_ORDER:
-            self.cancel_order(copy_order(msg.order), 0)
+            # Python: cancel_order(copy_order(message.order)); the copy is only read (side, price, id).
+            self.cancel_order(msg.order, 0)
 
     # --- trading agents ----------------------------------------------------------------------
     cdef inline void log_order(self, Agent ag, int type, Order o):
