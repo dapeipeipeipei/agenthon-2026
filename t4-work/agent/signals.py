@@ -446,12 +446,30 @@ _STEP_BY_BP = re.compile(r"by (\d{2,3})[ -]basis[ -]points?", re.IGNORECASE)
 _STEP_BP = re.compile(r"(\d{2,3})[ -]basis[ -]points? (?:rate )?(increase|hike|rise|cut|reduction|decrease|easing|tightening)", re.IGNORECASE)
 _SEP_FF = re.compile(r"Federal funds rate\s+(\d\.\d{1,2})\s+(\d\.\d{1,2})", re.IGNORECASE)
 _SEP_PROSE = re.compile(r"(\d\.\d{1,2}) percent median federal funds rate", re.IGNORECASE)
+_SEP_CONTEXT = re.compile(r"projection|projected|median", re.IGNORECASE)
+
+
+def _sep_table_match(text: str) -> re.Match | None:
+    """The 'Federal funds rate  x.x  y.y' row of a projections table: a bare rate table ("Effective
+    federal funds rate 5.33 5.33") carries no projection and is not a policy anchor."""
+    for m in _SEP_FF.finditer(text):
+        before = text[max(0, m.start() - 600):m.start()]
+        if re.search(r"effective\s*$", before, re.IGNORECASE):
+            continue
+        if _SEP_CONTEXT.search(before):
+            return m
+    return None
+
+
 _UP_WORDS = ("raise", "increase", "lift")
 _DOWN_WORDS = ("lower", "reduce", "cut")
 
 
 def _frac(s: str) -> float | None:
     s = s.strip().replace(" ", "-")
+    mb = re.fullmatch(r"(\d)/(\d)", s)  # a bare fraction ("by 1/2 percentage point")
+    if mb:
+        return float(mb.group(1)) / float(mb.group(2)) if mb.group(2) != "0" else None
     m = re.fullmatch(r"(\d{1,2})(?:-(\d)/(\d))?(?:\.(\d+))?", s)
     if not m:
         return None
@@ -530,7 +548,7 @@ def policy_path_signal(unit: Unit) -> PolicyPathSignal | None:
         for d2 in sorted(unit.docs.values(), key=lambda d: (d.doc_date, d.doc_id), reverse=True):
             if not d2.citable:
                 continue
-            ms = _SEP_FF.search(d2.text) or _SEP_PROSE.search(d2.text)
+            ms = _sep_table_match(d2.text) or _SEP_PROSE.search(d2.text)
             if not ms:
                 continue
             sep = float(ms.group(1))
