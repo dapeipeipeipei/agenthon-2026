@@ -71,8 +71,9 @@ def simulate(config_path: str | pathlib.Path, out_path: str | pathlib.Path,
     # cyclic collector's generation-0 sweeps are pure overhead here. Freeze what exists now and
     # raise the thresholds (not disabled: the biggest public unit allocates ~1 GB otherwise).
     gc.collect()
-    gc.freeze()
-    gc.set_threshold(200_000, 50, 100)
+    if hasattr(gc, "freeze"):  # CPython; PyPy's GC has neither knob and needs neither
+        gc.freeze()
+        gc.set_threshold(200_000, 50, 100)
     end_state = abides.run(config)
 
     out_path = pathlib.Path(out_path)
