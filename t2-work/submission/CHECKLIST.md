@@ -199,3 +199,18 @@ is not uploaded.
 * A8 for v5b*: the image reads MODEL_* when present (House route through the proxy env, POST
   `/v1/chat/completions`, bearer, thinking disabled); `models` in `submission.v5b*.json` carries the
   HOUSE-MODEL.md row, resealed. v5a* / v4: unchanged (no network, `models: []`).
+
+### Update 2026-10-08: sealed-set robustness pass (`t2-work/ROBUST_NOTES.md`, `robust_synth.py`)
+
+* 32 synthetic sealed-style cards (family missing / unknown / only in tags, new asset ids, pair
+  spellings, non-UST yields, log_return on a price panel, monthly without an observation month,
+  transfer with an anchor-only panel or no G10 panel, 1-cell h=1, 12-cell h=1/63/126, 0 / 300 docs,
+  odd encodings, dirty / wide / datetime panels, minimal card.toml, weekend as-of): before the pass
+  32/32 admissible but 4 Gaussian fallbacks (two at anchor 0), 1 false family, 1 missed family,
+  3 unmapped directions; after: **32/32 admissible, 0 fallbacks, all on v4 natively**, every
+  unknown asset id symmetric (no skew).
+* Engine fixes are generic (card reader, panel reader, transfer path, log_return tripwire, monthly
+  override per asset, corpus read budget, FX pair spellings); every `forecast.parquet` of the 104
+  practice units is byte-identical for v5a before vs after (and for v1/v3/v4 on the 12 units
+  that touch the changed paths). The images built before this commit therefore produce the same
+  draws on the practice set; a rebuild is only needed to carry the sealed-set hardening.

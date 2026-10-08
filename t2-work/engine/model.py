@@ -231,35 +231,97 @@ def usd_factor(panels: dict[str, pd.DataFrame], asof: str, exclude: set[str]) ->
     return df.mean(axis=1)
 
 
+#: Transfer asset with no usable history at all (anchor row only, no G10 panel): per-step log sd
+#: of the proxy walk. Order of magnitude of a floating EM / G10 currency's daily move (the shipped
+#: g10_fx_daily panel: 0.4-0.9 % per day); documented in the rationale when used.
+TRANSFER_PRIOR_LOG_SD = 0.006
+
+
 def _transfer_input(
     asset: str, s: pd.Series, panels: dict[str, pd.DataFrame], asof: str,
     targets: set[str], rng: np.random.Generator,
 ) -> AssetInput:
+    """Never raises for want of data: USD factor from the G10 panel when present (the practice
+    layout), else the asset's own early-window log steps, else a fixed prior (anchor-only panel)."""
     anchor = float(s.iloc[-1])
-    factor = usd_factor(panels, asof, exclude=targets)
-    early = _log_steps(s.iloc[:-1]).dropna()
-    overlap = early.index.intersection(factor.index)
-    if len(overlap) >= 60:
-        beta_raw = float(early.loc[overlap].std() / factor.loc[overlap].std())
-        beta_src = f"{len(overlap)}-row overlap of the early window with the G10 panel"
+    early = _log_steps(s.iloc[:-1]).dropna() if len(s) > 1 else pd.Series(dtype=float)
+    try:
+        factor: pd.Series | None = usd_factor(panels, asof, exclude=targets)
+    except Exception as exc:  # noqa: BLE001 - no G10 panel on this card
+        factor, why = None, f"{type(exc).__name__}: {exc}"
+    if factor is not None:
+        overlap = early.index.intersection(factor.index)
+        if len(overlap) >= 60:
+            beta_raw = float(early.loc[overlap].std() / factor.loc[overlap].std())
+            beta_src = f"{len(overlap)}-row overlap of the early window with the G10 panel"
+        else:
+            beta_raw = float(early.std() / factor.std()) if len(early) >= MIN_ROWS else float("nan")
+            beta_src = "early-window sd vs full G10 factor sd (no overlap)"
+        beta = float(np.clip(np.nan_to_num(beta_raw, nan=1.0), BETA_FLOOR, BETA_CAP))
+        f_sd = float(factor.std())
+        common = np.sqrt(TRANSFER_COMMON_SHARE) * factor.to_numpy()
+        idio = np.sqrt(1.0 - TRANSFER_COMMON_SHARE) * f_sd * rng.standard_normal(len(factor))
+        z = pd.Series(beta * (common + idio), index=factor.index)      # log-space steps
+        note = (
+            f"TRANSFER: no recent own path; anchor {anchor:.6g} from the as-of row. Steps = anchor x "
+            f"beta x (USD factor over {len(factor)} G10 rows, {TRANSFER_COMMON_SHARE:.0%} common / "
+            f"{1 - TRANSFER_COMMON_SHARE:.0%} idiosyncratic). beta raw {beta_raw:.3g} from {beta_src}, "
+            f"clipped to [{BETA_FLOOR}, {BETA_CAP}] -> {beta:.3g}. Early-window own log sd "
+            f"{float(early.std()) if len(early) else float('nan'):.3g}/step; G10 factor sd {f_sd:.3g}/step."
+        )
+        notes = {"note": note, "beta": beta, "beta_raw": beta_raw, "factor_sd": f_sd}
+    elif len(early) >= MIN_ROWS:
+        z = early                                                       # own early-window log steps
+        note = (f"TRANSFER: no recent own path; anchor {anchor:.6g} from the as-of row. No G10 panel on "
+                f"this card ({why}), so the steps are the asset's OWN early-window log changes ({len(early)} "
+                f"rows, sd {float(early.std()):.3g}/step) scaled to the anchor.")
+        notes = {"note": note, "beta": 1.0, "beta_raw": 1.0, "factor_sd": float(early.std())}
     else:
-        beta_raw = float(early.std() / factor.std()) if len(early) >= MIN_ROWS else float("nan")
-        beta_src = "early-window sd vs full G10 factor sd (no overlap)"
-    beta = float(np.clip(np.nan_to_num(beta_raw, nan=1.0), BETA_FLOOR, BETA_CAP))
-    f_sd = float(factor.std())
-    common = np.sqrt(TRANSFER_COMMON_SHARE) * factor.to_numpy()
-    idio = np.sqrt(1.0 - TRANSFER_COMMON_SHARE) * f_sd * rng.standard_normal(len(factor))
-    z = pd.Series(beta * (common + idio), index=factor.index)      # log-space steps
-    inc = z * anchor                                                # level steps (level x dlog)
-    note = (
-        f"TRANSFER: no recent own path; anchor {anchor:.6g} from the as-of row. Steps = anchor x "
-        f"beta x (USD factor over {len(factor)} G10 rows, {TRANSFER_COMMON_SHARE:.0%} common / "
-        f"{1 - TRANSFER_COMMON_SHARE:.0%} idiosyncratic). beta raw {beta_raw:.3g} from {beta_src}, "
-        f"clipped to [{BETA_FLOOR}, {BETA_CAP}] -> {beta:.3g}. Early-window own log sd "
-        f"{float(early.std()) if len(early) else float('nan'):.3g}/step; G10 factor sd {f_sd:.3g}/step."
-    )
-    return AssetInput(asset, anchor, inc, "daily", "transfer_proxy", s.index[-1],
-                      {"note": note, "beta": beta, "beta_raw": beta_raw, "factor_sd": f_sd}, raw=s)
+        z = pd.Series(TRANSFER_PRIOR_LOG_SD * rng.standard_normal(600),
+                      index=pd.bdate_range(end=pd.Timestamp(asof), periods=600))
+        note = (f"TRANSFER: the panel holds no history for this asset beyond the anchor row ({len(s)} row(s)) "
+                f"and no G10 panel is available ({why}); steps are a Gaussian prior of log sd "
+                f"{TRANSFER_PRIOR_LOG_SD} per business day (a floating currency's typical daily move) scaled "
+                f"to the anchor {anchor:.6g}.")
+        notes = {"note": note, "beta": 1.0, "beta_raw": float("nan"), "factor_sd": TRANSFER_PRIOR_LOG_SD}
+    inc = z * anchor                                                    # level steps (level x dlog)
+    return AssetInput(asset, anchor, inc, "daily", "transfer_proxy", s.index[-1], notes, raw=s)
+
+
+#: M0 3.2 tripwire: a `log_return` panel whose values do not look like per-step returns (median
+#: absolute value >= 0.2) is a price level. M0 refuses to scale such a card; the forecaster cannot
+#: refuse, so it takes the per-step log change of the level as the return series and says so.
+LOG_RETURN_LEVEL_TRIPWIRE = 0.2
+
+
+def _log_return_input(a: str, s: pd.Series) -> AssetInput:
+    med = float(np.nanmedian(np.abs(s.to_numpy(float)))) if len(s) else 0.0
+    if med >= LOG_RETURN_LEVEL_TRIPWIRE and (s > 0).all():
+        steps = _log_steps(s).dropna()
+        note = (f"log_return target but the panel's values look like a PRICE LEVEL (median |value| {med:.3g} "
+                f">= {LOG_RETURN_LEVEL_TRIPWIRE}); per-step ln(P_t / P_t-1) of the level, gaps never "
+                "differenced across, is used as the return series.")
+        return AssetInput(a, 0.0, steps, infer_freq(s), "log_return", s.index[-1], {"note": note}, raw=steps)
+    # keep only rows that follow a regular step (drops the first row and any post-gap row)
+    regular = io.diff_without_gaps(s).notna()
+    inc = np.log1p(s)[regular].dropna()
+    # v4 raw = per-step ln(1+r): the target is the sum of ln(1+r_t) (targets.log_return_steps)
+    return AssetInput(a, 0.0, inc, infer_freq(s), "log_return", s.index[-1], raw=np.log1p(s))
+
+
+def override_for(steps_override: dict[Any, Any] | None, asset: str, freq: str) -> dict[int, int] | None:
+    """The caller-resolved {horizon: steps} for one asset. `steps_override` is either a flat
+    {horizon: steps} (applies to every asset, the pre-10-08 form) or {asset: {horizon: steps}}
+    (per asset, docs/MONTHLY-HORIZONS.md; only monthly series are listed, so a daily asset on a
+    mixed card keeps the model's own conversion)."""
+    if not steps_override:
+        return None
+    if all(isinstance(v, dict) for v in steps_override.values()):
+        v = steps_override.get(asset)
+        if v is None and freq == "monthly" and steps_override:
+            v = next(iter(steps_override.values()))
+        return {int(h): int(k) for h, k in v.items()} if v else None
+    return {int(h): int(k) for h, k in steps_override.items()}
 
 
 def prepare(
@@ -270,14 +332,12 @@ def prepare(
     for a in assets:
         s = io.series(panels, a, asof)
         if target_type == "log_return":
-            # keep only rows that follow a regular step (drops the first row and any post-gap row)
-            regular = io.diff_without_gaps(s).notna()
-            inc = np.log1p(s)[regular].dropna()
-            # v4 raw = per-step ln(1+r): the target is the sum of ln(1+r_t) (targets.log_return_steps)
-            out.append(AssetInput(a, 0.0, inc, infer_freq(s), "log_return", s.index[-1], raw=np.log1p(s)))
+            out.append(_log_return_input(a, s))
             continue
         d = io.diff_without_gaps(s)
-        if _trailing_valid(d) < MIN_ROWS and d.notna().sum() < len(s) - 1:
+        # transfer layout: fewer than MIN_ROWS regular steps after the last hole AND a hole somewhere
+        # (early window + anchor row), or no history at all beyond the anchor row
+        if (_trailing_valid(d) < MIN_ROWS and d.notna().sum() < len(s) - 1) or len(s) < 3:
             out.append(_transfer_input(a, s, panels, asof, set(assets), rng))
             continue
         out.append(AssetInput(a, float(s.iloc[-1]), d.dropna(), infer_freq(s), "diff", s.index[-1], raw=s))
@@ -416,8 +476,8 @@ def _simulate_classic(
     if n < MIN_ROWS:
         raise ValueError(f"only {n} aligned history rows across {len(inputs)} asset(s)")
     freq = inputs[0].freq
-    steps = {h: (int(steps_override[h]) if steps_override and h in steps_override
-                 else steps_for(h, freq, asof, inputs[0].last_date)) for h in horizons}
+    ov = override_for(steps_override, inputs[0].asset, freq) or {}
+    steps = {h: (int(ov[h]) if h in ov else steps_for(h, freq, asof, inputs[0].last_date)) for h in horizons}
     path_len = max(steps.values())
     if block_len is None:
         block_len = 3.0 if freq == "monthly" else float(np.clip(path_len // 12, 5, 10))
@@ -565,8 +625,8 @@ def gaussian_fallback(
         try:
             s = io.series(panels or {}, a, asof)
             freq = infer_freq(s)
-            steps = {h: (int(steps_override[h]) if steps_override and h in steps_override
-                         else steps_for(h, freq, asof, s.index[-1])) for h in horizons}
+            ov = override_for(steps_override, a, freq) or {}
+            steps = {h: (int(ov[h]) if h in ov else steps_for(h, freq, asof, s.index[-1])) for h in horizons}
             if target_type == "log_return":
                 d = np.log1p(s).to_numpy()
             else:

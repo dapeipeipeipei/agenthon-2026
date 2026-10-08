@@ -77,17 +77,74 @@ def trusted_asof(card: dict[str, Any]) -> str | None:
 
 
 def read_panels(panels_dir: pathlib.Path) -> dict[str, pd.DataFrame]:
-    """Every parquet under --panels; if none, one level up (all shipped units keep them at the root)."""
+    """Every parquet under --panels; if none, one level up (all shipped units keep them at the root).
+    Sorted by file name (M0 3.1 reads the first file holding an asset in that order). A file that
+    cannot be parsed is skipped with a note on stderr rather than taking every asset down."""
     found = sorted(panels_dir.glob("*.parquet")) if panels_dir.is_dir() else []
     if not found and panels_dir.parent.is_dir():
         found = sorted(panels_dir.parent.glob("*.parquet"))
     if not found:
         raise FileNotFoundError(f"no .parquet found under {panels_dir} (or its parent)")
-    return {p.stem: pd.read_parquet(p) for p in found}
+    out: dict[str, pd.DataFrame] = {}
+    errors: list[str] = []
+    for p in found:
+        try:
+            out[p.stem] = pd.read_parquet(p)
+        except Exception as exc:  # noqa: BLE001 - one unreadable context panel must not end the run
+            errors.append(f"{p.name}: {type(exc).__name__}: {exc}")
+    if errors:
+        import sys
+        print("unreadable panel file(s) skipped: " + "; ".join(errors), file=sys.stderr)
+    if not out:
+        raise OSError("no readable .parquet under " + str(panels_dir) + ": " + "; ".join(errors))
+    return out
 
 
 def asset_col(df: pd.DataFrame) -> str | None:
     return next((c for c in _ASSET_COLS if c in df.columns), None)
+
+
+_DATE_COLS = ("date", "timestamp", "datetime", "ds", "time")
+
+
+def _date_col(df: pd.DataFrame) -> str | None:
+    return next((c for c in _DATE_COLS if c in df.columns), None)
+
+
+def _value_col(df: pd.DataFrame, exclude: tuple[str, ...]) -> str | None:
+    """`value`, else the only numeric column that is not a key column (a panel with another name)."""
+    if "value" in df.columns:
+        return "value"
+    num = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])
+           and not pd.api.types.is_bool_dtype(df[c])]
+    return num[0] if len(num) == 1 else None
+
+
+def _locate(df: pd.DataFrame, asset: str) -> pd.DataFrame | None:
+    """Rows of one asset as a (date, value) frame, from a long panel (asset / asset_id column) or
+    a wide one (one column per asset). None when the panel does not hold the asset."""
+    dcol = _date_col(df)
+    if dcol is None:
+        return None
+    col = asset_col(df)
+    if col is not None:
+        vcol = _value_col(df, (dcol, col, "panel_id"))
+        if vcol is None:
+            return None
+        sub = df[df[col].astype(str) == asset]
+        if sub.empty:
+            return None
+        return pd.DataFrame({"date": sub[dcol].to_numpy(), "value": sub[vcol].to_numpy()})
+    if asset in df.columns and asset != dcol:
+        return pd.DataFrame({"date": df[dcol].to_numpy(), "value": df[asset].to_numpy()})
+    return None
+
+
+def _wide_assets(df: pd.DataFrame) -> list[str]:
+    dcol = _date_col(df)
+    if dcol is None or asset_col(df) is not None:
+        return []
+    return [str(c) for c in df.columns if c != dcol and c != "panel_id" and pd.api.types.is_numeric_dtype(df[c])]
 
 
 def diff_without_gaps(s: pd.Series) -> pd.Series:
@@ -105,29 +162,33 @@ def diff_without_gaps(s: pd.Series) -> pd.Series:
 
 
 def series(panels: dict[str, pd.DataFrame], asset: str, asof: str) -> pd.Series:
-    """History of one asset up to and including the as-of, Timestamp-indexed, from the first panel holding it."""
+    """History of one asset up to and including the as-of, Timestamp-indexed, from the first panel
+    (sorted file order, M0 3.1) holding it. Rows with an unparseable date or a non-finite value are
+    dropped (a NaN on the last row must never become the anchor); duplicated dates keep the last
+    row; rows are sorted by date."""
     for df in panels.values():
-        col = asset_col(df)
-        if col is None:
+        sub = _locate(df, asset)
+        if sub is None:
             continue
-        sub = df[df[col].astype(str) == asset]
+        sub["date"] = sub["date"].astype(str).str.slice(0, 10)
+        sub = sub[sub["date"] <= asof]
         if sub.empty:
             continue
-        sub = sub.copy()
-        sub["date"] = sub["date"].astype(str).str.slice(0, 10)
-        sub = sub[sub["date"] <= asof].sort_values("date")
-        if not sub.empty:
-            s = sub.set_index("date")["value"].astype(float)
-            s.index = pd.to_datetime(s.index)
-            return s[~s.index.duplicated(keep="last")]
+        s = pd.to_numeric(sub["value"], errors="coerce").astype(float)
+        idx = pd.to_datetime(sub["date"], errors="coerce")
+        s = pd.Series(s.to_numpy(), index=pd.DatetimeIndex(idx))
+        s = s[idx.notna().to_numpy() & np.isfinite(s.to_numpy())]
+        if s.empty:
+            continue
+        s = s.sort_index(kind="stable")
+        return s[~s.index.duplicated(keep="last")]
     raise KeyError(f"asset {asset!r} not present in any panel at or before {asof}")
 
 
 def series_source(panels: dict[str, pd.DataFrame], asset: str) -> str | None:
     """Stem of the first panel file holding the asset (the one `series` reads)."""
     for name, df in panels.items():
-        col = asset_col(df)
-        if col is not None and (df[col].astype(str) == asset).any():
+        if _locate(df, asset) is not None:
             return name
     return None
 
@@ -138,6 +199,8 @@ def all_assets(panels: dict[str, pd.DataFrame]) -> list[str]:
         col = asset_col(df)
         if col is not None:
             out.extend(str(v) for v in df[col].unique())
+        else:
+            out.extend(_wide_assets(df))
     return sorted(set(out))
 
 
@@ -744,6 +807,13 @@ def _v4_sections(der: dict[str, Any], stats: dict[str, Any], assets: list[str], 
                  f"{_f(x.get('sd_last60_diag'), '.5g')} | {_f(x.get('sd_full_history_diag'), '.5g')} |")
     L.append("")
     L.append("(The two diagnostic columns are reported for the reader and are not used by v4.)")
+    for a, note in (bb.get("notes") or {}).items():
+        L.append(f"- Note{'' if a.startswith('_') else ' `' + a + '`'}: {note}.")
+    notes = [f"- `{a}`: {(stats.get('assets') or {}).get(a, {}).get('note')}" for a in assets
+             if (stats.get("assets") or {}).get(a, {}).get("note")
+             and (stats.get("assets") or {}).get(a, {}).get("kind") != "transfer_proxy"]   # (transfer: section 2)
+    if notes:
+        L += [""] + notes
     corr = der.get("correlation_window")
     if corr and len(assets) > 1:
         L += ["", "Window correlation (used for the joint draws):", "",

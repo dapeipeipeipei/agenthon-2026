@@ -33,7 +33,7 @@ from typing import Any, Iterator
 import numpy as np
 import pandas as pd
 
-from . import ENGINE_VERSION, events, io, model
+from . import ENGINE_VERSION, cardinfo, events, io, model
 
 DEFAULT_DRAWS = 2000
 DEFAULT_SEED = 20260909
@@ -139,7 +139,10 @@ def run(a: argparse.Namespace) -> int:
     tgt = card["targets"]
     assets = [str(x) for x in tgt["asset_ids"]]
     horizons = [int(h) for h in tgt["horizons"]]
-    unit_id = card["task"]["id"]
+    # [task].id is on every card (T2#20; the scorer binds the meta's unit_id to it). Should it ever
+    # be absent, the spec's card_id, then the unit directory's name, keep the run alive.
+    unit_id = str(((card.get("task") or {}) if isinstance(card.get("task"), dict) else {}).get("id")
+                  or (spec or {}).get("card_id") or card_path.parent.name)
     target_type = str(tgt.get("target_type", "level"))
     card_floor = int(card.get("scoring", {}).get("params", {}).get("n_draws_min", 0) or 0)
     n_draws = min(max(a.n_draws or DEFAULT_DRAWS, card_floor, MIN_DRAWS), MAX_DRAWS)
@@ -176,14 +179,20 @@ def run(a: argparse.Namespace) -> int:
                 feats = events.detect(a.text, data_asof, max(horizons))
                 if feats.get("error"):
                     print(f"event detector degraded for {unit_id}: {feats['error']}", file=sys.stderr)
+                # Card facts (family, observation months) from the card the CLI itself parsed: the
+                # detector's own lookup beside --text finds the same file on a staged unit, but
+                # --text need not sit inside the unit directory.
+                facts = cardinfo.from_card(card, spec)
+                if facts:
+                    feats["card"] = {**(feats.get("card") or {}), **{k: v for k, v in facts.items() if v is not None}}
             panels = io.read_panels(a.panels)
             inputs = model.prepare(panels, assets, data_asof, target_type, np.random.default_rng(seed + 1))
             if any(x.freq == "monthly" for x in inputs):
                 steps_by_asset, monthly_info = io.monthly_steps(
                     card, spec, assets, horizons, {x.asset: x.last_date for x in inputs}, data_asof)
-                # docs/MONTHLY-HORIZONS.md: the model takes {horizon: steps} resolved here (single-asset
-                # monthly cards; on a multi-asset monthly card the first target's months are used).
-                steps_override = steps_by_asset[inputs[0].asset]
+                # docs/MONTHLY-HORIZONS.md: the model takes {asset: {horizon: steps}} resolved here for
+                # the MONTHLY target series only; a daily series on a mixed card keeps its own count.
+                steps_override = {x.asset: steps_by_asset[x.asset] for x in inputs if x.freq == "monthly"}
             try:
                 samples, stats = model.simulate(inputs, horizons, data_asof, n_draws, seed, a.block_len,
                                                 profile, feats, steps_override=steps_override)

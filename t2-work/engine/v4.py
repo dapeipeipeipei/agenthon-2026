@@ -152,14 +152,27 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
     obs_periods = card.get("observation_periods")
     fk = family_knobs(profile, family)
     names = [a.asset for a in inputs]
-    for a in inputs:
-        if a.raw is None or len(a.raw) < 3:
-            raise ValueError(f"v4 needs the raw history of {a.asset}")
+    backbone_notes: dict[str, str] = {}
+
+    def _trailing(a: Any) -> pd.Series:
+        """M0's step series from the panel rows; a transfer asset whose panel holds no history
+        beyond the anchor row (fewer than 3 rows) falls back to its synthesised proxy steps."""
+        if a.raw is not None and len(a.raw) >= 3:
+            return _steps_trailing(a.raw, a.kind, window)
+        if a.kind == "transfer_proxy" and a.increments is not None and len(a.increments) >= 3:
+            backbone_notes[a.asset] = "no panel history beyond the anchor row: trailing window taken from the transfer proxy steps"
+            return a.increments.iloc[-window:]
+        raise ValueError(f"v4 needs the raw history of {a.asset}")
 
     # ---- backbone moments on the trailing window (M0 information set)
-    tr = pd.concat({a.asset: _steps_trailing(a.raw, a.kind, window) for a in inputs}, axis=1, join="inner").dropna()
-    if len(tr) < 20:
+    tr = pd.concat({a.asset: _trailing(a) for a in inputs}, axis=1, join="inner").dropna()
+    # M0 computes mu / Sigma from whatever the trailing window holds (a short panel contributes all
+    # of it, M0 3.1); the sample covariance needs two steps, three keeps a degenerate one-pair
+    # window out. Fewer than 20 is recorded for the rationale.
+    if len(tr) < 3:
         raise ValueError(f"only {len(tr)} aligned trailing steps")
+    if len(tr) < 20:
+        backbone_notes["_window"] = f"short trailing window: only {len(tr)} aligned steps (M0 uses the same rows)"
     X300 = tr[names].to_numpy(float)
     mu = X300.mean(axis=0)
     Sig = np.atleast_2d(np.cov(X300, rowvar=False))
@@ -179,11 +192,15 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
 
     steps: dict[int, list[int]] = {}
     step_how: dict[str, dict[int, str]] = {a.asset: {} for a in inputs}
+    from .model import override_for
+    ov_by_asset = {a.asset: (override_for(steps_override, a.asset, a.freq) or {}) for a in inputs}
     for hi, h in enumerate(horizons):
         row = []
         for a in inputs:
-            if steps_override and h in steps_override:
-                k, how = int(steps_override[h]), "caller-resolved monthly observation-period steps"
+            if h in ov_by_asset[a.asset]:
+                k, how = int(ov_by_asset[a.asset][h]), "caller-resolved monthly observation-period steps"
+            elif a.raw is None or len(a.raw) < 3:
+                k, how = int(h), "declared (no panel history to count steps on)"
             else:
                 k, how = horizon_steps(a.raw, h, hi, asof, window, obs_periods)
             row.append(max(1, k))
@@ -369,7 +386,7 @@ def simulate_v4(inputs: list[Any], horizons: list[int], asof: str, n_draws: int,
                      "first_step": str(tr.index[0].date()), "last_step": str(tr.index[-1].date()),
                      "shape": shape, "drift_frac": fk["drift_frac"],
                      "vol_tilt": {a.asset: float(tilt[j]) for j, a in enumerate(inputs)},
-                     "vol_beta": beta},
+                     "vol_beta": beta, **({"notes": backbone_notes} if backbone_notes else {})},
         "assets": {a.asset: {"anchor": float(a.anchor), "kind": a.kind, "mu_per_step": float(mu[j]),
                              "sd_last60_diag": _sd(a.increments.to_numpy(float)[-60:]),
                              "sd_full_history_diag": _sd(a.increments.to_numpy(float)),
