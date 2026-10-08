@@ -1061,39 +1061,35 @@ static void build_trace(Kernel& k, Result& res) {
     rows.reserve(n_o);
     for (auto& a : k.agents)
         for (auto& r : a.log) rows.push_back(r);
-    // PARTIAL_FILL / ORDER_FILLED: the last ORDER_EXECUTED per order_id in stable-t order. Per-agent
-    // logs are already non-decreasing in t, so a stable sort by t of the concatenation is the
-    // reference's ordering.
-    std::vector<uint32_t> idx(rows.size());
-    for (uint32_t i = 0; i < idx.size(); i++) idx[i] = i;
-    std::stable_sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) { return rows[a].t < rows[b].t; });
-    std::unordered_map<int64_t, uint32_t> last_exec;
-    last_exec.reserve(rows.size() / 2 + 16);
-    for (uint32_t i : idx)
-        if (rows[i].exec) last_exec[rows[i].order_id] = i;
-    for (auto& kv : last_exec) rows[kv.second].type = T_ORDER_FILLED;
+    // PARTIAL_FILL / ORDER_FILLED: the reference keeps the last ORDER_EXECUTED per order_id in
+    // stable-t order of the flattened log. Every lifecycle row of an order is logged by the order's
+    // owner only, and an agent's log is non-decreasing in t, so that "last" row is simply the last
+    // ORDER_EXECUTED row of that order_id in its owner's log, i.e. in concatenation order.
+    // order_ids are dense (0..N-1), so a vector indexed by order_id replaces a hash map.
+    {
+        int64_t max_oid = -1;
+        for (auto& r : rows)
+            if (r.exec && r.order_id > max_oid) max_oid = r.order_id;
+        std::vector<uint32_t> last_exec((size_t)(max_oid + 1), UINT32_MAX);
+        for (uint32_t i = 0; i < rows.size(); i++)
+            if (rows[i].exec) last_exec[(size_t)rows[i].order_id] = i;
+        for (uint32_t i : last_exec)
+            if (i != UINT32_MAX) rows[i].type = T_ORDER_FILLED;
+    }
 
-    // quotes: de-duplicated per (t, side) keeping the last value, ordered by first appearance
-    struct QKey {
-        int64_t t;
-        int8_t side;
-        bool operator==(const QKey& o) const { return t == o.t && side == o.side; }
-    };
-    struct QHash {
-        size_t operator()(const QKey& q) const { return std::hash<int64_t>()(q.t * 3 + q.side); }
-    };
-    std::unordered_map<QKey, size_t, QHash> qpos;
-    qpos.reserve(k.quotes.size());
+    // quotes: de-duplicated per (t, side) keeping the last value, ordered by first appearance.
+    // The exchange logs them in non-decreasing t, so a repeated (t, side) can only be the most
+    // recent entry of that side.
     std::vector<QuoteRow> q_unique;
     q_unique.reserve(k.quotes.size());
+    size_t last_of_side[3] = {SIZE_MAX, SIZE_MAX, SIZE_MAX};
     for (auto& q : k.quotes) {
-        QKey key{q.t, q.side};
-        auto it = qpos.find(key);
-        if (it == qpos.end()) {
-            qpos.emplace(key, q_unique.size());
-            q_unique.push_back(q);
+        size_t& li = last_of_side[q.side];
+        if (li != SIZE_MAX && q_unique[li].t == q.t) {
+            q_unique[li] = q;
         } else {
-            q_unique[it->second] = q;
+            li = q_unique.size();
+            q_unique.push_back(q);
         }
     }
     // concat [orders, quotes]; stable sort on (t, order_id); quotes carry order_id -1

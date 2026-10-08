@@ -35,7 +35,7 @@ def main() -> int:
            "-I" + inc, "-o", str(out), str(here / "jpsim_native.cpp")]
     for d in libdirs:
         cmd += ["-L" + d, "-Wl,-rpath," + d]
-    cmd += ["-lparquet", "-larrow"]
+    cmd += ["-lparquet", "-larrow", "-pthread"]
     print(" ".join(cmd))
     rc = subprocess.call(cmd)
     if rc == 0:

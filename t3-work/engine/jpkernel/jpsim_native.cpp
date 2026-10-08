@@ -28,6 +28,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -771,16 +772,17 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
     k->spec = bs.spec;
     k->setup();
     k->run();
-    Result res;
-    build_trace(*k, res);
-    build_messages(*k, res);
-    delete k;
 
     std::string out_dir = dirname_of(out_path);
     mkdirs(out_dir);
     std::string msg_out = out_dir + "/message_trace.parquet";
 
-    {
+    // The two outputs are independent: build + write + hash each on its own thread (the platform
+    // runs the container with 4 CPUs; each thread writes its own file through its own writer).
+    Result res;
+    std::string trace_sha, msg_sha;
+    std::thread t_trace([&] {
+        build_trace(*k, res);
         auto meta = arrow::key_value_metadata({"pandas"}, {TRACE_PANDAS_META});
         auto schema = arrow::schema({arrow::field("t_ns", arrow::int64()), arrow::field("agent_id", arrow::int32()),
                                      arrow::field("msg_type", arrow::utf8()), arrow::field("side", arrow::utf8()),
@@ -794,8 +796,10 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
                                                  int64_array(res.price), int64_array(res.size),
                                                  int64_array(res.order_id)});
         write_parquet(table, out_path);
-    }
-    {
+        trace_sha = sha256_file(out_path);
+    });
+    std::thread t_msg([&] {
+        build_messages(*k, res);
         auto meta = arrow::key_value_metadata({"pandas"}, {MSG_PANDAS_META});
         auto schema = arrow::schema(
             {arrow::field("seq", arrow::int64()), arrow::field("t_recv_ns", arrow::int64()),
@@ -812,14 +816,18 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
                      string_array(types, res.n_msg), nullable_int64_array(res.m_order_id, bm2),
                      nullable_int64_array(res.causal, bm3)});
         write_parquet(table, msg_out);
-    }
+        msg_sha = sha256_file(msg_out);
+    });
+    t_trace.join();
+    t_msg.join();
+    delete k;
     SimEvents ev;
     ev.scenario_id = bs.scenario_id;
     ev.seed = bs.seed;
     ev.n_events = res.n_trace;
     ev.n_messages = res.n_msg;
-    ev.trace_sha = sha256_file(out_path);
-    ev.msg_sha = sha256_file(msg_out);
+    ev.trace_sha = trace_sha;
+    ev.msg_sha = msg_sha;
     ev.peak = peak_rss_bytes();
     ev.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     ev.eps = ev.wall > 0 ? (double)ev.n_events / ev.wall : 0.0;
