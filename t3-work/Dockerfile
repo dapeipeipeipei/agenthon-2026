@@ -24,13 +24,15 @@ LABEL qfbench2.track="simulation"
 LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
 LABEL org.opencontainers.image.description="Agenthon 2026 Track 3 simulator (jpsim): pinned ABIDES baseline, accelerated, output-identical"
 
+# PYTHONPATH carries site-packages explicitly because the verbs start the interpreter with -S
+# (no site.py / .pth processing at every container start).
 ENV PYTHONDONTWRITEBYTECODE=0 \
     PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HOME=/tmp \
-    PYTHONPATH=/opt/jpsim \
+    PYTHONPATH=/opt/jpsim:/usr/local/lib/python3.11/site-packages \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1
 
@@ -40,13 +42,23 @@ COPY engine /opt/jpsim
 COPY bin/simulate /usr/local/bin/simulate
 COPY bin/simulate-batch /usr/local/bin/simulate-batch
 
-# Pre-compile every module (ours and site-packages) so the first run pays no .pyc cost: the
-# root filesystem is read-only at evaluation time, so nothing could be cached then anyway.
+# Pre-compile every module (ours, site-packages AND the stdlib: the python:3.11-slim image strips
+# the stdlib's .pyc files) at the -O level the verbs run at, so no run ever compiles source: the
+# root filesystem is read-only at evaluation time, so nothing could be cached then anyway. The
+# last line proves it: `python -v` must not report any code object built from a .py file.
 RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
  && find /opt/jpsim -type d -exec chmod 0755 {} + \
  && find /opt/jpsim -type f -exec chmod 0644 {} + \
- && python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow \
- && python -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; print('import ok, no pandas')"
+ && python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim \
+ && python -m compileall -q -j 0 -o 1 -x '/(test|tests|idlelib|tkinter|turtledemo|lib2to3|ensurepip|pydoc_data|site-packages/pip|site-packages/setuptools)/' /usr/local/lib/python3.11 \
+ && python -O -S -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; jpsim.trace_fast.writer_module(); print('import ok, no pandas, -S ok')" \
+ && python -O -S -v -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; jpsim.trace_fast.writer_module()" 2> /tmp/verbose.txt \
+ && echo "$(grep -c 'code object from' /tmp/verbose.txt) code objects loaded, $(grep -c "code object from '.*[.]py'" /tmp/verbose.txt) compiled from source" \
+ && ! grep -q "code object from '.*[.]py'" /tmp/verbose.txt \
+ && rm /tmp/verbose.txt
+
+# Never try to write .pyc at run time (the rootfs is read-only; the attempt is a wasted syscall).
+ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /tmp
 USER 65534:65534

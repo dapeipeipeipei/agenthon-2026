@@ -1,3 +1,4 @@
 #!/bin/sh
 # Track 3 submission verb: simulate-batch --batch-dir /input/scenarios --out-dir /output
-exec "${JPSIM_PYTHON:-python}" -O -m jpsim.cli simulate-batch "$@"
+[ -n "$JPSIM_PHASES" ] && echo "JPSIM_EXEC $(date +%s.%N)" >&2
+exec "${JPSIM_PYTHON:-python}" -O -S /opt/jpsim/jpsim/cli.py simulate-batch "$@"

@@ -54,6 +54,8 @@ def main() -> int:
     args.out_root.mkdir(parents=True, exist_ok=True)
     timing_path = args.out_root / "timing.json"
     timing = json.loads(timing_path.read_text()) if timing_path.exists() else {}
+    phases_path = args.out_root / "phases.json"  # per-unit JPSIM_PHASES lines (env JPSIM_PHASES=1)
+    phases = json.loads(phases_path.read_text()) if phases_path.exists() else {}
     failures = []
     for name in names:
         unit = args.units / name
@@ -82,11 +84,18 @@ def main() -> int:
                 print(f"{name:34} FAILED rc={proc.returncode}\n{proc.stderr[-1500:]}")
                 break
             walls.append(wall)
+            for line in proc.stderr.splitlines():
+                if line.startswith("JPSIM_PHASES "):
+                    rec = json.loads(line[len("JPSIM_PHASES "):])
+                    rec["wall"] = wall
+                    phases.setdefault(name, []).append(rec)
         if walls:
             timing[name] = statistics.median(walls)
             print(f"{name:34} wall {timing[name]:8.3f}s  ({'batch' if batch else 'single'}, "
                   f"{len(walls)} run(s): {' '.join(f'{w:.2f}' for w in walls)})", flush=True)
         timing_path.write_text(json.dumps(timing, indent=1, sort_keys=True))
+        if phases:
+            phases_path.write_text(json.dumps(phases, indent=1, sort_keys=True))
     print(f"\ndone: {len(names) - len(failures)}/{len(names)} ran; failures: {failures}")
     return 1 if failures else 0
 

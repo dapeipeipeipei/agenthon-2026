@@ -1,5 +1,8 @@
 #!/bin/sh
 # Track 3 submission verb: simulate --config /input/scenario.json --out /output/trace.parquet
 # -O: assert statements are not part of the simulation semantics (none can fail on a valid run).
-# JPSIM_PYTHON selects the interpreter (pypy3 in the PyPy image, python otherwise).
-exec "${JPSIM_PYTHON:-python}" -O -m jpsim.cli simulate "$@"
+# -S: no site.py / .pth processing at start-up; PYTHONPATH (set in the image) carries both
+#     /opt/jpsim and site-packages, so numpy and pyarrow still resolve.
+# JPSIM_PHASES=1 also stamps the exec time on stderr (fixed-cost decomposition, see tools/).
+[ -n "$JPSIM_PHASES" ] && echo "JPSIM_EXEC $(date +%s.%N)" >&2
+exec "${JPSIM_PYTHON:-python}" -O -S /opt/jpsim/jpsim/cli.py simulate "$@"

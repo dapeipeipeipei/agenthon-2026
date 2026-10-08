@@ -16,6 +16,14 @@ on:
         description: "suffix for the pushed tags (e.g. -cy)"
         default: ""
         required: false
+      baseline_image:
+        description: "image to run the same 71 units with on the same runner (A/B); empty = skip"
+        default: "ghcr.io/dapeipeipeipei/jinpei-t3@sha256:f905419e517dfea385c2645f6cf370c04d68bb50f8ffba2f7bef68ad6f07742e"
+        required: false
+      profile:
+        description: "fixed-cost decomposition (10 smallest + 5 largest units, 3 repeats)"
+        default: "true"
+        required: false
   push:
     branches: [ci/t3-image, t3/build]
     paths:
@@ -30,6 +38,8 @@ env:
   IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
   DOCKERFILE: ${{ github.event.inputs.dockerfile || 't3-work/Dockerfile' }}
   TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || '' }}
+  BASELINE_IMAGE: ${{ github.event.inputs.baseline_image || '' }}
+  PROFILE: ${{ github.event.inputs.profile || 'false' }}
   TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
 
 defaults:
@@ -95,6 +105,45 @@ jobs:
             --out-root t3-ci-out/out --timing t3-ci-out/out/timing.json --json t3-ci-out/hashes.json \
             | tee t3-ci-out/hashes.txt
 
+      - name: Baseline image on the same runner (A/B of the ranked mean)
+        if: env.BASELINE_IMAGE != ''
+        run: |
+          docker pull -q "$BASELINE_IMAGE"
+          python t3-work/tools/ci_run_units.py --image "$BASELINE_IMAGE" \
+            --units track3-simulation-public/units --out-root t3-ci-out/base --timeout 300 \
+            | tee t3-ci-out/base-run.txt
+          python - <<'PY' | tee t3-ci-out/ab.txt
+          import json, pathlib, statistics
+          units = pathlib.Path("track3-simulation-public/units")
+          new = json.loads(pathlib.Path("t3-ci-out/out/timing.json").read_text())
+          base = json.loads(pathlib.Path("t3-ci-out/base/timing.json").read_text())
+          def n_events(u):
+              b = units / u / "batch.json"
+              if b.is_file():
+                  return sum(int(s["n_events"]) for s in json.loads(b.read_text())["subs"])
+              return int(json.loads((units / u / "events.json").read_text())["n_events"])
+          rows = sorted(((n_events(u), u) for u in new), key=lambda r: r[0])
+          print(f"{'unit':34} {'events':>8} {'base_s':>7} {'new_s':>7} {'delta_s':>8} {'base_ev/s':>9} {'new_ev/s':>9}")
+          rn, rb = [], []
+          for n, u in rows:
+              tb, tn = base.get(u), new[u]
+              if tb is None:
+                  continue
+              rn.append(n / tn); rb.append(n / tb)
+              print(f"{u:34} {n:8d} {tb:7.3f} {tn:7.3f} {tn - tb:+8.3f} {n / tb:9.0f} {n / tn:9.0f}")
+          print(f"\nranked mean (arithmetic, {len(rn)} units): baseline {statistics.mean(rb):.0f}  new {statistics.mean(rn):.0f}  "
+                f"({statistics.mean(rn) / statistics.mean(rb) - 1:+.1%}); medians {statistics.median(rb):.0f} -> {statistics.median(rn):.0f}")
+          PY
+
+      - name: Fixed-cost decomposition (10 smallest + 5 largest units, 3 repeats)
+        if: env.PROFILE == 'true'
+        run: |
+          docker run --rm --network=none t3-local:ci sh -c 'ls /usr/local/lib/python3.11/__pycache__ | wc -l; ls /usr/local/lib/python3.11/__pycache__ | grep -c opt-1'
+          python t3-work/tools/profile_units.py --image t3-local:ci --units track3-simulation-public/units \
+            --out t3-ci-out/profile.json --smallest 10 --largest 5 --repeat 3 | tee t3-ci-out/profile.txt
+          docker run --rm --network=none -e JPSIM_PHASES=1 t3-local:ci sh -c 'python -O -S -X importtime /opt/jpsim/jpsim/cli.py simulate --config /nonexistent --out /tmp/x 2>&1 | grep -v nonexistent' > t3-ci-out/importtime.txt || true
+          sort -t'|' -k2 -n -r t3-ci-out/importtime.txt | head -40
+
       - name: Repeat stability (3 units, second run must be byte-identical)
         run: |
           python t3-work/tools/ci_run_units.py --image t3-local:ci \
@@ -150,6 +199,9 @@ jobs:
           cat kit.txt >> "$GITHUB_STEP_SUMMARY" || true
           tail -n 90 t3-ci-out/hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for f in t3-ci-out/ab.txt t3-ci-out/profile.txt; do
+            if [ -f "$f" ]; then echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; cat "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; fi
+          done
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -161,6 +213,12 @@ jobs:
             t3-ci-out/hashes.txt
             t3-ci-out/hashes.json
             t3-ci-out/out/timing.json
+            t3-ci-out/base/timing.json
+            t3-ci-out/base-run.txt
+            t3-ci-out/ab.txt
+            t3-ci-out/profile.json
+            t3-ci-out/profile.txt
+            t3-ci-out/importtime.txt
             t3-ci-out/out/**/events.json
             t3-ci-out/out/**/batch_events.json
           retention-days: 30

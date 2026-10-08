@@ -264,6 +264,17 @@ def load_handoff(path: str) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
 
 
 # ----------------------------------------------------------------------------- stage 2: parquet
+def writer_module():
+    """The parquet writer extension, imported directly.
+
+    ``pyarrow.parquet`` drags in ``pyarrow.fs``, the legacy ``pyarrow.filesystem`` and (through
+    ``Array.take``) ``pyarrow.compute``, three more shared objects than the writer needs; this
+    module uses only ``pyarrow.lib`` and ``pyarrow._parquet``."""
+    import pyarrow._parquet as _parquet
+
+    return _parquet
+
+
 def _schemas():
     import pyarrow as pa
 
@@ -280,16 +291,40 @@ def _schemas():
     return pa, trace_schema, msg_schema
 
 
+def _strings_from_codes(pa, codes: np.ndarray, vocab: list) -> "pa.StringArray":
+    """A string array ``[vocab[c] for c in codes]`` (``None`` entries of vocab are nulls), built
+    straight from numpy offsets/data buffers: the same values ``Array.take`` would give, without
+    importing ``pyarrow.compute``."""
+    n = len(codes)
+    encoded = [None if s is None else s.encode("utf-8") for s in vocab]
+    lens = np.fromiter((0 if b is None else len(b) for b in encoded), dtype=np.int32, count=len(vocab))
+    width = int(lens.max()) if len(lens) else 0
+    table = np.zeros((len(vocab), max(width, 1)), dtype=np.uint8)
+    for i, b in enumerate(encoded):
+        if b:
+            table[i, :len(b)] = np.frombuffer(b, dtype=np.uint8)
+    codes = np.asarray(codes, dtype=np.intp)
+    row_lens = lens[codes]
+    offsets = np.zeros(n + 1, dtype=np.int32)
+    np.cumsum(row_lens, out=offsets[1:])
+    data = table[codes][np.arange(max(width, 1), dtype=np.int32)[None, :] < row_lens[:, None]]
+    valid_mask = np.fromiter((b is not None for b in encoded), dtype=bool, count=len(vocab))[codes]
+    null_count = int(n - valid_mask.sum())
+    validity = None if null_count == 0 else pa.py_buffer(np.packbits(valid_mask, bitorder="little"))
+    return pa.Array.from_buffers(
+        pa.string(), n, [validity, pa.py_buffer(offsets), pa.py_buffer(np.ascontiguousarray(data))],
+        null_count=null_count,
+    )
+
+
 def trace_table(arr: dict[str, np.ndarray]):
     pa, schema, _ = _schemas()
-    types = pa.array(_TRACE_TYPES, type=pa.string())
-    sides = pa.array(_SIDES, type=pa.string())
     return pa.table(
         {
             "t_ns": pa.array(arr["t_ns"], type=pa.int64()),
             "agent_id": pa.array(arr["agent_id"], type=pa.int32()),
-            "msg_type": types.take(pa.array(arr["msg_type"].astype(np.int64))),
-            "side": sides.take(pa.array(arr["side"].astype(np.int64))),
+            "msg_type": _strings_from_codes(pa, arr["msg_type"], _TRACE_TYPES),
+            "side": _strings_from_codes(pa, arr["side"], _SIDES),
             "price": pa.array(arr["price"], type=pa.int64()),
             "size": pa.array(arr["size"], type=pa.int64()),
             "order_id": pa.array(arr["order_id"], type=pa.int64()),
@@ -300,7 +335,6 @@ def trace_table(arr: dict[str, np.ndarray]):
 
 def message_table(arr: dict[str, Any]):
     pa, _, schema = _schemas()
-    vocab = pa.array(list(arr["vocab"]), type=pa.string())
 
     def nullable(a: np.ndarray):
         return pa.array(a, type=pa.int64(), mask=(a == _NULL))
@@ -314,7 +348,7 @@ def message_table(arr: dict[str, Any]):
             "src_id": pa.array(arr["src_id"], type=pa.int32()),
             "dst_id": pa.array(arr["dst_id"], type=pa.int32()),
             "message_id": pa.array(arr["message_id"], type=pa.int64()),
-            "msg_type": vocab.take(pa.array(arr["msg_type"].astype(np.int64))),
+            "msg_type": _strings_from_codes(pa, arr["msg_type"], list(arr["vocab"])),
             "order_id": nullable(arr["order_id"]),
             "causal_parent": nullable(arr["causal_parent"]),
         },
@@ -333,7 +367,22 @@ def build_message_trace(end_state: dict[str, Any]):
 def write_parquet(table, path: str) -> None:
     """Snappy parquet with pyarrow's default row-group size (1 Mi rows), exactly what
     ``DataFrame.to_parquet`` produced for the references: a unit above that size (gb-mega) gets
-    two row groups, and the file bytes only match if we split at the same point."""
-    import pyarrow.parquet as pq
+    two row groups, and the file bytes only match if we split at the same point.
 
-    pq.write_table(table, path, compression="snappy")
+    This is ``pyarrow.parquet.write_table`` with every default of pyarrow 15.0.2's
+    ``ParquetWriter`` wrapper spelled out, calling the extension class directly (the wrapper's
+    only other work is resolving the path through ``pyarrow.fs``)."""
+    import pyarrow as pa
+
+    _parquet = writer_module()
+    with pa.OSFile(path, "wb") as sink:
+        writer = _parquet.ParquetWriter(
+            sink, table.schema, version="2.6", compression="snappy", use_dictionary=True,
+            write_statistics=True, use_deprecated_int96_timestamps=False, compression_level=None,
+            use_byte_stream_split=False, column_encoding=None, writer_engine_version="V2",
+            data_page_version="1.0", use_compliant_nested_type=True, encryption_properties=None,
+            write_batch_size=None, dictionary_pagesize_limit=None, store_schema=True,
+            write_page_index=False, write_page_checksum=False, sorting_columns=None,
+        )
+        writer.write_table(table, None)
+        writer.close()
