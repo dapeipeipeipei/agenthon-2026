@@ -1,5 +1,5 @@
 import datetime as dt
-import logging
+from jpsim import _nolog as logging  # [jpsim] no-op logging (nothing is ever emitted)
 import warnings
 from abc import ABC
 from collections import defaultdict

@@ -1,8 +1,11 @@
-#!/bin/sh
+#!/usr/local/bin/python3 -OS
 # Track 3 submission verb: simulate --config /input/scenario.json --out /output/trace.parquet
-# -O: assert statements are not part of the simulation semantics (none can fail on a valid run).
-# -S: no site.py / .pth processing at start-up; PYTHONPATH (set in the image) carries both
-#     /opt/jpsim and site-packages, so numpy and pyarrow still resolve.
-# JPSIM_PHASES=1 also stamps the exec time on stderr (fixed-cost decomposition, see tools/).
-[ -n "$JPSIM_PHASES" ] && echo "JPSIM_EXEC $(date +%s.%N)" >&2
-exec "${JPSIM_PYTHON:-python}" -O -S /opt/jpsim/jpsim/cli.py simulate "$@"
+# Started directly by the kernel's shebang (no /bin/sh in between): -O because assert statements
+# are not part of the simulation semantics, -S because site.py / .pth processing is pure start-up
+# cost (PYTHONPATH in the image carries /opt/jpsim and site-packages).
+import sys
+
+sys.argv.insert(1, "simulate")
+from jpsim.cli import run  # noqa: E402
+
+run()

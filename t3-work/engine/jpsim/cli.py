@@ -64,11 +64,45 @@ def _reset_abides_counters() -> None:
     setattr(Message, "_Message__message_id_counter", 1)
 
 
+def _trim_numpy() -> None:
+    """Keep ``import numpy`` from loading subpackages the engine never touches.
+
+    numpy's ``__init__`` imports ma, polynomial, fft, ctypeslib and, through ``numpy.random``,
+    the Generator / PCG64 / Philox / SFC64 extension modules and the pickle helpers: ~15 ms of
+    the ~75 ms a cold numpy import costs in the container. Pre-seeding ``sys.modules`` with
+    empty stand-ins makes those imports no-ops. The engine uses ``numpy.random.RandomState``
+    (mtrand + MT19937, untouched) and plain array code; ``JPSIM_FULL_NUMPY=1`` restores the
+    full import. The byte-level regression (JPSIM_PARQUET=pyarrow) runs with the trim on."""
+    if os.environ.get("JPSIM_FULL_NUMPY") or "numpy" in sys.modules:
+        return
+    import types
+
+    class MaskedArray:  # pyarrow tests isinstance(obj, np.ma.MaskedArray): must be a class
+        pass
+
+    stubs = {
+        "numpy.ma": {"masked_array": MaskedArray, "MaskedArray": MaskedArray},
+        "numpy.polynomial": {},
+        "numpy.fft": {},
+        "numpy.ctypeslib": {},
+        "numpy.random._pickle": {"__bit_generator_ctor": None, "__generator_ctor": None, "__randomstate_ctor": None},
+        "numpy.random._generator": {"Generator": None, "default_rng": None},
+        "numpy.random._pcg64": {"PCG64": None, "PCG64DXSM": None},
+        "numpy.random._philox": {"Philox": None},
+        "numpy.random._sfc64": {"SFC64": None},
+    }
+    for name, names in stubs.items():
+        mod = types.ModuleType(name)
+        mod.__dict__.update(names)
+        sys.modules[name] = mod
+
+
 def warm_imports() -> None:
     """Import everything a simulation needs (engine, numpy, the parquet writer) once.
 
     Called before forking batch workers so every child inherits the loaded modules instead of
     paying the import cost again, four times, on four CPUs that the simulations want."""
+    _trim_numpy()
     from abides_core import abides  # noqa: F401
     import jpsim.config  # noqa: F401
     import jpsim.trace_fast  # noqa: F401
@@ -95,6 +129,7 @@ def simulate(config_path: str, out_path: str, seed=None, marks: dict | None = No
     t_start = time.perf_counter()
     t_epoch = time.time()
     marks = marks if marks is not None else _phase_marks()
+    _trim_numpy()
     from abides_core import abides
 
     from jpsim.config import build_config

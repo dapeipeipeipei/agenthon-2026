@@ -1,4 +1,4 @@
-import logging
+from jpsim import _nolog as logging  # [jpsim] no-op logging (nothing is ever emitted)
 from copy import deepcopy
 from typing import Any, List, Optional, Tuple
 

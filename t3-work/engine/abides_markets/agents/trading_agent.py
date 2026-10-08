@@ -1,4 +1,4 @@
-import logging
+from jpsim import _nolog as logging  # [jpsim] no-op logging (nothing is ever emitted)
 import sys
 import warnings
 from copy import deepcopy  # noqa: F401  [jpsim] order copies go through orders.copy_order

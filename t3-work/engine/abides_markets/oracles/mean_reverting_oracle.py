@@ -1,5 +1,5 @@
 import datetime as dt
-import logging
+from jpsim import _nolog as logging  # [jpsim] no-op logging (nothing is ever emitted)
 from math import sqrt
 from typing import Any, Dict, Optional
 

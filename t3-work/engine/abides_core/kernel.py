@@ -1,4 +1,4 @@
-import logging
+from jpsim import _nolog as logging  # [jpsim] no-op logging (nothing is ever emitted)
 import heapq
 import os
 from datetime import datetime
