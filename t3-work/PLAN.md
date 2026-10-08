@@ -57,6 +57,13 @@ cProfile（t3-mp01，7.9 s 带探针 / 4.3 s 实跑）分解：
 6. batch 单元：子场景用 `multiprocessing`（fork）并行 4 核，各子进程自带计数器复位，输出与串行完全一致；
 7. 之后视时间：`deepcopy` 换定制浅拷贝、PriceLevel 总量缓存、PyPy 可行性评估。
 
+### 第二阶段进展（10-08 晚）
+
+- 第 1–5 轮全部落地（上面 1–6 条 + `-O`、去掉 LAST_TRADE/HOLDINGS 等不进输出的日志、Order 去掉 ABC 元类、账本行改元组）：本机 71 单元均值 **50 659 ev/s**（参考 13 988，**3.62×**），71/71 与参考逐字节相同。
+- **Cython（纯 Python 模式编译 14 个热模块）：CI 实测比纯 Python 慢约 10%**（对象操作为主的代码 Cython 没有收益，还多了调用开销），已删除。
+- **PyPy 3.9 + numpy 1.26.4 跑模拟、CPython 3.11 + pyarrow 写 parquet**（`Dockerfile.pypy`，`jpsim/writer.py` 两段式交接，本地 CPython↔CPython 交接验证逐字节相同）：CI 构建中，结果见 STATUS.md。
+- CI（GitHub runner）同一镜像两次跑均值 36.7k / 33.1k ev/s：runner 之间波动 ±15%，CI 时间只能看相对值。
+
 ## 交付物
 
 - `t3-work/Dockerfile`（linux/amd64，`qfbench2.interface_version="2.0"`，非 root，`simulate`/`simulate-batch` 在 PATH，无 ENTRYPOINT，无 VOLUME）
