@@ -322,12 +322,14 @@ struct Msg {
     int64_t bid_p, bid_q, ask_p, ask_q;
 };
 
+// Heap entries are small; the message payload lives in a slot pool (slots are recycled after
+// delivery, so the pool stays at the number of in-flight messages). Wakeups carry no payload.
 struct HeapEntry {
     int64_t time;
     int32_t sender, recipient;
     int64_t message_id;
     int64_t ledger_idx;  // -1 for wakeups (row written on delivery)
-    Msg msg;
+    uint32_t slot;       // index into Kernel::pool; UINT32_MAX for wakeups
 };
 struct HeapCmp {
     bool operator()(const HeapEntry& a, const HeapEntry& b) const {
@@ -509,6 +511,8 @@ struct Kernel {
     std::vector<LedgerRow> ledger;
     std::vector<int64_t> deliveries;  // ledger index per delivery seq
     std::priority_queue<HeapEntry, std::vector<HeapEntry>, HeapCmp> heap;
+    std::vector<Msg> pool;
+    std::vector<uint32_t> free_slots;
     std::vector<int64_t> agent_times;
     std::vector<int64_t> comp_delay;
     int64_t current_time = 0;
@@ -575,7 +579,14 @@ struct Kernel {
         e.recipient = recipient;
         e.message_id = m.message_id;
         e.ledger_idx = (int64_t)ledger.size() - 1;
-        e.msg = m;
+        if (free_slots.empty()) {
+            e.slot = (uint32_t)pool.size();
+            pool.push_back(m);
+        } else {
+            e.slot = free_slots.back();
+            free_slots.pop_back();
+            pool[e.slot] = m;
+        }
         heap.push(e);
     }
     void set_wakeup(int32_t agent, int64_t requested) {
@@ -583,9 +594,9 @@ struct Kernel {
         e.time = requested;
         e.sender = agent;
         e.recipient = agent;
-        e.msg = new_msg(M_WAKEUP);
-        e.message_id = e.msg.message_id;
+        e.message_id = msg_counter++;  // WakeupMsg() construction
         e.ledger_idx = -1;
+        e.slot = UINT32_MAX;
         heap.push(e);
     }
     // ExchangeAgent.send_message: order-book notifications carry the pipeline delay.
@@ -886,7 +897,7 @@ struct Kernel {
             current_time = e.time;
             additional_delay = 0;
             int32_t r = e.recipient;
-            if (e.msg.type == M_WAKEUP) {
+            if (e.slot == UINT32_MAX) {
                 if (agent_times[r] > current_time) {
                     e.time = agent_times[r];
                     heap.push(e);
@@ -919,8 +930,11 @@ struct Kernel {
                 agent_times[r] += comp_delay[r] + additional_delay;
                 causal_uid = e.message_id;
                 deliveries.push_back(e.ledger_idx);
-                if (r == 0) exchange_receive(agents[0], current_time, e.sender, e.msg);
-                else trader_receive(agents[r], current_time, e.msg);
+                // copy the payload out and recycle the slot first: the agent may send (allocate)
+                const Msg m = pool[e.slot];
+                free_slots.push_back(e.slot);
+                if (r == 0) exchange_receive(agents[0], current_time, e.sender, m);
+                else trader_receive(agents[r], current_time, m);
             }
         }
     }
