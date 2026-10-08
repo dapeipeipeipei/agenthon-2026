@@ -15,7 +15,7 @@
 
 | 版本 | 镜像 digest | CI run | 说明 |
 |---|---|---|---|
-| v0.1 | （CI 跑完后填入，见 `submission/submission.json`） | ci/t1-image | 首版 |
+| v0.1 | `sha256:ec2fc7d56830dc0f350ac2386680d3808d99d498ee73faae5031c728e5a873fd` | [37820572588](https://github.com/dapeipeipeipei/agenthon-2026/actions/runs/37820572588)（ci/t1-image，commit 051b3bb+CI 修正） | 首版；镜像内 86/86 exit 0、输出树全合规、oracle 2/86 过 checker、9 种退化模式全过。**匿名拉取检查 10-08 已 PASS**（`verify_anonymous_pull.sh`：manifest/config/11 层全部匿名可取，压缩 360 MB，linux/amd64、label 2.0、非 root、无 entrypoint）→ 可直接 `pack_all.py t1-dev` 上传 |
 
 ## agent 做什么（`agent/`，纯标准库；数值栈只给生成的脚本用）
 
@@ -73,8 +73,8 @@ PYTHONUTF8=1 ..\..\agenthon\.venv\Scripts\python -m agent.selftest
 
 CI（`.github/workflows/t1-image.yml`，推到 `ci/t1-image` 或 `cand/t1-*` 触发）：构建 linux/amd64 → 镜像内按平台容器设置
 （只读根、uid 65534、64 MiB noexec /tmp、256 PID）跑 86 题 + 假 House → 输出树检查 → 各题 checker（两道 oracle 必须过）→
-9 种退化模式 → 推 GHCR 打印 digest。**包是私有的，所有者要在 GitHub package 设置里改成 public**，然后
-`bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t1 --digest sha256:…` 验证匿名可拉。
+9 种退化模式 → 推 GHCR 打印 digest。推完用
+`bash t2-work/pack/verify_anonymous_pull.sh --repo dapeipeipeipei/jinpei-t1 --digest sha256:…` 验证匿名可拉（v0.1 已 PASS；若 GitHub 把新包默认设为私有则要在 package 设置里改 public）。
 
 ## 第一次 Dev 上传能告诉我们什么
 
