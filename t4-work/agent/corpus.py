@@ -279,6 +279,10 @@ def load_unit(task_path: Path, corpus_dir: Path) -> Unit:
         ent, shared, resolvable = labels_by_doc.get(doc_id, (None, False, False))
         flat = isinstance(raw, dict) and isinstance(raw.get("text"), str)
         meta = {k: v for k, v in raw.items() if k not in ("text", "spans")} if isinstance(raw, dict) else {}
+        # the scorer resolves a citation by file name; a document whose own `doc_id` field says
+        # otherwise is read but never cited (two resolvers could disagree about it)
+        inner = raw.get("doc_id") if isinstance(raw, dict) else None
+        consistent = not isinstance(inner, str) or inner == doc_id
         unit.docs[doc_id] = Doc(doc_id=doc_id, text=text, doc_date=date, meta=meta, shared=shared,
-                                entity_ids=ent, citable=bool(resolvable and flat))
+                                entity_ids=ent, citable=bool(resolvable and flat and consistent))
     return unit

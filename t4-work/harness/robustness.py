@@ -80,8 +80,23 @@ def run(unit: Path, corpus: Path | None = None) -> tuple[int, dict | None, float
     return p.returncode, ans, time.time() - t0
 
 
-def check(name: str, unit: Path, ans: dict | None, rc: int, secs: float, *, scorer: bool = True, extra=None) -> bool:
-    from baselines.guardrails_example.citation_rail import check_claim_rules
+def official_gates(unit: Path, answer_path: Path) -> str | None:
+    """Run the scorer's own gates (schema, roster, card target type, label vocabulary, embargo,
+    manifest labels, claim rules) with no outcome: a clean unit comes back `unrankable`."""
+    from run_local import official_score
+
+    try:
+        o = official_score(unit, answer_path)
+    except Exception as exc:  # noqa: BLE001
+        return f"scorer raised {type(exc).__name__}: {str(exc)[:120]}"
+    if o["state"] not in ("unrankable", "participant_success"):
+        return f"scorer state {o['state']} ({o['failure']})"
+    return None
+
+
+def check(name: str, unit: Path, ans: dict | None, rc: int, secs: float, *, scorer: bool = True, extra=None,
+          reasons: bool = False, gates: bool = False, fallback_ok: bool = True) -> bool:
+    from baselines.guardrails_example.citation_rail import check_claim_rules, check_submitted_reasons, load_corpus
 
     problems = []
     if rc != 0:
@@ -91,10 +106,12 @@ def check(name: str, unit: Path, ans: dict | None, rc: int, secs: float, *, scor
     else:
         if schema_errors(ans):
             problems.append("schema")
-        task = json.loads((unit / "task.json").read_text(encoding="utf-8"))
+        task = json.loads((unit / "task.json").read_text(encoding="utf-8-sig"))
         roster = sorted(e["entity_id"] for e in task["entities"])
         if sorted(r["entity_id"] for r in ans["entity_predictions"]) != roster:
             problems.append("roster")
+        if not fallback_ok and (ans.get("notes") or {}).get("fallback"):
+            problems.append("fallback answer: " + str((ans.get("notes") or {}).get("why", ""))[:100])
         if scorer:
             try:
                 fs = [f for f in check_claim_rules(ans, unit, token_counter=None) if f.code != "claim_tokens_unchecked"]
@@ -102,6 +119,17 @@ def check(name: str, unit: Path, ans: dict | None, rc: int, secs: float, *, scor
                     problems.append("claims: " + ", ".join(sorted({f.code for f in fs})))
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"scorer error {exc!r}"[:160])
+        if reasons:
+            try:
+                rf = check_submitted_reasons(ans, load_corpus(unit / "corpus"), task["cutoff_date"][:10])
+                if rf:
+                    problems.append("reasons: " + ", ".join(sorted({f.code for f in rf})))
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"reasons check error {exc!r}"[:160])
+        if gates:
+            msg = official_gates(unit, unit / "_out" / "answer.json")
+            if msg:
+                problems.append(msg)
         if extra:
             msg = extra(ans)
             if msg:
@@ -112,9 +140,27 @@ def check(name: str, unit: Path, ans: dict | None, rc: int, secs: float, *, scor
     return ok
 
 
+def synthetic_cases() -> list[bool]:
+    """Units built from scratch for families the public set does not contain (synth_units.py):
+    every one must be answered without a fallback, pass the scorer's gates, the claim rules and the
+    reasons checker, carry three reasons, and satisfy its own expectation."""
+    from synth_units import build_all
+
+    results = []
+    print("\n--- synthetic unseen-family units ---")
+    for case in build_all(OUT / "_synth"):
+        rc, a, s = run(case.unit)
+        results.append(check(case.name, case.unit, a, rc, s, scorer=case.scorer, extra=case.extra, reasons=True, gates=case.scorer, fallback_ok=False))
+    return results
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     results = []
+    if "--synth" in sys.argv:  # only the synthetic unseen-family units (fast iteration)
+        results = synthetic_cases()
+        print(f"\n{sum(results)}/{len(results)} synthetic cases pass")
+        return 0 if all(results) else 1
 
     # 1. stale-evidence trap: a post-cutoff doc that "announces" the outcome must change nothing
     base = clone("stale_base", "t4-credit-event-2023")
@@ -335,6 +381,9 @@ def main() -> int:
     strip = lambda ans: {k: v for k, v in ans.items() if k != "notes"}  # noqa: E731
     results.append(check("seed / hash-seed invariance", u, a2, p.returncode, 0.0,
                          extra=lambda ans: None if strip(a1) == strip(ans) else "answer depends on the seed"))
+
+    # 18+. synthetic units of families the public set does not contain
+    results += synthetic_cases()
 
     print(f"\n{sum(results)}/{len(results)} robustness cases pass")
     return 0 if all(results) else 1

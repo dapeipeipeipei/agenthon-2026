@@ -66,9 +66,10 @@ def build_answer(unit: Unit, preds: list[Pred], *, reasons: bool = True, extra_n
                  reasons_override: list[dict] | None = None) -> dict:
     rows = []
     # full precision; then the cost-free compaction; then, only if the reasoning grader's answer
-    # cap is still exceeded, looser rounding (point within 2% / 5% of the band, band at most 5% /
-    # 10% wider): a unit over the cap gets no reasoning grade at all
-    for tol in (None, (0.005, 1.01), (0.02, 1.05), (0.05, 1.10)):
+    # cap is still exceeded, looser rounding (point within 2% / 5% / 15% / 30% of the band, band
+    # at most 5% / 10% / 12% / 20% wider): a unit over the cap gets no reasoning grade at all,
+    # and the last two stages (wide rosters of 25-35 rows) trade a little point precision for it
+    for tol in (None, (0.005, 1.01), (0.02, 1.05), (0.05, 1.10), (0.15, 1.12), (0.30, 1.20)):
         rows = []
         for pr in preds:
             point, lo, hi = _numbers(pr, 6) if tol is None else _compact_numbers(pr, *tol)

@@ -175,7 +175,25 @@ _METHOD_TEXT = {
     "no_change": "Markets already price the pre-cutoff stance and information, so without a signal that sets the direction the expected change is zero, with a spread scaled to the level and the length of the window.",
     "policy_path": "Front-end yields are the market's expected path of the policy rate: when the shortest yield sits far from where the Committee itself has signalled the rate will be in the near term, either the market or the Committee gives ground, and historically each gives about half, so part of the gap closes by the resolution; the pass-through fades with maturity because long yields are anchored by long-run growth and inflation expectations rather than the next few meetings, and the band is the usual size of yield moves over a window of this length.",
     "prior_probability": "With no distress language in the filings the base rate of a credit event over one year is low, so the probability stays near the prior.",
+    "peer_median": "Rows of one unit measure the same quantity for comparable entities, so where a row carries no level of its own the cross-section of the other rows is the best available estimate of its level, and their spread is the honest width of its band.",
 }
+
+#: Method texts that read differently outside the family they were written for: the generic
+#: wording is used when the unit's own words do not match the family's.
+_METHOD_TEXT_GENERIC = {
+    "series_reversion": (re.compile(r"position|speculat|\bcot\b|commitments of traders", re.IGNORECASE),
+                         "Mean reversion: when a series sits far from its recent average, the following changes tend to pull it back toward that average, and the typical size of past changes over the same window sets how large the move can be."),
+    "prior_probability": (re.compile(r"credit event|default|bankrupt|distress|going[- ]concern", re.IGNORECASE),
+                          "With no passage in the entity's own pre-cutoff documents that signals the event, the base rate of such an event over the window is low, so the probability stays near a low prior."),
+}
+
+
+def _method_text(unit: Unit, method: str) -> str:
+    """The method's economic link, in the family's words when the unit is of that family."""
+    alt = _METHOD_TEXT_GENERIC.get(method)
+    if alt is not None and not alt[0].search(unit.target_name + " " + unit.prompt):
+        return alt[1]
+    return _METHOD_TEXT.get(method, "")
 
 #: Driver phrases a task statement names ("Reason from ...") mapped to the economic mechanism
 #: that links that driver to the forecast. Keyed by concept, never by unit.
@@ -262,7 +280,7 @@ _CONTENT_TEXT: tuple[tuple[str, str], ...] = (
 
 #: Methods whose figures come from the task table or from our own placement, not from a corpus
 #: passage: no passage "carries" them, so the premise is found by content instead.
-_NO_CORPUS_FIGURE = frozenset(("zero_default", "no_change", "carry_forward", "prior_probability"))
+_NO_CORPUS_FIGURE = frozenset(("zero_default", "no_change", "carry_forward", "prior_probability", "peer_median"))
 _COMPARATIVE = re.compile(r"\b(compared (?:with|to)|versus|vs\.?|increase[sd]?|decrease[sd]?|rose|fell|up from|down from|year over year|year-over-year|revised(?: up| down)?|moved by)\b", re.IGNORECASE)
 #: A results statement: a headline line with a money figure.
 _RESULTS = re.compile(r"\b(net sales|revenues?|net income|net earnings|net loss|operating income|earnings(?: \(loss\))? per (?:common )?share|diluted (?:eps|earnings)|net interest income|provision for credit losses)\b[^.$]{0,60}?\b(?:was|were|of|totaled|totaling|increased|decreased|rose|fell|to|at|or|between)\s+\$\s?\d", re.IGNORECASE)
@@ -558,7 +576,7 @@ def _candidate_passages(unit: Unit, pr: Pred, ent: dict, avoid: set, want_figure
     # bare table row less so, since a prose passage carrying the same figures reads better)
     for rank, (doc_id, s, e) in enumerate(pr.spans):
         doc = unit.docs.get(doc_id)
-        if doc is None or not doc.admits(pr.entity_id):
+        if doc is None or not doc.about(pr.entity_id):
             continue
         consider(doc, s, e, (4.0 if _prose_score(doc.text[s:e]) >= 2.0 else 2.0) - 1.0 * rank)
     # prose lines of the signal's own documents that name the row (its period, series id or
@@ -567,7 +585,7 @@ def _candidate_passages(unit: Unit, pr: Pred, ent: dict, avoid: set, want_figure
               if isinstance(v, str) and 5 <= len(v) <= 24 and re.search(r"\d", v) and not v.isdigit() and "cik" not in k.lower()]
     for doc_id in dict.fromkeys(d for d, _, _ in pr.spans):
         doc = unit.docs.get(doc_id)
-        if doc is None or not doc.admits(pr.entity_id):
+        if doc is None or not doc.about(pr.entity_id):
             continue
         for s, e in _segments(doc):
             frag = doc.text[s:e]
@@ -576,9 +594,9 @@ def _candidate_passages(unit: Unit, pr: Pred, ent: dict, avoid: set, want_figure
             if any(re.search(r"(?<![\w-])" + re.escape(lb) + r"(?![\w-])", frag) for lb in labels):
                 consider(doc, s, e, 1.0)
     if figs:
-        # any admissible passage that carries the derivation's figures
+        # any readable passage of the row's documents that carries the derivation's figures
         for doc in unit.docs_for(pr.entity_id):
-            if not doc.admits(pr.entity_id):
+            if not doc.about(pr.entity_id):
                 continue
             for s, e in _segments(doc):
                 if _fig_hits(doc.text[s:e], figs):
@@ -588,7 +606,7 @@ def _candidate_passages(unit: Unit, pr: Pred, ent: dict, avoid: set, want_figure
         words = ("guidance outlook expects expected increase decrease growth revenue sales income margin "
                  "quarter compared percent billion earnings loss demand higher lower trend")
         q = tokens(unit.target_name.replace("_", " ")) * 2 + tokens(words) + [w for w in tokens(unit.prompt) if len(w) >= 6][:30]
-        for score, p in bm25_search(unit, pr.entity_id, q, k=40, require_digit=True):
+        for score, p in bm25_search(unit, pr.entity_id, q, k=40, require_digit=True, citable_only=False):
             frag = unit.docs[p.doc_id].text[p.start:p.end]
             consider(unit.docs[p.doc_id], p.start, p.end, 0.15 * score + (2.5 if _GUIDANCE.search(frag) else 0.0))
     out = [(sc - (6.0 if sp in avoid else 0.0), sp) for sp, sc in cands.items()]
@@ -607,11 +625,14 @@ def _best_premise(unit: Unit, pr: Pred, ent: dict, avoid: set) -> Span | None:
 def _mk(premise_span: Span, unit: Unit, mech: str, rows: list[Pred], sub: dict | None, key: str,
         extra_cites: list[Span] = ()) -> dict:
     doc = unit.docs[premise_span[0]]
-    cites = [{"doc_id": premise_span[0], "span_start": premise_span[1], "span_end": premise_span[2]}]
+    # a reason citation resolves against a document's flat text; a document that is readable but
+    # not citable (spans-shaped, or outside the manifest's `role: corpus`) is quoted verbatim in
+    # the premise, which the judge reads directly, and not cited
+    cites = [{"doc_id": premise_span[0], "span_start": premise_span[1], "span_end": premise_span[2]}] if doc.citable else []
     for q in extra_cites:
         if len(cites) >= 3:
             break
-        if q[0] in unit.docs and all((c["doc_id"], c["span_start"], c["span_end"]) != q for c in cites):
+        if q[0] in unit.docs and unit.docs[q[0]].citable and all((c["doc_id"], c["span_start"], c["span_end"]) != q for c in cites):
             cites.append({"doc_id": q[0], "span_start": q[1], "span_end": q[2]})
     return {
         "premise": doc.text[premise_span[1]:premise_span[2]],
@@ -656,7 +677,7 @@ def _method_reason(unit: Unit, method: str, members: list[Pred], used: set, sub:
                 break
     if rep is None:
         return None
-    mech = _METHOD_TEXT.get(method, "")
+    mech = _method_text(unit, method)
     if method in _NO_CORPUS_FIGURE:
         link = _content_text(unit.docs[ps[0]].text[ps[1]:ps[2]], unit)
         if link:
@@ -755,7 +776,7 @@ def _driver_reasons(unit: Unit, preds: list[Pred], used: set, sub: dict | None) 
         named, by_name = _rows_for_driver(unit, drv, preds)
         main = max(named, key=lambda p: (p.strength, -len(p.entity_id)))
         scored: dict[Span, float] = {}
-        for score, p in bm25_search(unit, None, q, k=16, own_bonus=0.0, scope="all"):
+        for score, p in bm25_search(unit, None, q, k=16, own_bonus=0.0, scope="all", citable_only=False):
             doc = unit.docs[p.doc_id]
             s, e = _strip_table_lines(doc.text, p.start, p.end)
             t = _trim_span(doc.text, s, e, max_chars=600, unit=unit)
@@ -785,7 +806,7 @@ def _driver_reasons(unit: Unit, preds: list[Pred], used: set, sub: dict | None) 
         if best < 1.0:
             continue  # only boilerplate or table debris speaks to this driver
         doc = unit.docs[span[0]]
-        scope = [p for p in preds if doc.admits(p.entity_id)]
+        scope = [p for p in preds if doc.about(p.entity_id)]
         if not scope:
             continue
         rows = [p for p in named if p in scope] if by_name else scope
@@ -796,7 +817,7 @@ def _driver_reasons(unit: Unit, preds: list[Pred], used: set, sub: dict | None) 
         mech = f"The task names {drv} as a driver of {unit.target_name.replace('_', ' ')}; the passage records its pre-cutoff state. "
         if link:
             mech += link + " "
-        mech += _METHOD_TEXT.get(main.method, "")
+        mech += _method_text(unit, main.method)
         mech += _derivation(unit, rows, sub, max_rows=2, budget=600)
         taken.add(span)
         r = _mk(span, unit, mech, rows, sub, key=_driver_key(drv))
@@ -830,8 +851,8 @@ def _extra_reasons(unit: Unit, preds: list[Pred], used: set, need: int, sub: dic
             break
         q = tokens(unit.target_name.replace("_", " ")) * 2 + tokens(words) + [w for w in tokens(unit.prompt) if len(w) >= 6][:30]
         scored: list[tuple[float, Span]] = []
-        hits = bm25_search(unit, pr.entity_id, q, k=40, require_digit=True, scope="own")
-        hits = hits or bm25_search(unit, pr.entity_id, q, k=40, require_digit=True)
+        hits = bm25_search(unit, pr.entity_id, q, k=40, require_digit=True, scope="own", citable_only=False)
+        hits = hits or bm25_search(unit, pr.entity_id, q, k=40, require_digit=True, citable_only=False)
         for score, p in hits:
             doc = unit.docs[p.doc_id]
             t = _trim_span(doc.text, p.start, p.end, max_chars=600, unit=unit)
@@ -854,7 +875,7 @@ def _extra_reasons(unit: Unit, preds: list[Pred], used: set, need: int, sub: dic
         mech = f"This pre-cutoff passage for {name} bears on {unit.target_name.replace('_', ' ')}. "
         if link:
             mech += link + " "
-        mech += _METHOD_TEXT.get(pr.method, "") + _derivation(unit, [pr], sub, max_rows=1)
+        mech += _method_text(unit, pr.method) + _derivation(unit, [pr], sub, max_rows=1)
         r = _mk(span, unit, mech, [pr], sub, key=f"extra:{span[0]}:{span[1]}")
         r["_rep"] = pr.entity_id
         out.append(r)
