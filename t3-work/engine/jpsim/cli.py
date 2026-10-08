@@ -55,15 +55,62 @@ def simulate(config_path: str | pathlib.Path, out_path: str | pathlib.Path,
     """Run one scenario; write trace.parquet, message_trace.parquet and events.json next to it."""
     t_start = time.perf_counter()
     t_epoch = time.time()
-    from abides_core import abides
-
-    from jpsim.config import build_config
     from jpsim.scenario_io import read_scenario
-    from jpsim.trace_fast import build_message_trace, build_trace, write_parquet
+    from jpsim.trace_fast import write_parquet
 
     scenario = json.loads(read_scenario(config_path))
     if seed is not None:
         scenario = {**scenario, "seed": int(seed)}
+
+    # [jpsim v2] the typed Cython engine (jpsim/fastsim.pyx) runs the same simulation and hands back the
+    # same arrays as trace_fast; JPSIM_ENGINE=py forces the pure-Python path (regression reference).
+    fastsim = None
+    if os.environ.get("JPSIM_ENGINE", "fast") != "py":
+        try:
+            from jpsim import fastsim  # type: ignore[attr-defined]
+        except ImportError:
+            fastsim = None
+    if fastsim is not None:
+        from jpsim.trace_fast import message_table, trace_table
+
+        trace_arr, msg_arr = fastsim.run_scenario(scenario)
+        out_path = pathlib.Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        msg_out = out_path.parent / "message_trace.parquet"
+        # The two files are independent and pyarrow releases the GIL while encoding/compressing, so
+        # build + write them on two threads (the unit has 4 CPUs; the simulation itself is serial).
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _emit(build, arrays, path):
+            table = build(arrays)
+            write_parquet(table, str(path))
+            return table.num_rows
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_trace = pool.submit(_emit, trace_table, trace_arr, out_path)
+            f_msg = pool.submit(_emit, message_table, msg_arr, msg_out)
+            n_trace_rows, n_msg_rows = f_trace.result(), f_msg.result()
+        wall_clock_sec = time.perf_counter() - t_start
+        n_events = int(n_trace_rows)
+        events = {
+            "scenario_id": str(scenario["scenario_id"]),
+            "seed": int(scenario["seed"]),
+            "n_events": n_events,
+            "wall_clock_sec": float(wall_clock_sec),
+            "events_per_sec": float(n_events / wall_clock_sec) if wall_clock_sec > 0 else 0.0,
+            "trace_sha256": _sha256(out_path),
+            "n_messages": int(n_msg_rows),
+            "message_trace_sha256": _sha256(msg_out),
+            "peak_memory_bytes": _peak_rss_bytes(),
+            "gpu_seconds": 0.0,
+        }
+        (out_path.parent / "events.json").write_text(json.dumps(events, indent=2) + "\n")
+        return events
+
+    from abides_core import abides
+
+    from jpsim.config import build_config
+    from jpsim.trace_fast import build_message_trace, build_trace
 
     _reset_abides_counters()
     config = build_config(scenario)

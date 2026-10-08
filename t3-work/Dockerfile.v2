@@ -1,0 +1,56 @@
+# Agenthon 2026 Track 3 — team Jin & Pei: jpsim v2 (typed Cython engine).
+#
+# Same vendored ABIDES engine and adapter as t3-work/Dockerfile, plus jpsim/fastsim.pyx: the whole
+# run path (kernel, exchange + order book, oracle, latency model, the four scenario agents, kernel
+# ledger, trace extraction) transliterated into one typed Cython extension that produces the same
+# arrays as jpsim.trace_fast, so trace.parquet / message_trace.parquet stay byte-identical to the
+# organizers' references (checked in CI on all 71 public units). The pure-Python engine stays in the
+# image as the fallback (JPSIM_ENGINE=py) and the reference for regressions.
+#
+# Build (linux/amd64; CI: .github/workflows/t3-image.yml with dockerfile=t3-work/Dockerfile.v2):
+#   docker buildx build --platform linux/amd64 -t jpsim:v2 -f t3-work/Dockerfile.v2 t3-work
+
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS builder
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update && apt-get install -y --no-install-recommends g++ libc6-dev \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "cython==3.0.11" "setuptools<75"
+COPY engine /opt/jpsim
+COPY tools/build_fastsim.py /opt/build_fastsim.py
+# -O2, -ffp-contract=off, no -march (x86-64 baseline; FMA contraction would change float results)
+RUN python /opt/build_fastsim.py --engine-dir /opt/jpsim --cxx g++ \
+ && python -c "import sys; sys.path.insert(0, '/opt/jpsim'); sys.modules['pandas']=None; import jpsim.fastsim as f; print('fastsim ok:', f.__file__)"
+
+FROM --platform=linux/amd64 python:3.11-slim-bookworm
+
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
+LABEL org.opencontainers.image.description="Agenthon 2026 Track 3 simulator (jpsim v2): pinned ABIDES baseline, typed Cython engine, output-identical"
+
+ENV PYTHONDONTWRITEBYTECODE=0 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HOME=/tmp \
+    PYTHONPATH=/opt/jpsim \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1
+
+RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+
+COPY --from=builder /opt/jpsim /opt/jpsim
+COPY bin/simulate /usr/local/bin/simulate
+COPY bin/simulate-batch /usr/local/bin/simulate-batch
+
+RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
+ && find /opt/jpsim -type d -exec chmod 0755 {} + \
+ && find /opt/jpsim -type f -exec chmod 0644 {} + \
+ && python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow \
+ && python -c "import sys; sys.modules['pandas']=None; import jpsim.cli, jpsim.trace_fast, jpsim.fastsim as f; assert f.__file__.endswith('.so'), f.__file__; print('import ok:', f.__file__)"
+
+WORKDIR /tmp
+USER 65534:65534
+
+CMD ["simulate", "--help"]

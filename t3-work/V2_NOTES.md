@@ -61,6 +61,20 @@ eq-deterministic（10.7 k）0.86 s；as01（24.7 k）1.10 s；gb-mega（1.17 M�
 - `t3/kernel-cpp`：唯一能到 15 万以上的路。**必须同时拿走启动**（静态二进制、自写 parquet），否则封顶 130–157 k。精确语义清单见 §5。
 - `t3/v2`（本线，Cython/编译扩展）：f 期望 2–4 ⇒ 45–66 k；是保底，不是答案。
 
+## 4b. `t3/v2` 进展：typed Cython 引擎 `jpsim/fastsim.pyx`（10-09 凌晨）
+
+整条运行路径（kernel 堆、交易所+订单簿、oracle、latency、四种代理、账本、trace 抽取）用 cdef 类 + C 结构重写在一个扩展里，
+RNG 在 C 里复刻 numpy legacy `RandomState`（与 numpy 1.26.4 对拍 10 万次抽样 0 差异），输出数组交给原 `trace_fast` 的 pyarrow 写入器。
+`JPSIM_ENGINE=py` 回退到纯 Python 路径。构建：`python t3-work/tools/build_fastsim.py`（本机 mingw g++ / 镜像里 g++，`-O2 -ffp-contract=off`）。
+
+- **本机 71/71 字节一致**（`check_hashes.py`），一进程一单元整进程墙钟均值 **146 671 ev/s**（第 5 轮 50 659，参考 13 988）；中位数 140 708。
+  本机小单元被 Windows 进程启动（~0.4 s）压死（s001 1 560 ev/s），中等单元 0.47–0.53 s 里 ~0.4 s 是启动。
+- 进程内（不含解释器启动）：mp01 72 k 事件 模拟 0.034 s；mr-cancel-replace 322 k 模拟 0.169 s；gb-mega 1.17 M 模拟 1.12 s（≈ 0.7–0.9 M ev/s）。
+  写 parquet 现在是大单元的第二大头（gb-mega 0.57 s），两个文件改成两线程并行后 gb-mega 整体 1.72 → 1.44 s。
+- 启动：`import numpy` 0.07 s + `pyarrow` 0.02 s（本机），这是 fastsim 路径剩下的固定开销（numpy 的 C-API 产数组、pyarrow 写字节一致 parquet 都离不开）。
+- 镜像：`t3-work/Dockerfile.v2`（builder 阶段 g++ 编译 .so，运行阶段同 Dockerfile）；CI 用 `workflow_dispatch -f dockerfile=t3-work/Dockerfile.v2 -f tag_suffix=-v2`。
+- 按 §2 模型（c≈0.5，s≈0.15，f≈20–25）预计平台分 **110–140 k**；再往上要去掉 Python 启动与 pyarrow（`t3/startup`/`t3/kernel-cpp` 的活）。
+
 ## 5. 内核重写必须复刻的精确语义（给 t3/kernel-cpp；全部来自读代码）
 
 ### 5.1 numpy 1.26 legacy `RandomState` 的算法（bit-exact 可做）
