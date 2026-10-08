@@ -16,12 +16,13 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .unit import UUID_RE, Unit, regex_deliverables
+from .unit import UUID_RE, Unit, named_output_files, regex_deliverables
 
 MAX_FILES = 256
 MAX_NODES = 4096
 MAX_BYTES = 64 * (1 << 20)
 MAX_DEPTH = 7
+BACKUP_MAX_BYTES = 16 * (1 << 20)     # the review backup lives in /tmp, a 64 MiB tmpfs shared with everything else
 
 
 @dataclass
@@ -81,6 +82,14 @@ def contract_from_model(obj: dict | None, u: Unit, out_dir: str) -> Contract:
             c.deliverables.append(Deliverable(name=name, fmt=Path(name).suffix.lstrip(".").lower() or "other", spec="(named in the task text)"))
             if c.source == "none":
                 c.source = "regex"
+    # third: the unit's own checker when a roster ships it; fourth: bare names in the task's output
+    # section (only when nothing better exists, as they can include non-deliverables)
+    if not c.deliverables:
+        names = u.checks_names or named_output_files(u.instruction, {f.rel.split("/")[-1] for f in u.files})
+        for name in names:
+            c.deliverables.append(Deliverable(name=name, fmt=Path(name).suffix.lstrip(".").lower() or "other", spec="(named in the task text)"))
+        if names:
+            c.source = "checks" if u.checks_names else "names"
     return c
 
 
@@ -99,9 +108,20 @@ def _json_bad_numbers(obj, depth: int = 0) -> bool:
     return False
 
 
-def check_deliverables(out_dir: Path, deliverables: list[Deliverable]) -> list[str]:
-    """Problems (empty list = everything we can verify without the checker is fine)."""
+def check_deliverables(out_dir: Path, deliverables: list[Deliverable], since: float | None = None) -> list[str]:
+    """Problems (empty list = everything we can verify without the checker is fine).
+
+    `since` (a time.time() value) marks the start of the run being judged: a deliverable that was
+    not (re)written by this run -- left over from an earlier candidate -- is a problem, so a
+    script that crashed before writing it cannot pass on a predecessor's files.
+    """
     problems: list[str] = []
+    if not deliverables and since is not None:
+        # no contract at all: the run must at least have written something
+        fresh = [p for p in out_dir.rglob("*") if p.is_file() and _mtime(p) >= since - 2.0]
+        if not fresh:
+            problems.append("the script wrote NO output files at all; it must write every deliverable the task names into the output directory")
+        return problems
     for d in deliverables:
         p = out_dir / d.name
         if not p.is_file():
@@ -113,6 +133,9 @@ def check_deliverables(out_dir: Path, deliverables: list[Deliverable]) -> list[s
             size = 0
         if size == 0:
             problems.append(f"deliverable is EMPTY (0 bytes): {d.name}")
+            continue
+        if since is not None and _mtime(p) < since - 2.0:
+            problems.append(f"deliverable NOT WRITTEN by this script (a stale file from an earlier attempt exists): {d.name}")
             continue
         ext = d.ext
         try:
@@ -147,6 +170,13 @@ def check_deliverables(out_dir: Path, deliverables: list[Deliverable]) -> list[s
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{d.name}: could not be parsed as {ext}: {type(exc).__name__}: {str(exc)[:160]}")
     return problems
+
+
+def _mtime(p: Path) -> float:
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 # --------------------------------------------------------------------------- stubs

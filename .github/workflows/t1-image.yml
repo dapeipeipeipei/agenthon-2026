@@ -115,7 +115,7 @@ jobs:
 
       - name: Degraded House modes in the image (never crash, always a valid tree)
         run: |
-          for mode in flaky truncated think garbage 500 429 401 slow down; do
+          for mode in flaky truncated think garbage 500 429 401 413 slow down; do
             extra=""; [ "$mode" = slow ] && extra="--agent-env JP_CALL_TIMEOUT_SEC=6"
             python t1-work/harness/run_units.py --docker-image t1-local:ci --mode "$mode" --budget 90 $extra \
               --out-root "t1-ci-out/mode-$mode" --units t1-zero-coupon-bootstrapping t1-EXAMPLE-bs-greeks-pde t1-bollinger-backtest-aapl \

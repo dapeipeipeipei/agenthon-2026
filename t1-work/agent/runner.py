@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TAIL_CHARS = 3500
+MAX_CHILD_CPUS = 16          # the card's quota; os.cpu_count() in the container reports the HOST's cores
+
+ACTIVE: dict[int, subprocess.Popen] = {}     # running children, killed by `kill_active` on the alarm path
 
 
 @dataclass
@@ -60,6 +63,30 @@ def _preexec(mem_bytes: int):
             os.setsid()
         except Exception:  # noqa: BLE001
             pass
+        # A 16-CPU *quota* on a many-core host: os.cpu_count() still says e.g. 128, so a script's
+        # joblib n_jobs=-1 / loky / polars / numba pools would be sized for the host and fork far
+        # past the 256-PID limit. Pin the child to 16 of the CPUs it may already use (a window
+        # chosen from the pid, so concurrent containers on one host do not all pile onto CPUs
+        # 0-15); loky, polars, numba and os.process_cpu_count() honour affinity.
+        try:
+            cpus = sorted(os.sched_getaffinity(0))
+            n = len(cpus)
+            if n > MAX_CHILD_CPUS:
+                start = (os.getpid() * 7) % n
+                os.sched_setaffinity(0, {cpus[(start + i) % n] for i in range(MAX_CHILD_CPUS)})
+        except Exception:  # noqa: BLE001
+            pass
+        # And a process/thread ceiling below the container's 256 (nproc counts threads, per uid):
+        # a runaway pool then gets a clean exception inside the script, visible in the repair
+        # report, instead of starving the agent itself of PIDs.
+        try:
+            import resource
+
+            soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+            cap = 200 if hard in (resource.RLIM_INFINITY, -1) else min(200, hard)
+            resource.setrlimit(resource.RLIMIT_NPROC, (cap, hard))
+        except Exception:  # noqa: BLE001
+            pass
     return fn
 
 
@@ -82,11 +109,13 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
     script = scratch / "solution.py"
     script.write_text(code, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MODEL_", "QFBENCH_"))}
-    env.update({
+    env.pop("PYTHONPATH", None)          # the agent package is not for the script (we run with -s, not -I:
+    env.update({                         # -I implies -E, which would discard PYTHONHASHSEED/PYTHONUTF8 below)
         "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1", "PYTHONHASHSEED": "0",
         "OUT_DIR": str(out_dir), "OUTPUT_DIR": str(out_dir),
         "OMP_NUM_THREADS": str(threads), "OPENBLAS_NUM_THREADS": str(threads), "MKL_NUM_THREADS": str(threads),
         "NUMBA_NUM_THREADS": str(threads), "NUMEXPR_NUM_THREADS": str(threads), "POLARS_MAX_THREADS": str(threads),
+        "LOKY_MAX_CPU_COUNT": str(threads), "ARROW_IO_THREADS": str(threads), "RAYON_NUM_THREADS": str(threads),
         "MPLBACKEND": "Agg",
         "HOME": env.get("HOME") or scratch.as_posix(),
         "MPLCONFIGDIR": env.get("MPLCONFIGDIR") or (scratch / "mpl").as_posix(),
@@ -102,10 +131,11 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     t0 = time.monotonic()
     try:
-        p = subprocess.Popen([sys.executable, "-B", "-I", str(script)], cwd=str(out_dir), env=env,
+        p = subprocess.Popen([sys.executable, "-B", "-s", "-X", "utf8", str(script)], cwd=str(out_dir), env=env,
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
     except Exception as exc:  # noqa: BLE001
         return RunResult(returncode=-1, seconds=0.0, stdout_tail="", stderr_tail=f"could not start interpreter: {exc!r}")
+    ACTIVE[p.pid] = p
     timed_out = False
     try:
         out, err = p.communicate(timeout=max(1.0, timeout))
@@ -116,10 +146,28 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
             out, err = p.communicate(timeout=10)
         except Exception:  # noqa: BLE001
             out, err = b"", b""
+    except BaseException:
+        # the hard alarm (or anything else) interrupted the wait: never leave the child writing
+        # into the output directory after we have finalized it
+        _kill_tree(p)
+        raise
+    finally:
+        ACTIVE.pop(p.pid, None)
     secs = time.monotonic() - t0
     return RunResult(returncode=None if timed_out else p.returncode, seconds=secs,
                      stdout_tail=_tail(out or b""), stderr_tail=_clean_stderr(_tail(err or b""), scratch),
                      timed_out=timed_out)
+
+
+def kill_active() -> None:
+    """Kill every child still running (used on the alarm / exception path before finalizing)."""
+    for p in list(ACTIVE.values()):
+        _kill_tree(p)
+        try:
+            p.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+    ACTIVE.clear()
 
 
 def _kill_tree(p: subprocess.Popen) -> None:

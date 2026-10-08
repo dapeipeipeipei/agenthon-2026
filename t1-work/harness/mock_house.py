@@ -168,6 +168,11 @@ def reply_for(body: dict) -> tuple[int, str, str]:
         st = STATE.setdefault(key, {"code": 0, "partial": ""})
     if mode in ("500", "429"):
         return int(mode), '{"error": "busy"}', ""
+    if mode == "413":
+        # pre-admission refusal of an over-long prompt: refuse every request whose last user turn
+        # is longer than 14000 characters (the compact retry is shorter and gets through)
+        if len(user) > 14000:
+            return 413, '{"error": "prompt too long"}', ""
     if mode == "slow":
         time.sleep(20)
     if mode == "garbage":

@@ -60,6 +60,12 @@ def solve(task_dir: Path, out_dir: Path) -> int:
         if hasattr(signal, "SIGALRM"):
             signal.alarm(0)
         try:
+            from .runner import kill_active
+
+            kill_active()          # a generated script must not keep writing after we finalize
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             solver.finalize()
         except BaseException:  # noqa: BLE001
             traceback.print_exc()
