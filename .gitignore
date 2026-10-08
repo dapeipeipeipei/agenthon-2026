@@ -31,3 +31,8 @@ t2-work/.v4_cache.pkl
 t2-work/.v4_sweep.pkl
 t2-work/.v4_newrule_sweep.pkl
 t2-work/.v5_*.pkl
+
+# local caches / one-off check outputs
+t2-work/.v6_cache.pkl
+t2-work/gates_final_check.json
+t2-work/*_audit_scores.csv
