@@ -12,19 +12,27 @@
 按 CRPS 等打分，并**除以一个不读文本的官方基线（M0）对这张卡自己预期的误差**（10-06 新规则），越低越好；公开榜显示为 −(平均分)，越高越好。**副攻 Track 4**（带证据引用的表格预测）。
 提交物是一个 Docker 镜像，主办方在离线沙盒里跑；上传的是用官方工具 `qfbench2 submission pack` 打出来的 zip。
 
-### 现在的状态（2026-10-07）
+### 现在的状态（2026-10-07 晚）
 
-- **两个赛道都已在 CodaBench 真实出分**（账号已关联队伍 299）：T2 第一次上传 **−2.3626**（旧常数 v4；T2 榜面 = −平均损失，越高越好，M0 ≈ −2.64），
-  T4 第一次上传 **0.5394，第 7/83**。两者都和本地估计吻合。之后又传了 T2 rev3 / v5a / v5b、T4 B / C，等出分。全部上传 ID 和分数见 [STATUS.md](STATUS.md)。
+- **两个赛道的候选都在 CodaBench 真实出分，和本地估计吻合**（账号已关联队伍 299）。T2（榜面 = −平均损失，越高越好，M0 ≈ −2.64）：
+  旧 v4 −2.3626 → rev3 −2.1014 → **v5a −1.8424**；v5b（v5a + House 方向层）−1.8442，没有增益。
+  T4：首版 0.5394（当时第 7/83）→ **C 0.5435**；B（+ House）0.5118，更差。全部上传 ID 和分数见 [STATUS.md](STATUS.md)。
+- **T2 停止调参**：下午/晚上开了五条实验线（F2 措辞差分、F2 市场线索、F4 国债收益率、F4 股票因子、v6 题族×资产类别），
+  每条都按同一套防过拟合协议（留一时代 + 前向、≥5 种子、安慰剂、压力测试）检验，**全部「无稳健提升」**。v5a ≈ 诚实方法的稳健最优。笔记在各实验分支（WORKLOG §13.2）。
+- **T4 Final = E2**：在 C 上加了「政策路径锚」（从本 unit 语料逐字抽联邦基金目标区间 / 上次步长 / SEP 中位数，点 = 0.5 × gap × min(1, √(5/期限))）
+  和小样本区间下限，本地 0.537 → **0.5615**；独立审查修了两个抽取 bug，又加了范围护栏和 gap 钳位 → E2（镜像 `sha256:7bb0beef…`）。
+  E（967855）和 E2（967880）10-07 晚已传 Dev，等出分（WORKLOG §13.3，`t4-work/EXP_T4NS.md`）。
 - **10-06 晚主办方改了 T2 计分**（上游 `60509df`）：分母改为 M0「自己预期的误差」，封顶/失败值 4.0 → 8.0，20 个练习单元改名。
-  我们按新规则重选常数（v4 rev3：F2 宽度 1.25、F4 2.0），**下文里 0.9xx 之类的 T2 数字都是旧规则口径**，新数字看 `t2-work/V4_NOTES.md` 修订 3 和 `V5_NOTES.md`。
-- **镜像公开、发布演练全过**：GHCR 包已公开、匿名拉取验证通过；在 runsc 和 runc 两种运行时下 T2 104/104、T4 11/11（run 37573765226，`RELEASE_REHEARSAL.md`）。
+  **下文里 0.9xx 之类的 T2 数字都是旧规则口径**，新数字看 `t2-work/V4_NOTES.md` 修订 3 和 `V5_NOTES.md`。
 - **不追 Dev 第一**：上限分析显示 T2 #1（−1.34）和 T4 前 4 名都超过诚实方法能到的上限，大概率靠模型「记得」截止前的练习事件；
   Final 封存题在截止之后，Dev 名次 ≠ Final 名次，规则也禁止反推标签（`t2-work/HEADROOM.md`、`t4-work/HEADROOM.md`、`research/COMPETITIVE.md`）。
-- **Final 计划**：T4 用 **C**（确定性，不依赖大模型）。T2 在 **v5a**（押 F4 有冲击）/ **v5a_h**（对冲）/ **rev3**（保守）里选，
-  看主办方对 [T2#26](https://github.com/Agenthon-2026/track2-forecasting-public/issues/26) 第 2 问的回答。Final 10-13 12:00 UTC 开放，选定后尽早传（同分先传者胜）。
-- **截止**：最后一次 Dev 运行必须在 **10-12 20:00 UTC 前启动**；Final + Verification 10-13 → 10-25，每赛道**只交一份**。
-- **要你（或 Wenshuo）拍板**：① 仓库现在是 **PUBLIC** 且网页搜索排第一，对手能看到方法——建议转私有，并把你加为 collaborator；② T2 Final 选哪个版本（等 T2#26）。
+  今天两个 House 版本都没涨分，也印证了这一点。
+- **Final 计划**：T4 用 **E2**。T2 在 **v5a**（押 F4 有冲击）/ **v5a_h**（对冲）里二选一，
+  看主办方对 [T2#26](https://github.com/Agenthon-2026/track2-forecasting-public/issues/26) 第 2 问的回答（10-07 晚仍未答复；10-12 前仍无答复则倾向 v5a_h）。
+  Final 10-13 12:00 UTC 开放，选定后尽早传（同分先传者胜）。
+- **截止**：最后一次 Dev 运行必须在 **10-12 20:00 UTC 前启动**；Final + Verification 10-13 → 10-25，每赛道**只交一份**。Dev 次数已用 T2 4/20、T4 5/20。
+- **要你（或 Wenshuo）拍板**：① 仓库现在是 **PUBLIC** 且网页搜索排第一，对手能看到方法——建议转私有，并把你加为 collaborator；
+  ② T2 Final 选 v5a 还是 v5a_h（等 T2#26）；③ 本机的 Team Key 文件打包用完请删掉。
 
 ### 东西在哪
 
@@ -42,7 +50,7 @@ agenthon/
 │   ├── pack/        ←   打包、本地验收、填 digest、校验 zip 的脚本（pack/README.md 是操作手册）
 │   ├── submission/  ←   submission*.json（各候选的描述文件，不含任何密钥）、CHECKLIST.md（规则逐条对照）
 │   └── run_all_gates.py / v4_eval.py / audit_metric.py …  ← 本地打分台（按榜单方式打分）
-├── t4-work/         ← Track 4（STATUS.md 有 A/B/C/D 候选与成绩、HEADROOM.md 上限分析、agent/、harness/、submission/）
+├── t4-work/         ← Track 4（STATUS.md 有 A/B/C/D/E/E2 候选与成绩、EXP_T4NS.md 是 E/E2 的实验与审查记录、HEADROOM.md 上限分析、agent/、harness/、submission/）
 ├── .github/workflows/  ← t2-image.yml、t4-image.yml、release-rehearsal.yml：云端构建镜像 + 平台同等限制下全量测试
 ├── LICENSE          ← Apache-2.0（与描述文件一致）
 └── Agenthon2026-public/  track1…track4-*-public/   ← 上游官方仓（gitignore，见「环境搭建」）
@@ -52,10 +60,10 @@ agenthon/
 
 1. **README 本节**——够你了解全貌
 2. **[STATUS.md](STATUS.md)**——倒计时、所有上传和分数、Final 方案、待拍板的决定
-3. **[WORKLOG.md](WORKLOG.md)** §12（10-07）和 §13（决策记录）——今天发生了什么、为什么这么定；更早的来龙去脉在前面各节
+3. **[WORKLOG.md](WORKLOG.md)** §12–13（10-07 全天）和 §14（决策记录）——今天发生了什么、为什么这么定；更早的来龙去脉在前面各节
 4. **`research/COMPETITIVE.md`** §0——一页看懂主办方裁定和榜单头部在做什么
 5. **`t2-work/HEADROOM.md`**、**`t4-work/HEADROOM.md`**——为什么 Dev 第一追不得（T4 这份是中文，T2 是英文）
-6. **`t2-work/V5_NOTES.md`** §3b、§5——T2 Final 三选一的依据；**`t4-work/STATUS.md`** 开头——T4 候选 C/D
+6. **`t2-work/V5_NOTES.md`** §3b、§5——T2 Final v5a / v5a_h 二选一的依据；**`t4-work/STATUS.md`** 开头和 **`t4-work/EXP_T4NS.md`**——T4 候选 E2 是什么、怎么验证的
 7. **`RELEASE_REHEARSAL.md`**——镜像和 zip 在平台式环境里的验收记录
 8. 需要动手时：`t2-work/pack/README.md`（从 CI 构建到上传的逐步手册）
 
@@ -70,10 +78,10 @@ agenthon/
 | # | 事项 | 谁 | 说明 |
 |---|---|---|---|
 | 1 | **决定仓库是否转私有**，转私有就把队长加为 collaborator | 仓库所有者 | 建议转私有（理由见 STATUS「待人拍板的决定」） |
-| 2 | **定 T2 Final 版本** | Wenshuo + Yuren | 看 T2#26 第 2 问回答；三选一规则见 STATUS「Final 方案」 |
-| 3 | **打包**（Team Key 只由持有人输入） | 持有 Team Key 的人 | `.venv\Scripts\python pack_all.py <候选名…>`，隐藏提示符输入，或 `--key-file` 指向自己保管的文件。**Team Key 等同密码：不进命令行、不进文件、不贴聊天、不告诉任何 agent** |
-| 4 | **剩余 Dev 上传**（只用来确认要交 Final 的版本在平台跑通） | CodaBench 账号持有人 | 10-12 20:00 UTC 前；T2 已用 4/20、T4 3/20 |
-| 5 | **Final 上传**，每赛道一份 | 同上 | 10-13 12:00 UTC 开放后尽早；只交 Dev 上真实跑过且逐题可接纳的版本 |
+| 2 | **定 T2 Final 版本**（v5a / v5a_h） | Wenshuo + Yuren | 看 T2#26 第 2 问回答；二选一规则见 STATUS「Final 方案」。T4 已定 E2 |
+| 3 | **打包**（Team Key 只由持有人输入） | 持有 Team Key 的人 | `.venv\Scripts\python pack_all.py <候选名…>`，隐藏提示符输入，或 `--key-file` 指向自己保管的文件。**Team Key 等同密码：不进命令行、不进文件、不贴聊天、不告诉任何 agent；本机密钥文件用完删掉** |
+| 4 | **剩余 Dev 上传**（只用来确认要交 Final 的版本在平台跑通） | CodaBench 账号持有人 | 10-12 20:00 UTC 前；T2 已用 4/20、T4 5/20。T4 E2 已传（967880）；T2 若选 v5a_h 还需传一次 Dev |
+| 5 | **Final 上传**，每赛道一份 | 同上 | 10-13 12:00 UTC 开放后尽早；只交 Dev 上真实跑过且逐题可接纳的版本（T4：`t4-e2.final`） |
 
 ---
 
