@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-forecasting-dev",
+  "team_id": "team-placeholder-derived-by-qfbench2-submission-pack",
+  "track": "forecasting",
+  "phase": "dev",
+  "category": "api",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "dapeipeipeipei/jinpei-t2",
+    "digest": "sha256:72aa96bcd7194a9fcedcf09051d2f0c854949779abdbb49f1b75b818910ca616"
+  },
+  "image_access": "public",
+  "models": [],
+  "license": "Apache-2.0",
+  "descriptor_digest": "sha256:0734d5ca126298d75529345d927e7d590d7e2933cbb9dad6de74a4fdf334cf10"
+}
