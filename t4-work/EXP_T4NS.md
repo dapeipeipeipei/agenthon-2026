@@ -116,7 +116,42 @@ NLI 全量检查（两个 DeBERTa 判官、矛盾检查开启）11/11 PASS：0 �
 - **留一检验**：fomc 规则只有两个 unit，无法做真正的留一；能做的是上面的 k/M0/锚 敏感性表 + 镜像压力，
   k=0.5 在所有锚变体里都为正收益，"仅当前中点"锚在 2022 方向错（所以用了"中点+上次步长 / SEP"）。
 
+## E2 = E + 审查修复 + 范围护栏（2026-10-07 晚）
+
+独立审查（254d546）修了两个抽取 bug：`_frac("1/2")` 返回 None → 步长退回 0.25；SEP 表格正则吃到
+"Effective federal funds rate 5.33" 行 → 锚跳到 5.33。两者在 Dev 两题上都被"快照是最新文档"掩盖。E2 再加：
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| 范围护栏 | `predict._is_sovereign_yield` | 目标名/题干须提到 yield / Treasury / sovereign / government bond / gilt / bund / curve 等，且不含 mortgage / credit spread / CDS / swap spread / corporate / municipal；否则不触发 |
+| gap 钳位 | `predict.PATH_GAP_CAP = 150` | \|锚 − 前端收益率\| 超过 150bp 按 150 算（更大的是 regime 差异或误读） |
+| 持稳语句 | `signals._RANGE` 允许 "at X to Y percent"；显式 maintain/keep/hold 时步长恒 0，不再去别的文档找 "75 basis point increase" |
+| 零利率下限 | `_FRAC` 允许裸分数 → "0 to 1/4 percent" 解析为中点 0.125 |
+
+合成变体（审查官脚本 `t4ns_review.py` + 新增 6 个；真实 corpus 改写）：
+
+| 变体 | 结果 |
+|---|---|
+| 2022/2024 基线 | 锚 3.125 (step) / 4.4 (sep)，预测逐位不变 |
+| B/B2 持稳 "at 5-1/4 to 5-1/2"（另一文档仍有 "75 basis point increase"） | kind=hold，步长 0，锚 5.375 ✓ |
+| C/C2 25bp / **1/2-point** 降息、无 SEP | 锚 4.125 / 4.375（步长 −0.25 / −0.50）✓ |
+| D 小数区间 5.25..5.50、未说步长 | 步长默认 0.25 → 5.625 ✓ |
+| E ECB 措辞 | 不触发 → no_change ✓ |
+| F/F2 ZLB "0 to 1/4 percent" | 中点 0.125 ✓（带按水平缩到 ±10bp 下限，已知特性） |
+| G EFFR 表格行 "Effective federal funds rate 5.33 5.33" | 锚仍 4.4 ✓（审查修复） |
+| G2/G3 只有 SEP 表 / 没有快照 | 锚 4.4，步长从 "by 1/2 percentage point" ✓ |
+| **H 按揭利率 bps 单元共用 FOMC 语料** | **不触发 → no_change ✓（护栏）** |
+| **H2 信用利差 bps 单元** | **不触发 ✓** |
+| H3 目标名只叫 rate_change_bps 但题干提 Treasury yields | 触发 ✓ |
+| I 快照里有 45 行收益率表 | 仍 policy_path（series 不抢先）✓ |
+| J 磁盘上有截止后声明 | 被 embargo 丢弃，锚 4.4 ✓ |
+| X 2Y=1.59（原始 gap +281） | 钳到 150 → 2Y 点 +75 ✓ |
+
+Dev 11 题：`run_local.py --gate` PASS 11/11，逐 unit 分数与 E 完全一致（Dev10 0.6547 / 榜面 0.5615）；`robustness.py` 17/17。
+`ARTIFACT_PROVENANCE.md` 新增 E/E2 一节：四个新常数 + 钳位，以及按 issue #24 披露"锚的二选一（中点+上次步长/SEP vs 仅中点）
+参考了两道练习题的核实首发结果"及来源/检索日期。
+
 ### 待做
 
-1. 老板说 full speed 后：`nli_check.py` 11 unit（矛盾检查开启）；CI 构建镜像；视结果决定是否并入 Final 候选。
-2. 可选：auction σ 下限改为"同量纲行用原始合并残差"（会让 30Y 带 ±0.14→±0.21），本次没做（多一个判断分支）。
+1. 可选：auction σ 下限改为"同量纲行用原始合并残差"（会让 30Y 带 ±0.14→±0.21），本次没做（多一个判断分支）。
+2. 可选：ZLB 下 fallback 带的 10bp 下限偏窄（水平比例公式），若决赛出现零利率语境可考虑绝对下限。

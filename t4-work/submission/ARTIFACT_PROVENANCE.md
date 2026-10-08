@@ -113,3 +113,52 @@ auction results, CFTC Socrata COT 2024-11-26 report, SEC XBRL first-filed dilute
 post-earnings outcomes from the public record). They were used only by the local harness
 (`run_local.py`, `headroom_eval.py`) to compare candidates; no constant was grid-searched, and
 none of this data is in either image.
+
+## Candidates E and E2 (v0.4 + policy-path anchor + interval floors, 2026-10-07)
+
+Candidate E (`submission.e*.json`, image `sha256:ff0dd4b6…`, branch `exp/t4ns` commit 71a4d88) and
+E2 (`submission.e2*.json`, E plus the review fixes of 254d546 and the scope guard below) are
+candidate C with two generic additions; no network call (`models: []`); no new package, dictionary
+or stored data. The code is `agent/signals.policy_path_signal` and `agent/predict._fill`.
+
+**New hand-chosen constants** (fixed in code, not fitted per unit):
+
+* `PATH_SHARE = 0.5` — the share of the gap between the near-term policy anchor and the shortest
+  yield in the roster that is expected to close by the resolution ("the market path and the
+  Committee's path each half right");
+* `PATH_M0 = 5` (years) — pass-through to a maturity m is `min(1, sqrt(5 / m))`;
+* `PATH_GAP_CAP = 150` bp — the gap is clamped there (E2 only; a larger gap is a regime difference
+  or a mis-read, not a repricing of the next meetings);
+* `SMALL_SAMPLE = 5` — with fewer age-matched revisions than this, the vintage band's spread is
+  floored at the spread of all routine revisions in the table;
+* `POOLED_SD_FLOOR = 0.75` — a series row's backtest residual is floored at 0.75x the unit-pooled
+  residual, both in units of each row's own scale.
+
+The rule fires only on a basis-point *change* target whose name or statement speaks of yields /
+Treasuries / sovereign curves, whose rows carry a maturity and a starting yield, and whose citable
+pre-cutoff corpus states a federal funds target range verbatim (E2 scope guard); otherwise the
+row keeps the zero-change fallback. Hold statements ("maintain ... at X to Y percent") and the
+zero-lower-bound range ("0 to 1/4 percent") parse (E2).
+
+**Design choice informed by practice-unit outcomes (issue #24 disclosure).** The near-term anchor
+is "the Committee's SEP median for the current year when the corpus carries it, else the
+target-range midpoint moved one more step in the signalled direction". The alternative
+considered was "the current midpoint only". This was a **binary design choice informed by the
+verified first-release outcomes of the two practice units** `t4-fomc-curve-20220728` and
+`t4-fomc-curve-20240918`: under "midpoint only" the 2022 unit's sign is wrong (the 2-year yield sat
+above the midpoint while the Committee had signalled "ongoing increases"), under "midpoint + last
+step / SEP" both units' signs are right. The share 0.5 and M0 = 5 were fixed by judgment before
+the sensitivity table was computed and were **not** moved toward the Dev-optimal values (a share of
+1.0 scores higher on both practice units; it was not adopted). The sensitivity and a mirror-image
+stress test are recorded in `t4-work/EXP_T4NS.md`.
+
+*Sources and retrieval date of the outcomes used (first-release values, retrieved 2026-10-07; the
+full table is `t4-work/HEADROOM.md` section 4):* FRED DGS2 / DGS3 / DGS5 / DGS7 / DGS10 / DGS30
+daily closes for 2022-07-28 -> 2022-09-20 and 2024-09-19 -> 2024-11-06 (the two FOMC units);
+ALFRED vintages (cpicomp 2024-11-13; macrorev per-row resolving releases); TreasuryDirect
+TA_WS auction results (November 2024); CFTC Socrata 6dca-aqww (2024-11-26 report); SEC XBRL
+`EarningsPerShareDiluted` first-filed values; public bankruptcy-filing record (credit) and
+recorded closing prices (post-earnings). They were read only by the local harness
+(`headroom_truth.py`, `headroom_eval.py`, `run_local.py`); none of this data, and no unit id,
+entity id, date or outcome, is in the image. Development scores on the practice units are
+in-sample with respect to this choice.

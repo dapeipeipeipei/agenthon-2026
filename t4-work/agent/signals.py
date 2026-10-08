@@ -435,9 +435,9 @@ def finite(x: float) -> bool:
 
 # --------------------------------------------------------------------------- policy-path anchor
 
-_FRAC = r"\d{1,2}(?:[ -]\d/\d)?(?:\.\d+)?"
+_FRAC = r"(?:\d{1,2}(?:[ -]\d/\d)?(?:\.\d+)?|\d/\d)"
 _RANGE = re.compile(
-    r"target range for the federal funds rate[^.;]{0,80}?\bto (" + _FRAC + r") (?:to|-|–) (" + _FRAC + r") percent",
+    r"target range for the federal funds rate[^.;]{0,80}?\b(?:to|at) (" + _FRAC + r") (?:to|-|–) (" + _FRAC + r") percent",
     re.IGNORECASE,
 )
 _RANGE_VERB = re.compile(r"\b(raise|raised|raising|increase|increased|lift|lifted|lower|lowered|lowering|reduce|reduced|cut|maintain|maintained|keep|kept|hold|held|leave|left|unchanged)\b", re.IGNORECASE)
@@ -513,6 +513,7 @@ def policy_path_signal(unit: Unit) -> PolicyPathSignal | None:
         sent_hi = min(len(doc.text), doc.text.find(".", m.end()) + 1 if doc.text.find(".", m.end()) >= 0 else len(doc.text))
         sentence = doc.text[sent_lo:sent_hi]
         direction = 0
+        held = False  # an explicit "maintain / keep / hold" verb: no step at all, whatever other documents say
         verbs = [v.group(1).lower() for v in _RANGE_VERB.finditer(sentence[: m.start() - sent_lo + 40])]
         for v in reversed(verbs):
             if any(v.startswith(w) for w in _UP_WORDS):
@@ -522,12 +523,14 @@ def policy_path_signal(unit: Unit) -> PolicyPathSignal | None:
                 direction = -1
                 break
             if v in ("maintain", "maintained", "keep", "kept", "hold", "held", "leave", "left", "unchanged"):
-                direction = 0
+                held = True
                 break
         step = 0.0
         sp = _STEP_PP.search(sentence)
         sbp = _STEP_BY_BP.search(sentence)
-        if sp:
+        if held:
+            step = 0.0
+        elif sp:
             step = _frac(sp.group(1)) or 0.0
         elif sbp:
             step = float(sbp.group(1)) / 100.0

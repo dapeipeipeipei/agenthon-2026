@@ -162,6 +162,19 @@ POOLED_SD_FLOOR = 0.75
 #: maturity (years) beyond which the pass-through decays as sqrt(M0 / maturity).
 PATH_SHARE = 0.5
 PATH_M0 = 5.0
+#: The gap is a repricing of the next few meetings: beyond this it is not a policy-path gap but a
+#: regime difference (or a mis-read), so the signal is capped there (bp).
+PATH_GAP_CAP = 150.0
+#: The policy-path rule is about sovereign yields (the expected policy path is their main driver);
+#: a basis-point target that is not one (mortgage rates, credit spreads, swap spreads) does not
+#: get it, however similar the corpus.
+_SOVEREIGN = re.compile(r"\b(yield|yields|treasury|treasuries|sovereign|government bond|gilt|bund|jgb|policy rate|curve)\b", re.IGNORECASE)
+_NOT_SOVEREIGN = re.compile(r"\b(mortgage|credit spread|cds|swap spread|corporate|municipal)\b", re.IGNORECASE)
+
+
+def _is_sovereign_yield(unit: Unit) -> bool:
+    text = unit.target_name.replace("_", " ") + " " + unit.prompt
+    return bool(_SOVEREIGN.search(text)) and not _NOT_SOVEREIGN.search(unit.target_name.replace("_", " ") + " " + unit.prompt[:400])
 
 
 def _maturity_years(ent: dict) -> float | None:
@@ -405,7 +418,7 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
     # policy-path anchor for a yield-change cross-section: one stance per unit, read from the
     # pre-cutoff statements, applied through each row's maturity
     path = None
-    if change and _is_bps(unit):
+    if change and _is_bps(unit) and _is_sovereign_yield(unit):
         try:
             pp = policy_path_signal(unit)
             fronts = [(m, _yield_level(e)) for e in unit.entities for m in [_maturity_years(e)] if m is not None and _yield_level(e) is not None]
@@ -737,6 +750,7 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         pp, m0, y0 = path
         m = _maturity_years(ent)
         gap_bp = (pp.anchor - y0) * 100.0
+        gap_bp = max(-PATH_GAP_CAP, min(PATH_GAP_CAP, gap_bp))
         beta = min(1.0, math.sqrt(PATH_M0 / m)) if m > 0 else 1.0
         point = PATH_SHARE * gap_bp * beta
         pr.method = "policy_path"
