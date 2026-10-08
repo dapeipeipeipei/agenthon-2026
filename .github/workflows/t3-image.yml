@@ -7,6 +7,15 @@ name: t3-image
 
 on:
   workflow_dispatch:
+    inputs:
+      dockerfile:
+        description: "Dockerfile to build (t3-work/Dockerfile or t3-work/Dockerfile.cython)"
+        default: "t3-work/Dockerfile"
+        required: false
+      tag_suffix:
+        description: "suffix for the pushed tags (e.g. -cy)"
+        default: ""
+        required: false
   push:
     branches: [ci/t3-image, t3/build]
     paths:
@@ -19,6 +28,8 @@ permissions:
 
 env:
   IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
+  DOCKERFILE: ${{ github.event.inputs.dockerfile || 't3-work/Dockerfile' }}
+  TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || '' }}
   TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
 
 defaults:
@@ -59,7 +70,8 @@ jobs:
 
       - name: Build image (linux/amd64)
         run: |
-          docker buildx build --platform linux/amd64 --load -t t3-local:ci -f t3-work/Dockerfile t3-work
+          echo "building $DOCKERFILE"
+          docker buildx build --platform linux/amd64 --load -t t3-local:ci -f "$DOCKERFILE" t3-work
           docker image inspect t3-local:ci --format 'label={{ index .Config.Labels "qfbench2.interface_version" }} user={{ .Config.User }} entrypoint={{ json .Config.Entrypoint }} volumes={{ json .Config.Volumes }} size={{ .Size }}'
           test "$(docker image inspect t3-local:ci --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
           test "$(docker image inspect t3-local:ci --format '{{ json .Config.Volumes }}')" = "null"
@@ -122,11 +134,11 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker tag t3-local:ci "$IMAGE:${GITHUB_SHA::12}"
-          docker tag t3-local:ci "$IMAGE:ci"
-          docker push "$IMAGE:${GITHUB_SHA::12}"
-          docker push "$IMAGE:ci"
-          DIGEST=$(docker image inspect "$IMAGE:${GITHUB_SHA::12}" --format '{{ index .RepoDigests 0 }}')
+          docker tag t3-local:ci "$IMAGE:${GITHUB_SHA::12}$TAG_SUFFIX"
+          docker tag t3-local:ci "$IMAGE:ci$TAG_SUFFIX"
+          docker push "$IMAGE:${GITHUB_SHA::12}$TAG_SUFFIX"
+          docker push "$IMAGE:ci$TAG_SUFFIX"
+          DIGEST=$(docker image inspect "$IMAGE:${GITHUB_SHA::12}$TAG_SUFFIX" --format '{{ index .RepoDigests 0 }}')
           echo "image digest: $DIGEST" | tee -a t3-ci-out/hashes.txt
           echo "### T3 image" >> "$GITHUB_STEP_SUMMARY"
           echo "\`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
