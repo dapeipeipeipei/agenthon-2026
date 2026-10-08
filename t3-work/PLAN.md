@@ -61,7 +61,7 @@ cProfile（t3-mp01，7.9 s 带探针 / 4.3 s 实跑）分解：
 
 - 第 1–5 轮全部落地（上面 1–6 条 + `-O`、去掉 LAST_TRADE/HOLDINGS 等不进输出的日志、Order 去掉 ABC 元类、账本行改元组）：本机 71 单元均值 **50 659 ev/s**（参考 13 988，**3.62×**），71/71 与参考逐字节相同。
 - **Cython（纯 Python 模式编译 14 个热模块）：CI 实测比纯 Python 慢约 10%**（对象操作为主的代码 Cython 没有收益，还多了调用开销），已删除。
-- **PyPy 3.9 + numpy 1.26.4 跑模拟、CPython 3.11 + pyarrow 写 parquet**（`Dockerfile.pypy`，`jpsim/writer.py` 两段式交接，本地 CPython↔CPython 交接验证逐字节相同）：CI 构建中，结果见 STATUS.md。
+- **PyPy 3.9 + numpy 1.26.4 跑模拟、CPython 3.11 + pyarrow 写 parquet**（两段式交接 `jpsim/writer.py`）：CI 实测 **71/71 逐字节相同**（PyPy 上的 numpy RandomState 流和浮点完全一致，这点值得记下），但**更慢**：小单元 2.1–2.6×（PyPy 启动 + cpyext 的 numpy 导入 + 第二个解释器 ≈ 1.2 s 固定开销），最大单元也没有收益（34.3 s vs 30.2 s，每条消息都经 cpyext 调 numpy RandomState，JIT 吃不到）。Dockerfile.pypy 已删，交接代码保留（无副作用）。
 - CI（GitHub runner）同一镜像两次跑均值 36.7k / 33.1k ev/s：runner 之间波动 ±15%，CI 时间只能看相对值。
 
 ## 交付物

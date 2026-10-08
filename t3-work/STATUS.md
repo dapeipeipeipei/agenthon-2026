@@ -4,7 +4,7 @@
 
 ## 一句话现状
 
-**可以上传 Dev 了。** 参考引擎（主办方 ABIDES 基线）已在本机复现并通过官方评分器 71/71；我们的 `jpsim` = 同一份引擎、输出逐字节相同、整进程快 3.5 倍（本机）；镜像 `ghcr.io/dapeipeipeipei/jinpei-t3@sha256:236d8f18…`（CI run 37820272790，commit 84fc0126）已在 CI 里用平台参数跑完 71/71 字节级一致、重复稳定、匿名可拉；描述文件 `submission/submission.json`（dev）/`submission.final.json`（final）已封印校验。打包：`.venv\Scripts\python pack_all.py t3-dev`（老板输入 Team Key）。
+**可以上传 Dev 了。** 参考引擎（主办方 ABIDES 基线）已在本机复现并通过官方评分器 71/71；我们的 `jpsim` = 同一份引擎、输出逐字节相同、整进程快 3.6 倍（本机）；镜像 `ghcr.io/dapeipeipeipei/jinpei-t3@sha256:f905419e…`（CI run 37823919708，commit 04f1da4c，第 5 轮引擎）已在 CI 里用平台参数跑完 71/71 字节级一致、重复稳定、匿名可拉；描述文件 `submission/submission.json`（dev）/`submission.final.json`（final）已封印校验。打包：`.venv\Scripts\python pack_all.py t3-dev`（老板输入 Team Key）。
 
 ## 数字（本机 i7-13700K，一进程一单元，整进程墙钟 = 启动 + import + 模拟 + 写 parquet）
 
@@ -30,13 +30,13 @@
 |---|---|
 | `t3-work/Dockerfile` | 完成：python:3.11-slim + numpy 1.26.4 + pyarrow 15.0.2，label 2.0，uid 65534，两个 verb 在 PATH，无 ENTRYPOINT/VOLUME |
 | `.github/workflows/t3-image.yml` | 完成：build → 镜像内跑 71 单元（`--network=none --cpus=4 --memory=16g --pids-limit 256 --read-only --user 65534:65534`，64 MiB /tmp）→ 字节级哈希核对 → 3 单元重复稳定性 → 官方 g0/g1 → 推 `ghcr.io/dapeipeipeipei/jinpei-t3` |
-| `t3-work/submission/submission.json` / `.final.json` | 待 CI digest |
+| `t3-work/submission/submission.json` / `.final.json` | 完成：指向 `sha256:f905419e…`，`category: simulator`，`models: []`，已 seal + 校验 |
 | `pack_all.py` | 已加 `t3-dev` / `t3-final` |
 
 ## 使用说明（怎么跑、怎么交）
 
 1. **交 Dev**：主 checkout 里 `.venv\Scripts\python pack_all.py t3-dev` → 输入 Team Key → `../agenthon-submissions/t3-dev.zip` 上传 CodaBench（T3 赛道页）。Final 用 `t3-final`。
-2. **换镜像**：push `t3/build`（或 `workflow_dispatch`，可选 `dockerfile=t3-work/Dockerfile.pypy`、`tag_suffix=-pypy`）→ CI 全绿后从 job summary 取 digest → `python t3-work/tools/make_descriptors.py sha256:<digest>` → commit。
+2. **换镜像**：push `t3/build`（或 `workflow_dispatch`，可选 `dockerfile=`/`tag_suffix=` 输入试别的 Dockerfile）→ CI 全绿后从 job summary 取 digest → `python t3-work/tools/make_descriptors.py sha256:<digest>` → commit。
 3. **本地回归**（不需要 Docker）：`python t3-work/tools/run_units.py --python C:\Users\wensh\.cache\agenthon-t3\venv311\Scripts\python.exe --module jpsim --units track3-simulation-public/units --out-root <out> --pythonpath t3-work/engine`，然后 `PYTHONUTF8=1 .venv\Scripts\python t3-work/tools/check_hashes.py --units ... --out-root <out> --timing <out>/timing.json`（字节级）和 `score_local.py`（官方评分器）。
 4. **改引擎的铁律**：不改任何 `random_state`/`np.random` 抽样的次数、顺序、参数；改完必须 71/71 哈希一致。
 
@@ -51,4 +51,5 @@
 
 - Final 一队一份；Dev 上传剩 23 次、每天 5 次；10-12 20:00 UTC 后上传不再跑。
 - 容器启动开销在主办方机器上未知（他们会在 #24 发校准数据），小单元事件/秒会被压低，对所有队一样。
-- 还可做：交易所/代理消息分发链、PriceLevel 总量缓存、更快的日志结构；每一步都要过 71 单元哈希核对。
+- 试过并放弃：Cython 纯 Python 模式（CI 慢 10%）、PyPy 3.9 两段式（71/71 一致但慢 1.1–2.6×，启动和 cpyext 开销吃掉 JIT）。
+- 还可做：交易所/代理消息分发链、PriceLevel 总量缓存、更快的日志结构；每一步都要过 71 单元哈希核对。预计还有 10–20%，再往上要换语言重写内核（bit-exact 风险大）。
