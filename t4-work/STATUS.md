@@ -13,7 +13,13 @@
 
 打包：`.venv\Scripts\python pack_all.py t4-e2`（Dev）/ `pack_all.py t4-e2.final`（决赛）。
 
-### E2 相对 E 改了什么
+### 第五轮（10-08）：E3 = E2 预测 + 重写的推理理由 + ZLB 区间下限 —— **决赛用 E3**
+
+- 11 题预测/标签/区间/claims 与 E2 逐位相同（Dev10 0.6547 / 榜面估 0.5615；E2 实测 0.5673）。改的只有决赛才计分的 `submitted_reasons`（+0.25·reasoning）和零利率下限 `ZLB_FLOOR_BP_30D=15`。
+- 镜像 `ghcr.io/dapeipeipeipei/jinpei-t4@sha256:1c9af64ad9b293badae707f31a2e20134c7e03bdd3343261086917fbb85a100e`（CI run 37821710268，匿名拉取 PASS）；描述文件 `submission/submission.e3.json` / `submission.e3.final.json`；打包 `pack_all.py t4-e3` / `t4-e3.final`。
+- 验证：gate 11/11、0 虚假；robustness 17/17；NLI 全量 11/11（maxP(contra)=0.000）。细节见 `ARTIFACT_PROVENANCE.md` 的 Candidate E3 与分支 exp/t4polish。
+
+## E2 相对 E 改了什么
 
 - 范围护栏：目标名/题干须提到 yield / Treasury / sovereign / government bond / gilt / bund / curve，且不含 mortgage /
   credit spread / CDS / swap spread / corporate / municipal；按揭利率、信用利差之类共用 FOMC 语料的 bps 单元不再触发。
