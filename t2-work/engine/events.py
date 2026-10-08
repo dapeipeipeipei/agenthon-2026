@@ -36,6 +36,10 @@ from . import cardinfo
 
 RECENCY_TAU_DAYS = 45.0       # e-folding age for document weights
 MAX_DOC_CHARS = 400_000       # guard: never read more than this per document
+#: Runtime guard for a corpus far larger than the practice ones (9-20 documents): once this many
+#: characters have been scanned in one run, later documents are listed but not read (0 hits).
+#: 18 M chars (300 x 60 k) scan in ~30 s locally; the unit clock is 1,800 s, the engine watchdog 600 s.
+MAX_TOTAL_CHARS = 40_000_000
 
 #: family -> [(regex, weight)]
 TERMS: dict[str, list[tuple[str, float]]] = {
@@ -238,10 +242,16 @@ def _detect(text_dir: pathlib.Path, asof: str, horizon_bd: int, feats: dict[str,
     rwx = {f: 0.0 for f in FAMILIES_V4}       # v4 extras, recency-weighted
     statement_dates: list[pd.Timestamp] = []
     latest = max(ts for _, ts in used)
+    chars_read = 0
     for d, ts in used:
         dtype = str(d.get("doc_type", "unknown"))
         feats["doc_types"][dtype] = feats["doc_types"].get(dtype, 0) + 1
-        text = _read_doc(text_dir, d)
+        if chars_read >= MAX_TOTAL_CHARS:
+            text = ""
+            feats["n_docs_unread_budget"] = int(feats.get("n_docs_unread_budget", 0)) + 1
+        else:
+            text = _read_doc(text_dir, d)
+            chars_read += len(text)
         n_words = len(_WORD.findall(text))
         age = max(0.0, float((asof_ts - ts).days))
         w = math.exp(-age / RECENCY_TAU_DAYS)

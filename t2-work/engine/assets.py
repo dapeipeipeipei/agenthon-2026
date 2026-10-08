@@ -23,21 +23,35 @@ from __future__ import annotations
 import re
 
 #: (compiled pattern on the UPPER-CASED asset id, direction, reason). First match wins.
+#: Ids are matched EXACTLY (anchored patterns): an id that is not in this table gets 0 = symmetric,
+#: so a sealed card with a new asset id never receives a skew it was not calibrated for.
+#: The bare ISO codes assume the H.10 quote convention of the shipped g10_fx_daily / em_transfer
+#: panels (checked, see above). The six-letter pair spellings (EURUSD = USD per EUR, USDJPY = JPY
+#: per USD) carry their own convention in the name, so they are mapped as well (2026-10-08).
+_RISK_CCY = "EUR|GBP|AUD|NZD"
+_FUND_CCY = "JPY|CHF"
+_USD_LEG_CCY = "CAD|NOK|SEK|DKK"
+_EM_CCY = ("CNY|CNH|BRL|INR|MXN|ZAR|TRY|KRW|IDR|RUB|PLN|HUF|CZK|CLP|COP|PEN|PHP|THB|MYR|"
+           "TWD|SGD|HKD|ILS|ARS|EGP|NGN|VND|RON|SAR|AED|QAR")
 _RULES: list[tuple[re.Pattern[str], int, str]] = [
-    (re.compile(r"^(MKT|MKTRF|MKT_RF|HML|SMB|MOM|UMD|BAB|RMW|CMA)$"), -1, "risk factor falls in stress"),
+    (re.compile(r"^(MKT|MKTRF|MKT_RF|MKT-RF|HML|SMB|MOM|UMD|BAB|RMW|CMA)$"), -1, "risk factor falls in stress"),
     (re.compile(r"^QMJ$"), +1, "quality factor is defensive, rallies in stress"),
-    (re.compile(r"^(EUR|GBP|AUD|NZD)$"), -1, "USD-per-currency quote: high-beta currency falls"),
-    (re.compile(r"^(JPY|CHF)$"), -1, "funding currency per USD: carry unwind, USD/xxx falls"),
-    (re.compile(r"^(CAD|NOK|SEK|DKK)$"), +1, "currency-per-USD quote: USD strengthens, quote rises"),
+    (re.compile(rf"^({_RISK_CCY})$"), -1, "USD-per-currency quote: high-beta currency falls"),
+    (re.compile(rf"^({_FUND_CCY})$"), -1, "funding currency per USD: carry unwind, USD/xxx falls"),
+    (re.compile(rf"^({_USD_LEG_CCY})$"), +1, "currency-per-USD quote: USD strengthens, quote rises"),
     # EM / other currencies: H.10 and most vendors quote these as units per USD.
-    (re.compile(r"^(CNY|CNH|BRL|INR|MXN|ZAR|TRY|KRW|IDR|RUB|PLN|HUF|CZK|CLP|COP|PEN|PHP|THB|MYR|"
-                r"TWD|SGD|HKD|ILS|ARS|EGP|NGN|VND|RON|SAR|AED|QAR)$"), +1,
-     "EM currency per USD: depreciates in stress, quote rises"),
+    (re.compile(rf"^({_EM_CCY})$"), +1, "EM currency per USD: depreciates in stress, quote rises"),
+    # Pair spellings: XXXUSD = USD per XXX (falls when XXX weakens); USDXXX = XXX per USD.
+    (re.compile(rf"^({_RISK_CCY})[_/\- ]?USD$"), -1, "USD-per-currency pair: high-beta currency falls"),
+    (re.compile(rf"^USD[_/\- ]?({_FUND_CCY})$"), -1, "funding-currency pair per USD: carry unwind, USD/xxx falls"),
+    (re.compile(rf"^USD[_/\- ]?({_USD_LEG_CCY}|{_EM_CCY})$"), +1, "currency-per-USD pair: USD strengthens, quote rises"),
     (re.compile(r"^(NFP|PAYEMS|PAYROLL)"), -1, "payrolls fall in stress"),
     (re.compile(r"^(UNRATE|UNEMP)"), +1, "unemployment rises in stress"),
     (re.compile(r"^(CPI|PCE|PPI)"), 0, "price index: stress direction ambiguous"),
 ]
-_UST = re.compile(r"^(UST|DGS|TSY|USGG|TREAS)")
+#: US Treasury tenor ids only (UST_2Y, DGS10, TSY-30Y, ...): other sovereign curves, swap rates and
+#: anything merely starting with these letters (e.g. "USTECH") are NOT yields here -> symmetric.
+_UST = re.compile(r"^(UST|DGS|TSY|USGG|TREAS)[_\- ]?\d{1,3}[_\- ]?(M|MO|Y|YR)?$")
 
 
 def stress_direction(asset: str, inflation_dominated: bool = False) -> int:
