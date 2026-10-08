@@ -17,6 +17,15 @@
 #     simulate --config /input/scenario.json --out /output/trace.parquet
 #   ... jpsim:dev simulate-batch --batch-dir /input/scenarios --out-dir /output
 
+# Stage 1: compile the C++ kernel (engine/jpkernel/jpkernel.cpp) against the SAME glibc the final
+# image runs (python:3.11-slim-bookworm = Debian bookworm, glibc 2.36): the reference's numpy and
+# CPython call this glibc's log/exp/pow, and the kernel must call the very same functions.
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS kernel-build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+COPY engine/jpkernel /src/jpkernel
+RUN python /src/jpkernel/build.py --out /src/jpkernel/libjpkernel.so \
+ && test -s /src/jpkernel/libjpkernel.so
+
 FROM --platform=linux/amd64 python:3.11-slim-bookworm
 
 LABEL qfbench2.interface_version="2.0"
@@ -37,16 +46,21 @@ ENV PYTHONDONTWRITEBYTECODE=0 \
 RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
 
 COPY engine /opt/jpsim
+COPY --from=kernel-build /src/jpkernel/libjpkernel.so /opt/jpsim/jpkernel/libjpkernel.so
 COPY bin/simulate /usr/local/bin/simulate
 COPY bin/simulate-batch /usr/local/bin/simulate-batch
 
 # Pre-compile every module (ours and site-packages) so the first run pays no .pyc cost: the
 # root filesystem is read-only at evaluation time, so nothing could be cached then anyway.
+# The last line fails the build if the C++ kernel does not load: the image must never fall back
+# to the Python engine silently.
 RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
  && find /opt/jpsim -type d -exec chmod 0755 {} + \
  && find /opt/jpsim -type f -exec chmod 0644 {} + \
+ && chmod 0755 /opt/jpsim/jpkernel/libjpkernel.so \
  && python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow \
- && python -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; print('import ok, no pandas')"
+ && python -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; print('import ok, no pandas')" \
+ && python -c "from jpsim import kernel; assert kernel.available(), kernel.load_error(); print('jpkernel ok')"
 
 WORKDIR /tmp
 USER 65534:65534
