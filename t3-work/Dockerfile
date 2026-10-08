@@ -36,7 +36,9 @@ ENV PYTHONDONTWRITEBYTECODE=0 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1
 
-RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+# cramjam: snappy for jpsim.parquet_lite (a 2 ms import). pyarrow stays installed for the
+# reference-identical JPSIM_PARQUET=pyarrow regression mode; the default run path never loads it.
+RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "cramjam==2.13.0"
 
 COPY engine /opt/jpsim
 COPY bin/simulate /usr/local/bin/simulate
@@ -51,8 +53,8 @@ RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
  && find /opt/jpsim -type f -exec chmod 0644 {} + \
  && python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim \
  && python -m compileall -q -j 0 -o 1 -x '/(test|tests|idlelib|tkinter|turtledemo|lib2to3|ensurepip|pydoc_data|site-packages/pip|site-packages/setuptools)/' /usr/local/lib/python3.11 \
- && python -O -S -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; jpsim.trace_fast.writer_module(); print('import ok, no pandas, -S ok')" \
- && python -O -S -v -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; jpsim.trace_fast.writer_module()" 2> /tmp/verbose.txt \
+ && python -O -S -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast, jpsim.parquet_lite; jpsim.trace_fast.writer_module(); assert jpsim.parquet_lite._compressor()[0] == 1, 'cramjam missing'; print('import ok, no pandas, -S ok, snappy ok')" \
+ && python -O -S -v -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast, jpsim.parquet_lite, cramjam" 2> /tmp/verbose.txt \
  && echo "$(grep -c 'code object from' /tmp/verbose.txt) code objects loaded, $(grep -c "code object from '.*[.]py'" /tmp/verbose.txt) compiled from source" \
  && ! grep -q "code object from '.*[.]py'" /tmp/verbose.txt \
  && rm /tmp/verbose.txt

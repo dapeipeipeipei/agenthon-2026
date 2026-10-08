@@ -99,24 +99,34 @@ jobs:
             --units track3-simulation-public/units --out-root t3-ci-out/out --timeout 300 \
             | tee t3-ci-out/run.txt
 
-      - name: Byte-level check against the declared reference hashes + sidecar arithmetic
+      - name: Reference-identical mode (JPSIM_PARQUET=pyarrow) on every unit + byte-level check against the declared reference hashes
         run: |
+          python t3-work/tools/ci_run_units.py --image t3-local:ci --env JPSIM_PARQUET=pyarrow \
+            --units track3-simulation-public/units --out-root t3-ci-out/pyarrow --timeout 300 \
+            | tee t3-ci-out/pyarrow-run.txt
           python t3-work/tools/check_hashes.py --units track3-simulation-public/units \
-            --out-root t3-ci-out/out --timing t3-ci-out/out/timing.json --json t3-ci-out/hashes.json \
+            --out-root t3-ci-out/pyarrow --timing t3-ci-out/pyarrow/timing.json --json t3-ci-out/hashes.json \
             | tee t3-ci-out/hashes.txt
 
-      - name: Baseline image on the same runner (A/B of the ranked mean)
-        if: env.BASELINE_IMAGE != ''
+      - name: Baseline image on the same runner (A/B of the ranked mean) + table content check against its output
         run: |
-          docker pull -q "$BASELINE_IMAGE"
-          python t3-work/tools/ci_run_units.py --image "$BASELINE_IMAGE" \
-            --units track3-simulation-public/units --out-root t3-ci-out/base --timeout 300 \
-            | tee t3-ci-out/base-run.txt
+          if [ -n "$BASELINE_IMAGE" ]; then
+            docker pull -q "$BASELINE_IMAGE"
+            python t3-work/tools/ci_run_units.py --image "$BASELINE_IMAGE" \
+              --units track3-simulation-public/units --out-root t3-ci-out/base --timeout 300 \
+              | tee t3-ci-out/base-run.txt
+            # the baseline writes reference-identical bytes (checked by its own CI run); our
+            # default (parquet_lite) output must read back as the same table
+            python t3-work/tools/check_content.py --units track3-simulation-public/units \
+              --out-root t3-ci-out/out --ref-root t3-ci-out/base | tee t3-ci-out/content.txt
+          fi
           python - <<'PY' | tee t3-ci-out/ab.txt
           import json, pathlib, statistics
           units = pathlib.Path("track3-simulation-public/units")
           new = json.loads(pathlib.Path("t3-ci-out/out/timing.json").read_text())
-          base = json.loads(pathlib.Path("t3-ci-out/base/timing.json").read_text())
+          bp = pathlib.Path("t3-ci-out/base/timing.json")
+          base = json.loads(bp.read_text()) if bp.exists() else {u: t for u, t in json.loads(pathlib.Path("t3-ci-out/pyarrow/timing.json").read_text()).items()}
+          print("baseline =", "previous image" if bp.exists() else "this image in JPSIM_PARQUET=pyarrow mode")
           def n_events(u):
               b = units / u / "batch.json"
               if b.is_file():
@@ -199,7 +209,7 @@ jobs:
           cat kit.txt >> "$GITHUB_STEP_SUMMARY" || true
           tail -n 90 t3-ci-out/hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          for f in t3-ci-out/ab.txt t3-ci-out/profile.txt; do
+          for f in t3-ci-out/ab.txt t3-ci-out/content.txt t3-ci-out/profile.txt; do
             if [ -f "$f" ]; then echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; cat "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; fi
           done
 
@@ -215,6 +225,9 @@ jobs:
             t3-ci-out/out/timing.json
             t3-ci-out/base/timing.json
             t3-ci-out/base-run.txt
+            t3-ci-out/pyarrow/timing.json
+            t3-ci-out/pyarrow-run.txt
+            t3-ci-out/content.txt
             t3-ci-out/ab.txt
             t3-ci-out/profile.json
             t3-ci-out/profile.txt

@@ -73,7 +73,12 @@ def warm_imports() -> None:
     import jpsim.config  # noqa: F401
     import jpsim.trace_fast  # noqa: F401
 
-    jpsim.trace_fast.writer_module()
+    if os.environ.get("JPSIM_PARQUET") == "pyarrow":
+        jpsim.trace_fast.writer_module()
+    else:
+        import jpsim.parquet_lite
+
+        jpsim.parquet_lite._compressor()
 
 
 def _write_json(path: str, obj) -> None:
@@ -142,16 +147,29 @@ def simulate(config_path: str, out_path: str, seed=None, marks: dict | None = No
             raise SystemExit(f"jpsim writer failed: {proc.stderr[-2000:]}")
         return json.loads(proc.stdout.strip().splitlines()[-1])
 
-    trace = build_trace(end_state["agents"])
-    message_trace = build_message_trace(end_state)
-    _mark(marks, "tables")
-    write_parquet(trace, out_path)
     msg_out = os.path.join(out_dir, "message_trace.parquet")
-    write_parquet(message_trace, msg_out)
+    if os.environ.get("JPSIM_PARQUET") == "pyarrow":
+        # Reference-identical bytes (pyarrow's dictionary-encoded pages): the regression mode
+        # that tools/check_hashes.py relies on.
+        trace = build_trace(end_state["agents"])
+        message_trace = build_message_trace(end_state)
+        _mark(marks, "tables")
+        write_parquet(trace, out_path)
+        write_parquet(message_trace, msg_out)
+        n_events, n_messages = int(trace.num_rows), int(message_trace.num_rows)
+    else:
+        # Default: jpsim.parquet_lite, same table (schema, metadata, values) without importing
+        # pyarrow; tools/check_content.py proves the read-back equality on every public unit.
+        from jpsim.trace_fast import message_arrays, trace_arrays, write_message_lite, write_trace_lite
+
+        t_arr = trace_arrays(end_state["agents"])
+        m_arr = message_arrays(end_state)
+        _mark(marks, "tables")
+        n_events = write_trace_lite(t_arr, out_path)
+        n_messages = write_message_lite(m_arr, msg_out)
     _mark(marks, "parquet")
     wall_clock_sec = time.perf_counter() - t_start
 
-    n_events = int(trace.num_rows)
     events = {
         "scenario_id": str(scenario["scenario_id"]),
         "seed": int(scenario["seed"]),
@@ -160,7 +178,7 @@ def simulate(config_path: str, out_path: str, seed=None, marks: dict | None = No
         "wall_clock_sec": float(wall_clock_sec),
         "events_per_sec": float(n_events / wall_clock_sec) if wall_clock_sec > 0 else 0.0,
         "trace_sha256": _sha256(out_path),
-        "n_messages": int(message_trace.num_rows),
+        "n_messages": n_messages,
         "message_trace_sha256": _sha256(msg_out),
         "peak_memory_bytes": _peak_rss_bytes(),
         "gpu_seconds": 0.0,

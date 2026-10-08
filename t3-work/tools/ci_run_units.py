@@ -44,8 +44,10 @@ def _parse_ts(s: str) -> float:
     return base.timestamp() + int(frac) / 1e9
 
 
-def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float) -> tuple[int, float, str]:
+def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float,
+             env: list[str] | None = None) -> tuple[int, float, str]:
     batch = (unit / "batch.json").is_file()
+    env_flags = [f for kv in (env or []) for f in ("-e", kv)]
     out = out.resolve()  # docker -v needs absolute host paths
     staging = pathlib.Path(tempfile.mkdtemp(prefix="t3in_")).resolve()
     try:
@@ -63,7 +65,7 @@ def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float) 
         out.mkdir(parents=True)
         out.chmod(0o777)
         cid = subprocess.run(
-            ["docker", "create", *PLATFORM_FLAGS, "-v", f"{staging}:/input:ro", "-v", f"{out}:/output", image, *verb],
+            ["docker", "create", *PLATFORM_FLAGS, *env_flags, "-v", f"{staging}:/input:ro", "-v", f"{out}:/output", image, *verb],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         try:
@@ -94,6 +96,7 @@ def main() -> int:
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--timeout", type=float, default=300.0)
+    ap.add_argument("--env", nargs="*", default=[], help="KEY=VALUE passed to the container (e.g. JPSIM_PARQUET=pyarrow)")
     args = ap.parse_args()
     names = sorted(p.name for p in args.units.iterdir() if p.is_dir())
     if args.only:
@@ -105,7 +108,7 @@ def main() -> int:
     for name in names:
         windows = []
         for _ in range(args.repeat):
-            rc, window, tail = run_once(args.image, args.units / name, args.out_root / name, args.timeout)
+            rc, window, tail = run_once(args.image, args.units / name, args.out_root / name, args.timeout, args.env)
             if rc != 0:
                 failures.append(name)
                 print(f"{name:34} FAILED rc={rc} window={window:.2f}s {tail}", flush=True)

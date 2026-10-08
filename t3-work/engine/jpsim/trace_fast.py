@@ -264,6 +264,101 @@ def load_handoff(path: str) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
 
 
 # ----------------------------------------------------------------------------- stage 2: parquet
+# The organizer's reference files carry the Arrow IPC schema (with the pandas block above) as
+# the ``ARROW:schema`` key; these are those exact strings, so a reader restores the same schema.
+_TRACE_ARROW_SCHEMA = (
+    b"/////3gFAAAQAAAAAAAKAA4ABgAFAAgACgAAAAABBAAQAAAAAAAKAAwAAAAEAAgACgAAAMADAAAEAAAAAQAAAAwAAAAIAAwA"
+    b"BAAIAAgAAAAIAAAAEAAAAAYAAABwYW5kYXMAAIoDAAB7ImluZGV4X2NvbHVtbnMiOiBbXSwgImNvbHVtbl9pbmRleGVzIjog"
+    b"W10sICJjb2x1bW5zIjogW3sibmFtZSI6ICJ0X25zIiwgImZpZWxkX25hbWUiOiAidF9ucyIsICJwYW5kYXNfdHlwZSI6ICJp"
+    b"bnQ2NCIsICJudW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJhZ2VudF9pZCIsICJm"
+    b"aWVsZF9uYW1lIjogImFnZW50X2lkIiwgInBhbmRhc190eXBlIjogImludDMyIiwgIm51bXB5X3R5cGUiOiAiaW50MzIiLCAi"
+    b"bWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogIm1zZ190eXBlIiwgImZpZWxkX25hbWUiOiAibXNnX3R5cGUiLCAicGFuZGFz"
+    b"X3R5cGUiOiAidW5pY29kZSIsICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAi"
+    b"c2lkZSIsICJmaWVsZF9uYW1lIjogInNpZGUiLCAicGFuZGFzX3R5cGUiOiAidW5pY29kZSIsICJudW1weV90eXBlIjogInN0"
+    b"cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAicHJpY2UiLCAiZmllbGRfbmFtZSI6ICJwcmljZSIsICJwYW5k"
+    b"YXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJz"
+    b"aXplIiwgImZpZWxkX25hbWUiOiAic2l6ZSIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogImludDY0"
+    b"IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJvcmRlcl9pZCIsICJmaWVsZF9uYW1lIjogIm9yZGVyX2lkIiwgInBh"
+    b"bmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAibWV0YWRhdGEiOiBudWxsfV0sICJjcmVhdG9y"
+    b"IjogeyJsaWJyYXJ5IjogInB5YXJyb3ciLCAidmVyc2lvbiI6ICIxNS4wLjIifSwgInBhbmRhc192ZXJzaW9uIjogIjEuNS4z"
+    b"In0AAAcAAABMAQAABAEAANAAAACkAAAAcAAAADwAAAAEAAAA4P7//wAAAQIQAAAAHAAAAAQAAAAAAAAACAAAAG9yZGVyX2lk"
+    b"AAAAANT+//8AAAABQAAAABT///8AAAECEAAAABgAAAAEAAAAAAAAAAQAAABzaXplAAAAAAT///8AAAABQAAAAET///8AAAEC"
+    b"EAAAABgAAAAEAAAAAAAAAAUAAABwcmljZQAAADT///8AAAABQAAAAHT///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABzaWRl"
+    b"AAAAANT///+c////AAABBRAAAAAgAAAABAAAAAAAAAAIAAAAbXNnX3R5cGUAAAAABAAEAAQAAADM////AAABAhAAAAAcAAAA"
+    b"BAAAAAAAAAAIAAAAYWdlbnRfaWQAAAAAwP///wAAAAEgAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAECEAAAACAAAAAEAAAA"
+    b"AAAAAAQAAAB0X25zAAAAAAgADAAIAAcACAAAAAAAAAFAAAAAAAAAAA=="
+)
+_MSG_ARROW_SCHEMA = (
+    b"/////6AHAAAQAAAAAAAKAA4ABgAFAAgACgAAAAABBAAQAAAAAAAKAAwAAAAEAAgACgAAADQFAAAEAAAAAQAAAAwAAAAIAAwA"
+    b"BAAIAAgAAAAIAAAAEAAAAAYAAABwYW5kYXMAAPwEAAB7ImluZGV4X2NvbHVtbnMiOiBbXSwgImNvbHVtbl9pbmRleGVzIjog"
+    b"W10sICJjb2x1bW5zIjogW3sibmFtZSI6ICJzZXEiLCAiZmllbGRfbmFtZSI6ICJzZXEiLCAicGFuZGFzX3R5cGUiOiAiaW50"
+    b"NjQiLCAibnVtcHlfdHlwZSI6ICJpbnQ2NCIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAidF9yZWN2X25zIiwgImZp"
+    b"ZWxkX25hbWUiOiAidF9yZWN2X25zIiwgInBhbmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAi"
+    b"bWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogInRfc2VuZF9ucyIsICJmaWVsZF9uYW1lIjogInRfc2VuZF9ucyIsICJwYW5k"
+    b"YXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJs"
+    b"YXRlbmN5X25zIiwgImZpZWxkX25hbWUiOiAibGF0ZW5jeV9ucyIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90"
+    b"eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJzcmNfaWQiLCAiZmllbGRfbmFtZSI6ICJzcmNf"
+    b"aWQiLCAicGFuZGFzX3R5cGUiOiAiaW50MzIiLCAibnVtcHlfdHlwZSI6ICJpbnQzMiIsICJtZXRhZGF0YSI6IG51bGx9LCB7"
+    b"Im5hbWUiOiAiZHN0X2lkIiwgImZpZWxkX25hbWUiOiAiZHN0X2lkIiwgInBhbmRhc190eXBlIjogImludDMyIiwgIm51bXB5"
+    b"X3R5cGUiOiAiaW50MzIiLCAibWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogIm1lc3NhZ2VfaWQiLCAiZmllbGRfbmFtZSI6"
+    b"ICJtZXNzYWdlX2lkIiwgInBhbmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAibWV0YWRhdGEi"
+    b"OiBudWxsfSwgeyJuYW1lIjogIm1zZ190eXBlIiwgImZpZWxkX25hbWUiOiAibXNnX3R5cGUiLCAicGFuZGFzX3R5cGUiOiAi"
+    b"dW5pY29kZSIsICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAib3JkZXJfaWQi"
+    b"LCAiZmllbGRfbmFtZSI6ICJvcmRlcl9pZCIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0"
+    b"IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJjYXVzYWxfcGFyZW50IiwgImZpZWxkX25hbWUiOiAiY2F1c2FsX3Bh"
+    b"cmVudCIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0IiwgIm1ldGFkYXRhIjogbnVsbH1d"
+    b"LCAiY3JlYXRvciI6IHsibGlicmFyeSI6ICJweWFycm93IiwgInZlcnNpb24iOiAiMTUuMC4yIn0sICJwYW5kYXNfdmVyc2lv"
+    b"biI6ICIxLjUuMyJ9AAAAAAoAAAAEAgAAvAEAAIQBAABMAQAAGAEAAOQAAACsAAAAeAAAAEAAAAAEAAAANP7//wAAAQIQAAAA"
+    b"IAAAAAQAAAAAAAAADQAAAGNhdXNhbF9wYXJlbnQAAAAw/v//AAAAAUAAAABs/v//AAABAhAAAAAcAAAABAAAAAAAAAAIAAAA"
+    b"b3JkZXJfaWQAAAAAZP7//wAAAAFAAAAAoP7//wAAAQUQAAAAIAAAAAQAAAAAAAAACAAAAG1zZ190eXBlAAAAAAQABAAEAAAA"
+    b"0P7//wAAAQIQAAAAHAAAAAQAAAAAAAAACgAAAG1lc3NhZ2VfaWQAAMj+//8AAAABQAAAAAT///8AAAECEAAAABgAAAAEAAAA"
+    b"AAAAAAYAAABkc3RfaWQAAPj+//8AAAABIAAAADT///8AAAECEAAAABgAAAAEAAAAAAAAAAYAAABzcmNfaWQAACj///8AAAAB"
+    b"IAAAAGT///8AAAECEAAAABwAAAAEAAAAAAAAAAoAAABsYXRlbmN5X25zAABc////AAAAAUAAAACY////AAABAhAAAAAcAAAA"
+    b"BAAAAAAAAAAJAAAAdF9zZW5kX25zAAAAkP///wAAAAFAAAAAzP///wAAAQIQAAAAHAAAAAQAAAAAAAAACQAAAHRfcmVjdl9u"
+    b"cwAAAMT///8AAAABQAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAcAAAABAAAAAAAAAADAAAAc2VxAAgADAAIAAcA"
+    b"CAAAAAAAAAFAAAAAAAAAAA=="
+)
+
+
+def write_trace_lite(arr: dict[str, np.ndarray], path: str) -> int:
+    """trace.parquet from the stage-1 arrays with ``jpsim.parquet_lite`` (no pyarrow)."""
+    from jpsim.parquet_lite import int_column, string_column, write_parquet
+
+    n = int(len(arr["t_ns"]))
+    cols = [
+        int_column("t_ns", arr["t_ns"], "<i8"),
+        int_column("agent_id", arr["agent_id"], "<i4"),
+        string_column("msg_type", arr["msg_type"], _TRACE_TYPES),
+        string_column("side", arr["side"], _SIDES),
+        int_column("price", arr["price"], "<i8"),
+        int_column("size", arr["size"], "<i8"),
+        int_column("order_id", arr["order_id"], "<i8"),
+    ]
+    write_parquet(path, cols, n, {b"pandas": _TRACE_META[b"pandas"], b"ARROW:schema": _TRACE_ARROW_SCHEMA})
+    return n
+
+
+def write_message_lite(arr: dict[str, Any], path: str) -> int:
+    """message_trace.parquet from the stage-1 arrays with ``jpsim.parquet_lite`` (no pyarrow)."""
+    from jpsim.parquet_lite import int_column, string_column, write_parquet
+
+    n = int(len(arr["seq"]))
+    cols = [
+        int_column("seq", arr["seq"], "<i8"),
+        int_column("t_recv_ns", arr["t_recv_ns"], "<i8"),
+        int_column("t_send_ns", arr["t_send_ns"], "<i8", null_sentinel=_NULL),
+        int_column("latency_ns", arr["latency_ns"], "<i8"),
+        int_column("src_id", arr["src_id"], "<i4"),
+        int_column("dst_id", arr["dst_id"], "<i4"),
+        int_column("message_id", arr["message_id"], "<i8"),
+        string_column("msg_type", arr["msg_type"], list(arr["vocab"])),
+        int_column("order_id", arr["order_id"], "<i8", null_sentinel=_NULL),
+        int_column("causal_parent", arr["causal_parent"], "<i8", null_sentinel=_NULL),
+    ]
+    write_parquet(path, cols, n, {b"pandas": _MSG_META[b"pandas"], b"ARROW:schema": _MSG_ARROW_SCHEMA})
+    return n
+
+
 def writer_module():
     """The parquet writer extension, imported directly.
 
