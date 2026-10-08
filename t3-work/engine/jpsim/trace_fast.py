@@ -134,8 +134,7 @@ def build_trace(agents: list[Any]) -> pa.Table:
             is_exec = etype == "ORDER_EXECUTED"
             if not is_exec and etype not in _ORDER_EVENT_MAP:
                 continue
-            t_int = int(t) if isinstance(t, (int, np.integer)) else 0
-            o_t.append(t_int)
+            o_t.append(int(t) if isinstance(t, (int, np.integer)) else 0)
             a = ev.get("agent_id")
             o_agent.append(aid if a is None else int(a))
             o_type.append(etype)

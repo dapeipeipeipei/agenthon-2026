@@ -179,7 +179,7 @@ class OrderBook:
 
             avg_price = int(round(trade_price / trade_qty))
             pass  # [jpsim] debug log statement removed
-            self.owner.logEvent("LAST_TRADE", f"{trade_qty},${avg_price:0.4f}", deepcopy_event=False)
+            # [jpsim] LAST_TRADE log line dropped: no output reads it (last_trade state is kept below)
 
             self.last_trade = avg_price
 
