@@ -156,6 +156,7 @@ class OrderBook:
                 "{},{},{}".format(
                     self.symbol, self.bids[0].price, self.bids[0].total_quantity
                 ),
+                deepcopy_event=False,  # [jpsim] a str: deepcopy returned it unchanged
             )
 
         if self.asks:
@@ -164,6 +165,7 @@ class OrderBook:
                 "{},{},{}".format(
                     self.symbol, self.asks[0].price, self.asks[0].total_quantity
                 ),
+                deepcopy_event=False,  # [jpsim] a str: deepcopy returned it unchanged
             )
 
         # Also log the last trade (total share quantity, average share price).
@@ -177,7 +179,7 @@ class OrderBook:
 
             avg_price = int(round(trade_price / trade_qty))
             pass  # [jpsim] debug log statement removed
-            self.owner.logEvent("LAST_TRADE", f"{trade_qty},${avg_price:0.4f}")
+            self.owner.logEvent("LAST_TRADE", f"{trade_qty},${avg_price:0.4f}", deepcopy_event=False)
 
             self.last_trade = avg_price
 

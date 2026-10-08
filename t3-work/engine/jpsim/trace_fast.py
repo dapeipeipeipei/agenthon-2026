@@ -250,5 +250,7 @@ def build_message_trace(end_state: dict[str, Any]) -> pa.Table:
 
 
 def write_parquet(table: pa.Table, path: str) -> None:
-    """Snappy parquet, one row group, same writer family as the reference (parquet-cpp-arrow)."""
-    pq.write_table(table, path, compression="snappy", row_group_size=max(1, table.num_rows))
+    """Snappy parquet with pyarrow's default row-group size (1 Mi rows), exactly what
+    ``DataFrame.to_parquet`` produced for the references: a unit above that size (gb-mega) gets
+    two row groups, and the file bytes only match if we split at the same point."""
+    pq.write_table(table, path, compression="snappy")
