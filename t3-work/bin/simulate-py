@@ -1,0 +1,5 @@
+#!/bin/sh
+# Python engine verb (debugging / reference path, not on the submission PATH as `simulate`): simulate --config /input/scenario.json --out /output/trace.parquet
+# -O: assert statements are not part of the simulation semantics (none can fail on a valid run).
+# JPSIM_PYTHON selects the interpreter (pypy3 in the PyPy image, python otherwise).
+exec "${JPSIM_PYTHON:-python}" -O -m jpsim.cli simulate "$@"
