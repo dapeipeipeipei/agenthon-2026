@@ -9,7 +9,7 @@
 `jpsim-native`（`engine/jpkernel/jpsim_native.cpp`：自带 JSON 解析 + 内核 + 直接调 pyarrow 15.0.2 wheel
 里的 libarrow/libparquet 写 parquet + SHA-256 + events.json + fork 批量）。**71/71 公开单元 trace.parquet 和
 message_trace.parquet 与主办方参考逐字节相同**（本机、CI 裸跑、CI 镜像内三处都验过），镜像内榜分口径均值
-从 jpsim v1 的 36.7k 提到 **__CI_MEAN__ ev/s**（同一 CI 跑法下 13×）。
+从 jpsim v1 的 36.7k 提到 **575 460 ev/s**（同一 CI 跑法下 13×）。
 
 ## 三层交付（都在镜像里）
 
@@ -62,7 +62,7 @@ CI（GitHub ubuntu-latest，runner 之间 ±15%）：
 | jpkernel Python 包装镜像 `sha256:db41a196…`（容器窗口） | 142 461 | 0.44 / 0.71 / 1.91 s |
 | jpsim-native 裸跑（无容器，一进程一单元） | 901 620 – 1 001 480 | 0.011 / 0.19 / 0.91 s |
 | jpsim-native 镜像 `sha256:3d8a8f16…`（容器窗口） | 481 345 | 0.07 / 0.29 / 1.34 s |
-| jpsim-native 镜像 `__FINAL_DIGEST_SHORT__`（容器窗口，双线程写 + 消息槽池） | __CI_MEAN__ | __FINAL_TRIPLE__ |
+| jpsim-native 镜像 `sha256:97678c5c…`（容器窗口，双线程写 + 消息槽池） | 575 460 | 0.06 / 0.21 / 0.79 s |
 
 内核本身（本机）：gb-mega 1.17M 事件 / 1.42M 消息 0.32 s；mp05 0.05 s。gb-mega 整进程里剩下的是
 parquet 写（33 MB message_trace + 12 MB trace，libparquet 单线程约 0.5 s，现在两个文件两线程并行）。

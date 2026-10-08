@@ -9,10 +9,14 @@ output byte. Every material input is listed here so the submission can be reprod
 | Four Track 3 overlays | `Agenthon-2026/track3-simulation-public` `baselines/patches/` (pomegranate-free order-size model, kernel message ledger, exchange STP, oracle scheduled jump), applied in Dockerfile order before vendoring | MIT (kit `LICENSE`) | applied inside the vendored packages |
 | `simulate` adapter (`config.py`, `agents.py`, `scenario_io.py`) | kit `baselines/abides_fork/` | MIT | `t3-work/engine/jpsim/` (copied, then edited; edits marked `# [jpsim]`) |
 | Trace writer, CLI, batch runner | written by the team | BSD-3-Clause (this submission) | `t3-work/engine/jpsim/trace_fast.py`, `cli.py` |
-| Runtime | Python 3.11 (`python:3.11-slim-bookworm`), numpy 1.26.4, pyarrow 15.0.2 | PSF / BSD-3 / Apache-2.0 | `t3-work/Dockerfile` |
+| C++ simulation kernel (`jpkernel`) | written by the team: a re-implementation of the behaviour of the vendored ABIDES engine + Track 3 overlays + kit adapter agents (same event order, same numpy-legacy RNG algorithms re-implemented from numpy's documented/public C sources, same floating-point operation order); no ABIDES or numpy code is copied | BSD-3-Clause (this submission); behaviourally derived from ABIDES (BSD-3) and numpy (BSD-3) | `t3-work/engine/jpkernel/jpkernel.cpp`, `t3-work/engine/jpsim/kernel.py` (ctypes binding) |
+| Native verbs (`jpsim-native`) | written by the team: scenario parsing, Arrow table construction, SHA-256, events.json, forking batch runner | BSD-3-Clause (this submission) | `t3-work/engine/jpkernel/jpsim_native.cpp`, `build_native.py`, `t3-work/bin/simulate`, `simulate-batch` |
+| Apache Arrow C++ / parquet-cpp 15.0.2 | the `libarrow.so.1500` / `libparquet.so.1500` shared libraries inside the pyarrow 15.0.2 wheel (`pip install pyarrow==15.0.2`), linked by `jpsim-native` at build time and loaded from the wheel's package directory at run time; headers from `pyarrow.get_include()` | Apache-2.0 (with bundled third-party notices in the Arrow distribution) | linked, not vendored; `t3-work/Dockerfile` |
+| Runtime | Python 3.11 (`python:3.11-slim-bookworm`), numpy 1.26.4, pyarrow 15.0.2 (Python verbs + the Arrow libraries), glibc 2.36 libstdc++ 12 (native binary) | PSF / BSD-3 / Apache-2.0 / LGPL-2.1+ & GPL-3-with-runtime-exception (system libraries, dynamically linked) | `t3-work/Dockerfile` |
 
 No model, no network access, no data beyond the mounted scenario. Every change to the vendored
 engine is annotated `# [jpsim]` and listed in `t3-work/PLAN.md`; `t3-work/tools/strip_debug_logs.py`
 is the only automated rewrite (removal of `logger.debug` / `logger.info` statements). Outputs are
 verified byte-for-byte against the organizers' reference traces on all 71 public units
-(`t3-work/tools/check_hashes.py`, run in CI on every image build).
+(`t3-work/tools/check_hashes.py`, run in CI on every image build, for the Python verbs and for the
+native binary alike; `t3-work/KERNEL_NOTES.md` documents the kernel line).

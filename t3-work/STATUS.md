@@ -1,8 +1,21 @@
 # T3（加速市场模拟）— 进度存档
 
-**最后更新：2026-10-08 晚**（第一天）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)。
+**最后更新：2026-10-09 凌晨**（kernel-cpp 线）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)，C++ 内核线细节看 [KERNEL_NOTES.md](KERNEL_NOTES.md)。
 
-## 一句话现状
+## kernel-cpp 线（分支 t3/kernel-cpp，10-09 凌晨）：C++ 内核 + 零 Python 运行时，71/71 逐字节相同
+
+- `engine/jpkernel/jpkernel.cpp`：ABIDES 事件循环/撮合/四代理/oracle/延迟/两份输出的 C++ 重写，numpy legacy RNG 逐位复现；
+  `jpsim_native.cpp`：`simulate`/`simulate-batch` 原生二进制，parquet 由 pyarrow 15.0.2 wheel 自带的 libparquet 写（字节同源）。
+- 验证：本机 71/71、CI 裸跑 71/71、CI 镜像内（平台容器参数）71/71 + 重复稳定 + g0/g1 全过；`tools/rng_check.py` RNG 逐位 0 失败。
+- 速度（榜分口径 71 单元算术平均）：本机 Python 包装 306k（v1 50.7k，参考 14.0k）；CI 镜像内 **575 460**（v1 镜像同口径 36.7k）；
+  CI 裸跑 0.9–1.3M。gb-mega 1.17M 事件整进程 0.9 s（v1 19.4 s，参考 87 s）。
+- 镜像：`ghcr.io/dapeipeipeipei/jinpei-t3@sha256:97678c5cc5e5258bef000893bb9b9b8937fcd384bf97e5ec5f07ad3efedf4bbf`（tag `-native2`，匿名可拉已验）；描述文件
+  `submission/submission.cpp.json` / `.cpp.final.json` 已封印校验 → `pack_all.py t3-cpp` / `t3-cpp.final`。
+  备选（Python 包装内核镜像，同样 71/71）：`sha256:db41a1960ab14ed5546581b5fc7dd6d0e91d15ed00373ce0c743018a1f8fd6ce`（142k）。
+- 风险：私有单元若用到公开单元没有的分支（MarketOrder/Replace/无 latency_config），native 直接报错不出错误结果；
+  `np.log` 在 AVX-512 上与 glibc 差 1 ulp（对公开单元无影响，细节见 KERNEL_NOTES）。
+
+## 一句话现状（v1，10-08 晚）
 
 **可以上传 Dev 了。** 参考引擎（主办方 ABIDES 基线）已在本机复现并通过官方评分器 71/71；我们的 `jpsim` = 同一份引擎、输出逐字节相同、整进程快 3.6 倍（本机）；镜像 `ghcr.io/dapeipeipeipei/jinpei-t3@sha256:f905419e…`（CI run 37823919708，commit 04f1da4c，第 5 轮引擎）已在 CI 里用平台参数跑完 71/71 字节级一致、重复稳定、匿名可拉；描述文件 `submission/submission.json`（dev）/`submission.final.json`（final）已封印校验。打包：`.venv\Scripts\python pack_all.py t3-dev`（老板输入 Team Key）。
 
