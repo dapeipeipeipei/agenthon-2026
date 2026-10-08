@@ -1,12 +1,27 @@
-# Track 4（可解释性）进度 — 2026-10-07（第三轮：候选 E = C + 政策路径锚 + 区间下限）
+# Track 4（可解释性）进度 — 2026-10-08（第四轮：E2 = E + 审查修复 + 范围护栏，决赛用 E2）
 
-一句话：在 C 之上加了两类**通用**改动（实验线 `exp/t4ns`，细节与回测见 `EXP_T4NS.md`），核实真值下 Dev10 均值
-0.6353 → **0.6547**（榜面 0.5368 → **0.5615**）；镜像由 CI 构建（run 37648831922，commit 71a4d88）、匿名可拉；
-NLI 全量检查 11/11 通过（0 虚假、0 矛盾、每题 3 条有效理由）；gate 11/11、异常用例 17/17。
+一句话：E2 取代 E 作为决赛候选。E 在 C 之上加了两类**通用**改动（政策路径锚、区间下限）；独立审查修了两个抽取 bug
+（裸分数 "1/2"、"Effective federal funds rate" 表行），E2 再加范围护栏（只对国债/主权收益率单元触发）、gap 钳位 ±150bp、
+持稳语句与零利率区间解析。11 道公开题预测与 E **逐位相同**：Dev10 均值 0.6353(C) → **0.6547**（榜面 0.5368 → **0.5615**）。
+镜像由 CI 构建（run 37714167931，main 590884d）、匿名可拉；gate 11/11、异常用例 17/17、NLI 全量 11/11（0 虚假、0 矛盾）、
+合成变体 17 个全部符合预期（细节与回测见 `EXP_T4NS.md`；常数与 issue #24 披露见 `submission/ARTIFACT_PROVENANCE.md`）。
 
 | 候选 | 镜像 digest | Dev 描述文件 | 决赛描述文件 |
 |---|---|---|---|
-| **E**（C + 政策路径锚 + 区间下限，无大模型） | `sha256:ff0dd4b6ea64b921d23367a2ad10118e6301d2fcdbda88f3b70e35f647b30fbd` | `submission/submission.e.json` | `submission/submission.e.final.json` |
+| **E2（推荐决赛）** | `sha256:7bb0beef49976b1a161a03be4005a77ebafc5abce410419c7d27ae63ab3b13c6` | `submission/submission.e2.json` | `submission/submission.e2.final.json` |
+| E（已被 E2 取代；无护栏，含两个抽取 bug） | `sha256:ff0dd4b6ea64b921d23367a2ad10118e6301d2fcdbda88f3b70e35f647b30fbd` | `submission/submission.e.json` | `submission/submission.e.final.json` |
+
+打包：`.venv\Scripts\python pack_all.py t4-e2`（Dev）/ `pack_all.py t4-e2.final`（决赛）。
+
+### E2 相对 E 改了什么
+
+- 范围护栏：目标名/题干须提到 yield / Treasury / sovereign / government bond / gilt / bund / curve，且不含 mortgage /
+  credit spread / CDS / swap spread / corporate / municipal；按揭利率、信用利差之类共用 FOMC 语料的 bps 单元不再触发。
+- gap 钳位：|锚 − 前端收益率| 超过 150bp 按 150 计。
+- 解析覆盖："maintain … at X to Y percent"（持稳 → 步长 0，不再去别的文档找步长）、"0 to 1/4 percent"。
+- 审查修复（254d546）："by 1/2 percentage point" 正确解析为 0.50；SEP 表行须有 projection/median 上下文且非 "Effective"。
+
+## 第三轮：候选 E（2026-10-07 晚，已被 E2 取代）
 
 ### E 相对 C 改了什么（全部通用，不按 unit 写死；常数 ≤3）
 
