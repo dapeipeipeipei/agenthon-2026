@@ -1,0 +1,154 @@
+# Track 3 (Simulation) jpsim image: build for linux/amd64, run every public unit inside the image
+# with the platform's container settings (timed on the Docker daemon's StartedAt..FinishedAt
+# window like the Final), check every output byte-for-byte against the organizer's declared
+# reference hashes + the sidecar arithmetic, run the official scorer's g0/g1 gates, then push the
+# image to GHCR and print its digest.
+name: t3-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/t3-image, t3/build]
+    paths:
+      - "t3-work/**"
+      - ".github/workflows/t3-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 3 kit (units + scorer; LFS parquet NOT fetched)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track3-simulation-public
+          ref: main
+          path: track3-simulation-public
+          lfs: false
+
+      - name: Pin the kit revision actually used
+        run: |
+          git -C track3-simulation-public log -1 --format='kit %H %s' | tee -a kit.txt
+          test "$(ls track3-simulation-public/units | wc -l)" = "71"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install toolkit v2.6.0 + Track 3 scorer (for the g0/g1 gates and the hash tool)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$TOOLKIT" "pyarrow>=15" "pandas>=2"
+          pip install --no-deps -e track3-simulation-public
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (linux/amd64)
+        run: |
+          docker buildx build --platform linux/amd64 --load -t t3-local:ci -f t3-work/Dockerfile t3-work
+          docker image inspect t3-local:ci --format 'label={{ index .Config.Labels "qfbench2.interface_version" }} user={{ .Config.User }} entrypoint={{ json .Config.Entrypoint }} volumes={{ json .Config.Volumes }} size={{ .Size }}'
+          test "$(docker image inspect t3-local:ci --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
+          test "$(docker image inspect t3-local:ci --format '{{ json .Config.Volumes }}')" = "null"
+
+      - name: Verb contract (no args / --help) in the image
+        run: |
+          docker run --rm --network=none t3-local:ci simulate --help | head -3
+          docker run --rm --network=none t3-local:ci simulate-batch --help | head -3
+          docker run --rm --network=none t3-local:ci | head -3
+
+      - name: Run every public unit in the image (platform settings, Final-style timing window)
+        run: |
+          mkdir -p t3-ci-out
+          python t3-work/tools/ci_run_units.py --image t3-local:ci \
+            --units track3-simulation-public/units --out-root t3-ci-out/out --timeout 300 \
+            | tee t3-ci-out/run.txt
+
+      - name: Byte-level check against the declared reference hashes + sidecar arithmetic
+        run: |
+          python t3-work/tools/check_hashes.py --units track3-simulation-public/units \
+            --out-root t3-ci-out/out --timing t3-ci-out/out/timing.json --json t3-ci-out/hashes.json \
+            | tee t3-ci-out/hashes.txt
+
+      - name: Repeat stability (3 units, second run must be byte-identical)
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-local:ci \
+            --units track3-simulation-public/units --out-root t3-ci-out/repeat \
+            --only t3-s001-price-time-priority t3-mp05-cancel-churn-newest t3-gbatch-varsize | tee -a t3-ci-out/run.txt
+          python - <<'PY'
+          import hashlib, pathlib
+          a, b = pathlib.Path("t3-ci-out/out"), pathlib.Path("t3-ci-out/repeat")
+          bad = 0
+          for p in sorted(b.rglob("*.parquet")):
+              q = a / p.relative_to(b)
+              same = hashlib.sha256(p.read_bytes()).hexdigest() == hashlib.sha256(q.read_bytes()).hexdigest()
+              bad += not same
+              print(("same " if same else "DIFF ") + str(p.relative_to(b)))
+          raise SystemExit(bad)
+          PY
+
+      - name: Official scorer g0/g1 gates (reference parquet absent in CI, so g3 is not run here)
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          from qfbench2_track_simulation import scoring
+          units = pathlib.Path("track3-simulation-public/units"); out = pathlib.Path("t3-ci-out/out")
+          bad = []
+          for u in sorted(units.iterdir()):
+              ctx = {"unit_dir": str(u), "output_dir": str(out / u.name)}
+              v = scoring.build_developer_verifier(ctx)
+              for name, gate in scoring._GATES[:2]:
+                  r = gate(ctx)
+                  if not r.passed:
+                      bad.append((u.name, name, r.detail)); break
+          print("g0/g1 failures:", bad or "none")
+          raise SystemExit(1 if bad else 0)
+          PY
+
+      - name: Push to GHCR
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag t3-local:ci "$IMAGE:${GITHUB_SHA::12}"
+          docker tag t3-local:ci "$IMAGE:ci"
+          docker push "$IMAGE:${GITHUB_SHA::12}"
+          docker push "$IMAGE:ci"
+          DIGEST=$(docker image inspect "$IMAGE:${GITHUB_SHA::12}" --format '{{ index .RepoDigests 0 }}')
+          echo "image digest: $DIGEST" | tee -a t3-ci-out/hashes.txt
+          echo "### T3 image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary to job page
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat kit.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 90 t3-ci-out/hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t3-ci-summary
+          path: |
+            kit.txt
+            t3-ci-out/run.txt
+            t3-ci-out/hashes.txt
+            t3-ci-out/hashes.json
+            t3-ci-out/out/timing.json
+            t3-ci-out/out/**/events.json
+            t3-ci-out/out/**/batch_events.json
+          retention-days: 30

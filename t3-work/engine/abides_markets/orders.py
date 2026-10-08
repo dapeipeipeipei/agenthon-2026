@@ -1,5 +1,4 @@
 import sys
-from abc import ABC, abstractmethod
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -21,7 +20,7 @@ class Side(Enum):
         return self == Side.ASK
 
 
-class Order(ABC):
+class Order:  # [jpsim] was Order(ABC): ABCMeta made every isinstance() a Python call
     """A basic Order type used by an Exchange to conduct trades or maintain an order book.
 
     This should not be confused with order Messages agents send to request an Order.
@@ -30,7 +29,6 @@ class Order(ABC):
 
     _order_id_counter: int = 0
 
-    @abstractmethod
     def __init__(
         self,
         agent_id: int,
@@ -82,9 +80,9 @@ class Order(ABC):
     def to_dict(self) -> Dict[str, Any]:
         # [jpsim] a shallow dict copy is equivalent: every field is an immutable scalar (tag is None
         # for every Track 3 agent) and the caller never mutates the dict. Same keys, same values.
-        as_dict = dict(self.__dict__)
-        as_dict["time_placed"] = fmt_ts(self.time_placed)
-        return as_dict
+        # time_placed is kept as the raw nanosecond int: no output reads this field and the
+        # reference rendered it with a pandas Timestamp.strftime per logged order.
+        return dict(self.__dict__)
 
     def __eq__(self, other):
         return type(other) is type(self) and self.__dict__ == other.__dict__

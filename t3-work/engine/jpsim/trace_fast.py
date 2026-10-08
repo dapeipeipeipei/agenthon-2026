@@ -224,25 +224,27 @@ def build_message_trace(end_state: dict[str, Any]) -> pa.Table:
     """The 10-column kernel ledger, delivered messages only, in delivery (seq) order."""
     ledger = end_state.get("message_ledger") or []
     seqmap = end_state.get("deliver_seq_by_key") or {}
-    rows: list[tuple[int, dict[str, Any]]] = []
+    # ledger row: (message_id, src_id, dst_id, t_send_ns, t_recv_ns, latency_ns, msg_type,
+    #              order_id, causal_parent)
+    rows: list[tuple[int, tuple]] = []
     get = seqmap.get
     for r in ledger:
-        seq = get((int(r["message_id"]), int(r["dst_id"])))
+        seq = get((r[0], r[2]))
         if seq is not None:
             rows.append((seq, r))
     rows.sort(key=lambda sr: sr[0])
-    n = len(rows)
+    led = [r for _, r in rows]
     cols = {
         "seq": pa.array([s for s, _ in rows], type=pa.int64()),
-        "t_recv_ns": pa.array([r["t_recv_ns"] for _, r in rows], type=pa.int64()),
-        "t_send_ns": pa.array([r["t_send_ns"] for _, r in rows], type=pa.int64()),
-        "latency_ns": pa.array([r["latency_ns"] for _, r in rows], type=pa.int64()),
-        "src_id": pa.array([r["src_id"] for _, r in rows], type=pa.int32()),
-        "dst_id": pa.array([r["dst_id"] for _, r in rows], type=pa.int32()),
-        "message_id": pa.array([r["message_id"] for _, r in rows], type=pa.int64()),
-        "msg_type": pa.array([r["msg_type"] for _, r in rows], type=pa.string()),
-        "order_id": pa.array([r["order_id"] for _, r in rows], type=pa.int64()),
-        "causal_parent": pa.array([r["causal_parent"] for _, r in rows], type=pa.int64()),
+        "t_recv_ns": pa.array([r[4] for r in led], type=pa.int64()),
+        "t_send_ns": pa.array([r[3] for r in led], type=pa.int64()),
+        "latency_ns": pa.array([r[5] for r in led], type=pa.int64()),
+        "src_id": pa.array([r[1] for r in led], type=pa.int32()),
+        "dst_id": pa.array([r[2] for r in led], type=pa.int32()),
+        "message_id": pa.array([r[0] for r in led], type=pa.int64()),
+        "msg_type": pa.array([r[6] for r in led], type=pa.string()),
+        "order_id": pa.array([r[7] for r in led], type=pa.int64()),
+        "causal_parent": pa.array([r[8] for r in led], type=pa.int64()),
     }
     return pa.table(cols, schema=_MSG_SCHEMA.with_metadata(_MSG_META))
 

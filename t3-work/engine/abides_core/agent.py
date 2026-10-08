@@ -129,8 +129,10 @@ class Agent:
 
         # If this agent has been maintaining a log, convert it to a Dataframe
         # and request that the Kernel write it to disk before terminating.
-        if self.log and self.log_to_file:
-            import pandas as pd  # [jpsim] lazy: log_to_file is off in Track 3
+        # [jpsim] Kernel.write_log returns immediately when kernel.skip_log is set (the Track 3
+        # config never turns it off), so building a DataFrame per agent here was pure cost.
+        if self.log and self.log_to_file and not getattr(self.kernel, "skip_log", True):
+            import pandas as pd  # lazy
             df_log = pd.DataFrame(self.log, columns=("EventTime", "EventType", "Event"))
             df_log.set_index("EventTime", inplace=True)
             self.write_log(df_log)

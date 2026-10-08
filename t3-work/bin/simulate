@@ -1,0 +1,3 @@
+#!/bin/sh
+# Track 3 submission verb: simulate --config /input/scenario.json --out /output/trace.parquet
+exec python -m jpsim.cli simulate "$@"

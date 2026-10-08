@@ -130,17 +130,46 @@ def simulate_batch(batch_dir: str | pathlib.Path, out_dir: str | pathlib.Path,
             workers = int(env_w)
     workers = max(1, min(int(workers), len(jobs)))
     results: list[dict[str, Any]]
-    if workers == 1 or len(jobs) == 1:
+    if workers == 1 or len(jobs) == 1 or not hasattr(os, "fork"):
         results = [_run_sub(j) for j in jobs]
     else:
-        import multiprocessing as mp
+        # Each sub-scenario runs in its own forked child: fresh ABIDES id counters and a fresh
+        # global numpy RNG, exactly as a lone `simulate` call sees them, so every sub reproduces
+        # its isolated reference regardless of batch order or scheduling. Plain fork + waitpid:
+        # no pipes, semaphores or /dev/shm (the platform rootfs is read-only and /tmp is tiny);
+        # the children's results are the events.json files they write anyway.
+        pending = list(enumerate(jobs))
+        running: dict[int, int] = {}  # pid -> job index
+        failed: list[int] = []
+        while pending or running:
+            while pending and len(running) < workers:
+                idx, job = pending.pop(0)
+                pid = os.fork()
+                if pid == 0:  # child
+                    code = 0
+                    try:
+                        _run_sub(job)
+                    except BaseException:  # noqa: BLE001 - report, never hang the parent
+                        import traceback
 
-        # Each sub-scenario runs in its own process: fresh ABIDES id counters and a fresh global
-        # numpy RNG, exactly as a lone `simulate` call sees them, so every sub reproduces its
-        # isolated reference regardless of batch order or scheduling.
-        ctx = mp.get_context("fork" if sys.platform != "win32" else "spawn")
-        with ctx.Pool(processes=workers) as pool:
-            results = pool.map(_run_sub, jobs, chunksize=1)
+                        traceback.print_exc()
+                        code = 1
+                    finally:
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                        os._exit(code)
+                running[pid] = idx
+            pid, status = os.wait()
+            idx = running.pop(pid)
+            if not (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0):
+                failed.append(idx)
+        if failed:
+            raise SystemExit(f"simulate-batch: sub-scenario(s) failed: {[jobs[i][0] for i in failed]}")
+        results = []
+        for sub_path, sub_out in jobs:
+            ev = json.loads((pathlib.Path(sub_out) / "events.json").read_text())
+            ev["sub"] = pathlib.Path(sub_path).stem
+            results.append(ev)
     by_sub = {r["sub"]: r for r in results}
     per_scenario = []
     total_events = 0

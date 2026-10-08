@@ -372,18 +372,11 @@ class Kernel:
                 self._current_causal_uid = message.message_id
                 self._deliver_seq_by_key[(message.message_id, recipient_id)] = self._deliver_seq
                 self._deliver_seq += 1
+                # [jpsim] ledger rows are tuples (message_id, src, dst, t_send, t_recv, latency,
+                # msg_type, order_id, causal_parent); jpsim.trace_fast is the only consumer.
                 self._msg_ledger.append(
-                    {
-                        "message_id": message.message_id,
-                        "src_id": recipient_id,
-                        "dst_id": recipient_id,
-                        "t_send_ns": None,
-                        "t_recv_ns": self.current_time,
-                        "latency_ns": 0,
-                        "msg_type": "AGENT_WAKEUP",
-                        "order_id": None,
-                        "causal_parent": None,
-                    }
+                    (message.message_id, recipient_id, recipient_id, None, self.current_time,
+                     0, "AGENT_WAKEUP", None, None)
                 )
 
                 # Wake the agent and get value passed to kernel to listen for kernel interruption signal
@@ -615,17 +608,9 @@ class Kernel:
         for _lm in _ledger_msgs:
             _ord = getattr(_lm, "order", None)
             self._msg_ledger.append(
-                {
-                    "message_id": _lm.message_id,
-                    "src_id": sender_id,
-                    "dst_id": recipient_id,
-                    "t_send_ns": sent_time,
-                    "t_recv_ns": deliver_at,
-                    "latency_ns": deliver_at - sent_time,
-                    "msg_type": _lm.type(),
-                    "order_id": getattr(_ord, "order_id", None),
-                    "causal_parent": self._current_causal_uid,
-                }
+                (_lm.message_id, sender_id, recipient_id, sent_time, deliver_at,
+                 deliver_at - sent_time, _lm.type(), getattr(_ord, "order_id", None),
+                 self._current_causal_uid)
             )
 
         if self.show_trace_messages:
