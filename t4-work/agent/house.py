@@ -43,7 +43,7 @@ import urllib.request
 
 from . import explain as _explain
 from .corpus import Unit
-from .predict import Pred, _label_semantics, make_consistent
+from .predict import Pred, _label_semantics, _prob_labels, make_consistent
 from .retrieve import Passage, _segments, bm25_search, task_drivers, tokens
 
 #: Request budget (the House allows 25 admitted requests per unit).
@@ -566,8 +566,14 @@ def apply_item(unit: Unit, pr: Pred, it: dict, pool: _Pool, allowed: set[str]) -
         except Exception:  # noqa: BLE001
             pass
     if prob and pr.label:
-        # an event label and its probability must agree (the reasoning judge reads both)
-        sem = _label_semantics(unit).get(pr.label)
+        # an event label and its probability must agree (the reasoning judge reads both); a
+        # vocabulary that is not an event / no-event pair is read through `_prob_labels`
+        sems = _label_semantics(unit)
+        sem = sems.get(pr.label)
+        if sem not in ("event", "noevent"):
+            pl = _prob_labels(unit, sems)
+            if pl:
+                sem = "event" if pr.label == pl[0] else "noevent" if pr.label == pl[1] else sem
         if sem == "event" and pr.point < 0.5:
             pr.point = 0.55
         elif sem == "noevent" and pr.point > 0.5:

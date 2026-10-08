@@ -13,6 +13,39 @@
 
 打包：`.venv\Scripts\python pack_all.py t4-e2`（Dev）/ `pack_all.py t4-e2.final`（决赛）。
 
+### 第六轮（10-08，分支 exp/t4robust）：未见家族稳健性 —— 14 个从零合成的 unit，E3 的 11 题逐位不变
+
+决赛 unit 的家族"比公开的多"，所以用 `harness/synth_units.py` 从零造了 14 个公开集没有的形状（排序/Spearman 的 EM 外汇横截面、
+32 行商品大样本、2 标签概率题、5 标签评级题、全 spans 语料、unicode/标点名称+CRLF+孤立代理字符、纯散文无表、task.json 多余字段/
+嵌套列/doc_id 不一致、200 篇语料、行里没有先验列、ECB/BoE/BoJ 政策路径、实体无文档/场外文档），每个都跑官方 gate
+（`score_unit` 无真值→ `unrankable`）、claim 规则、`check_submitted_reasons`、3 条理由、区间合法。**改前 5/14，改后 14/14**；
+`robustness.py` 现在 31/31（含这 14 个，`--synth` 只跑它们）；mock House 31/31；NLI 公开 11/11 + 合成 9/9 全 0 虚假 0 矛盾。
+
+修的通用弱点（全部只在原来会出错/退零的路径上生效，11 道公开题预测/标签/区间/claims/理由**逐位相同**，Dev10 仍 0.6547）：
+
+1. **政策路径扩到非美央行**（`signals._generic_policy_rate`）：语料里没有 "target range for the federal funds rate" 时，退而解析
+   "deposit facility rate / Bank Rate / overnight call rate / policy rate … to|at X%" + 决策动词（lower/raise/remain…）+ 步长；
+   带 expect/priced/would 等字样的句子不算决策。ECB/BoE/BoJ 合成题从全零变成有方向的路径锚。
+2. **政策路径优先于共享快照里的收益率水平序列**，且 bps 目标配 percent 序列会 ×100（之前 Bund10Y 的区间是 ±0.92 "bp"——单位错）；
+   共享横截面表的列名匹配必须有一个字母 token（"30Y" 列不再靠数字 "30" 匹配到 "30-year"）。
+3. **概率型分类题的标签与概率一致**（`_prob_labels`）：词表不是 event/no_event 时，按 "probability of …" 短语和否定前缀
+   （no_/non_/not_）定正负标签；p<0.5 给负标签（之前 ease/no_ease 题给 p=0.1 却标 ease）。House 合并层同样生效。
+4. **状态 quo 标签**：`affirm/retain/keep/stay/remain/pause/status quo…` 归为 middle；点恰在参考值且无 middle 标签时取语义未知
+   标签而不是词表第一个（5 标签评级题之前全给 upgrade_2plus）。
+5. **水平目标无锚**：行里没有先验列、文档里也没有表的行，用其他行预测的中位数+覆盖其离散度的区间（`peer_median`），不再预测 0。
+6. **区间下限**：百分比增速/收益类锚的回退半宽 ≥1 pp；分类题的回退半宽 ≥ 阈值区间半宽（之前 4.5% 增速给 ±0.675 pp）。
+7. **全 spans 语料也能出 3 条理由**：premise 可引用可读但不可引用（spans 格式/role 非 corpus/doc_id 与文件名不一致）的文档，
+   只是不带 citations；claims 仍只引 flat text。文档内 `doc_id` 与文件名不一致的永不引用。
+8. **答案字节上限**再加两档压缩（点偏 ≤15%/30% 带宽），25–35 行能过 3000 字节；**≥~37 行结构上不可能过**（每行 ≥77 字节裸 JSON），
+   这种 unit 谁都拿不到推理分。
+9. 方法文案去家族化：`series_reversion` 非持仓题不再说 "crowded positions"，`prior_probability` 非信用题不再说 "distress language"。
+
+残余风险：非美政策路径只在 3 个合成样本上验证过，方向逻辑与 E3 的 FOMC 规则相同（锚=现行利率+上一步，gap 钳位 ±150bp）；
+2 标签概率题无信号时仍是 0.1 先验；`_NOT_DECISION` 偏保守（句中带 "market" 就不算决策，退回零变化）。
+
+建议：这些改动只动未见家族的路径，公开 11 题逐位相同，**值得重建为 E4**（CI 构建→镜像内 11/11→换 digest 重新封签）；
+若时间不够，E3 照旧可用，差别只在决赛的未见家族上。
+
 ### 第五轮（10-08）：E3 = E2 预测 + 重写的推理理由 + ZLB 区间下限 —— **决赛用 E3**
 
 - 11 题预测/标签/区间/claims 与 E2 逐位相同（Dev10 0.6547 / 榜面估 0.5615；E2 实测 0.5673）。改的只有决赛才计分的 `submitted_reasons`（+0.25·reasoning）和零利率下限 `ZLB_FLOOR_BP_30D=15`。

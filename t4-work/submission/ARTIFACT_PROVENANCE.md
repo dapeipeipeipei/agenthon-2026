@@ -188,3 +188,40 @@ claim on the 11 public units is byte-identical to E2.
 The derivation facts in `agent/predict.py` were reworded from algorithmic to economic statements
 (the numbers they carry are unchanged). The full NLI faithfulness check (both pinned judges,
 contradiction check applied) passes on all 11 public units with 0 false claims.
+
+## Robustness round for unseen families (branch `exp/t4robust`, 2026-10-08; candidate E4 if rebuilt)
+
+Generic changes to `agent/` that act only on paths the 11 public units never take (every
+prediction, label, interval, claim and reason on the 11 public units is byte-identical to E3;
+verified by `cmp` against the E3 answers). Exercised on 14 synthetic units built from scratch by
+`t4-work/harness/synth_units.py` for families the public set does not contain (ranking EM FX,
+32-row regression, 2- and 5-label vocabularies, spans-only corpus, odd encodings, prose-only,
+extra task fields, 200 documents, no prior column, ECB / BoE / BoJ policy statements, rows without
+documents). No outcome of any kind was used; every constant below was chosen by judgment.
+
+* **Policy-path anchor for a single-level policy rate** (`signals._generic_policy_rate`): used
+  only when no federal funds target range is stated in the corpus. The anchor is the stated rate
+  moved one more step in the signalled direction (step from "by N basis points / percentage
+  points", else 0.25; a hold is a zero step), applied exactly as the E/E2 rule (`PATH_SHARE`,
+  `PATH_M0`, `PATH_GAP_CAP` unchanged). Sentences with expectation words (expect, priced, would,
+  market ...) are never read as decisions.
+* **Units guard**: a basis-point change target read from a series captioned in percent is scaled
+  by 100; the policy path takes precedence over a level series for a sovereign-yield row; a
+  shared cross-section column must share a word (not only a number) with the entity's name.
+* **Probability units with other vocabularies** (`predict._prob_labels`): the negative label is
+  the negated one (no_/non_/not_ prefix) or the one the task's "probability of ..." phrase does
+  not name; the label follows the submitted probability (below one half = negative). Also applied
+  in the House merge (`house.py`).
+* **Status-quo labels**: affirm / retain / keep / stay / remain / pause / status quo join the
+  "middle" semantics; at the reference value with no middle label, a label of unknown semantics
+  is chosen before the vocabulary's first "up" label.
+* **`peer_median`**: a level-target row with no reference column and no series takes the median
+  of the other rows' forecasts with a band of max(1.645 x robust sd, half their range, 15 % of
+  the median).
+* **Band floors**: a fallback half-width of at least 1 percentage point for growth / return
+  anchors quoted in percent, and at least the classification threshold's half-width.
+* **Reasons on non-citable documents**: a premise may quote a readable document that a claim can
+  never cite (spans-shaped, non-corpus role, inner doc_id differing from the file name); such a
+  reason carries no citation. Claims still cite flat-text, manifest-resolvable documents only.
+* **Answer compaction**: two further rounding stages (point within 15 % / 30 % of the band,
+  band at most 12 % / 20 % wider) only when the 3,000-byte answer cap is otherwise exceeded.

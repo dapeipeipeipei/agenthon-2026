@@ -44,7 +44,12 @@ def _name_match(name: str, header: str) -> float:
     a, b = norm_tokens(name), norm_tokens(header)
     if not a or not b:
         return 0.0
-    j = len(a & b) / len(a | b)
+    common = a & b
+    # a shared cross-section column is this entity's only when a WORD of its name is in the
+    # header: a bare number in common ("30" of "30-year" and of a "30Y" column) names nothing
+    if not any(t.isalpha() for t in common):
+        return 0.0
+    j = len(common) / len(a | b)
     return 6.0 * j if j >= 0.5 else 0.0
 
 
@@ -483,12 +488,94 @@ def _frac(s: str) -> float | None:
 
 @dataclass
 class PolicyPathSignal:
-    midpoint: float          # current target-range midpoint (percent)
+    midpoint: float          # current policy rate: the target-range midpoint, or the stated rate (percent)
     step: float              # last signed policy step (percentage points; 0 = held)
     anchor: float            # near-term policy anchor (percent)
     anchor_kind: str         # "sep" (Committee's projected year-end median) | "step" | "hold"
-    span: Span               # the verbatim target-range statement
+    span: Span               # the verbatim policy statement
     sep_span: Span | None = None
+    rate_name: str = "target-range midpoint"  # how the rate is named in the derivation text
+
+
+#: Policy rates other central banks state as a single level ("lower the deposit facility rate
+#: ... to 2.25%", "reduce Bank Rate by 0.25 percentage points, to 4.25%", "encourage the
+#: uncollateralized overnight call rate to remain at around 0.5 percent"). Used only when no
+#: federal funds target range is stated anywhere in the corpus.
+_RATE_NAME = (
+    r"(?:interest rates? on the deposit facility|deposit facility rate|deposit rate|bank rate|policy interest rate|"
+    r"policy rate|official cash rate|cash rate|uncollateralized overnight call rate|overnight call rate|"
+    r"main refinancing (?:operations )?rate|refinancing rate|reverse repo rate|repo rate|key (?:ecb )?interest rates?|"
+    r"key policy rate|benchmark (?:interest |lending )?rate|base rate|selic rate)"
+)
+#: A sentence about what the rate is expected, priced or assumed to do is not a decision.
+_NOT_DECISION = re.compile(
+    r"\b(expect\w*|anticipat\w*|forecast\w*|pric\w+ in|priced|pricing|likely|unlikely|could|may|might|would|should|"
+    r"projection\w*|projected|scenario|assum\w+|if the|whether|consensus|survey|economists|markets?)\b",
+    re.IGNORECASE,
+)
+_GENERIC_LEVEL = re.compile(
+    _RATE_NAME + r"(?:[^.;\n]|\.(?=\d)){0,200}?\b(?:to|at)\s+(?:around\s+|about\s+|approximately\s+)?(\d{1,2}(?:\.\d{1,3})?)\s?(?:%|percent|per cent)\b",
+    re.IGNORECASE,
+)
+_SENT_END = re.compile(r"[.!?;](?=\s)|\n")
+_GENERIC_VERB = re.compile(
+    r"\b(raise|raised|raising|increase|increased|increasing|lift|lifted|hike|hiked|tighten|tightened|"
+    r"lower|lowered|lowering|reduce|reduced|reducing|cut|cuts|decrease|decreased|decreasing|ease|eased|easing|"
+    r"maintain|maintained|maintaining|keep|kept|keeping|hold|held|holding|leave|left|unchanged|remain|remains|remained|"
+    r"stay|stays|stayed|retain|retained|pause|paused)\b",
+    re.IGNORECASE,
+)
+_GENERIC_STEP = re.compile(r"by (\d+(?:\.\d+)?|\d/\d)\s?(?:basis points?|bps?|percentage points?|pp)\b", re.IGNORECASE)
+_GENERIC_UP = ("raise", "raised", "raising", "increase", "increased", "increasing", "lift", "lifted", "hike", "hiked", "tighten", "tightened")
+_GENERIC_DOWN = ("lower", "lowered", "lowering", "reduce", "reduced", "reducing", "cut", "cuts", "decrease", "decreased", "decreasing", "ease", "eased", "easing")
+
+
+def _generic_policy_rate(unit: Unit) -> PolicyPathSignal | None:
+    """A stated single-level policy rate with its decision verb (and step), newest document first.
+    A sentence with the rate and a level but no decision verb (a market-implied path, a forecast)
+    is not a decision and is skipped."""
+    for doc in sorted(unit.docs.values(), key=lambda d: (d.doc_date, d.doc_id), reverse=True):
+        if not doc.citable:
+            continue
+        text = doc.text
+        for m in _GENERIC_LEVEL.finditer(text):
+            level = float(m.group(1))
+            if not (0.0 <= level <= 25.0):
+                continue
+            # the sentence around the match (a decimal point inside "0.25" is not a sentence end)
+            lo0 = max(0, m.start() - 600)
+            ends = [lo0 + x.end() for x in _SENT_END.finditer(text[lo0:m.start()])]
+            sent_lo = ends[-1] if ends else lo0
+            nxt = _SENT_END.search(text, m.end())
+            sent_hi = nxt.end() if nxt else min(len(text), m.end() + 600)
+            sentence = text[sent_lo:sent_hi]
+            if _NOT_DECISION.search(sentence):
+                continue
+            direction, held = 0, False
+            for v in _GENERIC_VERB.finditer(sentence):
+                if v.start() + sent_lo > m.end():
+                    break  # the verb that governs the level is the last one before it
+                w = v.group(1).lower()
+                if w in _GENERIC_UP:
+                    direction, held = 1, False
+                elif w in _GENERIC_DOWN:
+                    direction, held = -1, False
+                else:
+                    direction, held = 0, True
+            if direction == 0 and not held:
+                continue
+            step = 0.0
+            if not held:
+                sp = _GENERIC_STEP.search(sentence) or _GENERIC_STEP.search(text[max(0, sent_lo - 800):sent_lo])
+                step = (_frac(sp.group(1)) or 0.0) if sp else 0.25
+                if sp and re.search(r"basis|bps?", sp.group(0), re.IGNORECASE):
+                    step = step / 100.0
+                step = direction * min(step, 1.0)
+            name = re.match(_RATE_NAME, m.group(0), re.IGNORECASE).group(0).lower()
+            name = "deposit facility rate" if "deposit facility" in name else "Bank Rate" if name == "bank rate" else name
+            span = sentence_around(doc, m.start(), m.end(), max_len=320)
+            return PolicyPathSignal(level, step, level + step, "step" if step else "hold", span, rate_name=name)
+    return None
 
 
 def policy_path_signal(unit: Unit) -> PolicyPathSignal | None:
@@ -561,6 +648,11 @@ def policy_path_signal(unit: Unit) -> PolicyPathSignal | None:
                 break
         best = sig
         break
+    if best is None:
+        try:  # no federal funds target range anywhere: another central bank's single-level rate
+            best = _generic_policy_rate(unit)
+        except Exception:  # noqa: BLE001
+            best = None
     return best
 
 

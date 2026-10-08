@@ -114,8 +114,6 @@ def _doc_index(unit: Unit) -> dict:
     total_len = 0
     by_doc: dict[str, list[tuple[int, int, Counter, int]]] = {}
     for doc in unit.docs.values():
-        if not doc.citable:
-            continue
         rows = []
         for s, e in _segments(doc):
             c = Counter(tokens(doc.text[s:e]))
@@ -131,10 +129,13 @@ def _doc_index(unit: Unit) -> dict:
 
 
 def bm25_search(unit: Unit, entity_id: str | None, query: list[str], k: int = 8,
-                own_bonus: float = 1.0, require_digit: bool = False, scope: str = "admitted") -> list[tuple[float, Passage]]:
+                own_bonus: float = 1.0, require_digit: bool = False, scope: str = "admitted",
+                citable_only: bool = True) -> list[tuple[float, Passage]]:
     """Top-k passages BM25-ranked. `scope`: "admitted" = what a claim for `entity_id` may cite
-    (entity-labelled or shared); "own" = the entity-labelled documents only; "all" = every citable
-    document. `entity_id=None` searches shared documents only."""
+    (entity-labelled or shared); "own" = the entity-labelled documents only; "all" = every
+    document. `entity_id=None` searches shared documents only. `citable_only` (the default, for
+    passages that become claims) leaves out documents a claim can never cite; a reason premise
+    may quote any readable document, so the reasons engine passes False."""
     idx = _doc_index(unit)
     q = Counter(t for t in query if t)
     if not q:
@@ -145,12 +146,14 @@ def bm25_search(unit: Unit, entity_id: str | None, query: list[str], k: int = 8,
     idf = {t: math.log(1.0 + (n - df[t] + 0.5) / (df[t] + 0.5)) for t in q}
     for doc_id, rows in idx["by_doc"].items():
         doc = unit.docs[doc_id]
+        if citable_only and not doc.citable:
+            continue
         if scope == "all":
             pass
         elif entity_id is None:
             if not doc.shared:
                 continue
-        elif not doc.admits(entity_id) or (scope == "own" and doc.shared):
+        elif not doc.about(entity_id) or (scope == "own" and doc.shared):
             continue
         for s, e, tf, dl in rows:
             score = 0.0

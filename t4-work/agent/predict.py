@@ -38,7 +38,10 @@ _UP = ("up", "higher", "increase", "rise", "positive", "beat", "above", "greater
        "outperform", "upgrade", "strengthen", "improve", "expand", "gain", "hike", "buy", "long", "bullish",
        "widen", "accelerate")
 _MIDDLE = ("inline", "in line", "flat", "within", "between", "unchanged", "neutral", "hold", "maintain",
-           "no change", "steady", "stable", "same", "meet", "met", "in-line")
+           "no change", "steady", "stable", "same", "meet", "met", "in-line",
+           # status-quo labels of other vocabularies (rating actions, policy decisions, guidance)
+           "affirm", "affirmed", "reaffirm", "reaffirmed", "retain", "retained", "keep", "kept", "stay", "remain",
+           "status quo", "pause", "no action", "no move", "unch")
 _NO_EVENT = ("no_event", "no event", "none", "no_default", "no default", "survive", "solvent")
 
 
@@ -356,7 +359,17 @@ def fallback_halfwidth(unit: Unit, entity: dict, point: float, anchor: tuple[str
         event_sd = 6.5 if re.search(r"earnings|results release|report", p) else 5.0
         return Z90 * event_sd * math.sqrt(max(h, 1) / 2.0)
     if anchor is not None and anchor[1] != 0:
-        return max(abs(anchor[1]) * 0.15, 1e-3)
+        hw = max(abs(anchor[1]) * 0.15, 1e-3)
+        # a growth / return / change quoted in percent: 15% of a 4.5% growth rate is 0.7 pp, far
+        # narrower than such rates are ever known to; one percentage point is the floor
+        if re.search(r"pct|percent|growth|return|yoy|change", anchor[0].lower()) and re.search(r"pct|percent|\bpp\b", tname + " " + unit_field):
+            hw = max(hw, 1.0)
+        # a classification threshold around the reference is the label's own scale of doubt:
+        # the band is never narrower than the middle region it defines
+        if _threshold(entity) is not None:
+            lower, upper = label_bounds(entity, anchor[1])
+            hw = max(hw, (upper - lower) / 2.0)
+        return hw
     if point != 0:
         return abs(point) * 0.5
     return 1.0
@@ -456,6 +469,11 @@ def predict_unit(unit: Unit, cache: dict | None = None) -> list[Pred]:
             except Exception:  # noqa: BLE001
                 pass
         preds.append(pr)
+
+    try:
+        _peer_median_pass(unit, preds, ttype, change)
+    except Exception:  # noqa: BLE001
+        pass
 
     if ttype == "classification":
         for pr in preds:
@@ -592,7 +610,114 @@ def _label_from_value(unit: Unit, ent: dict, sem: dict[str, str], value: float, 
         return ups[0]
     if value < base:
         return downs[0]
-    return mids[0] if mids else ups[0]
+    # exactly at the reference with no middle label: a label of unknown semantics (neither up
+    # nor down) is the status quo before the first "up" label of the vocabulary is
+    unknown = [l for l, s in sem.items() if s == "?"]
+    return mids[0] if mids else (unknown[0] if unknown else ups[0])
+
+
+def _stem_tok(t: str) -> str:
+    for suf in ("ing", "ed", "es", "s"):
+        if t.endswith(suf) and len(t) - len(suf) >= 3:
+            return t[: -len(suf)]
+    return t
+
+
+def _prob_labels(unit: Unit, sem: dict[str, str]) -> tuple[str, str] | None:
+    """(positive, negative) labels of a probability unit whose vocabulary is not an event /
+    no-event pair: the negative label is the negated one ("no_ease", "non_default"), the
+    positive one is the label the task's "probability of ..." phrase names, else the other."""
+    labels = list(unit.labels)
+    if len(labels) < 2:
+        return None
+    neg = [l for l, s in sem.items() if s == "noevent"] or [
+        l for l in labels if re.match(r"^(no|non|not|none|without)\b", l.lower().replace("_", " ").replace("-", " "))]
+    pos = None
+    m = re.search(r"probability (?:of|that)\s+(?:a |an |the )?([^.;:()]{3,80})", unit.prompt, re.IGNORECASE)
+    if m:
+        want = {_stem_tok(t) for t in norm_tokens(m.group(1))}
+        best, best_n = None, 0
+        for l in labels:
+            if l in neg:
+                continue
+            have = {_stem_tok(t) for t in norm_tokens(l.replace("_", " ") + " " + unit.label_assertions.get(l, ""))}
+            n = sum(1 for w in want if any(w == h or (len(w) >= 3 and (h.startswith(w) or w.startswith(h))) for h in have))
+            if n > best_n:
+                best, best_n = l, n
+        pos = best
+    if pos is None:
+        pos = next((l for l in labels if l not in neg), None)
+    if not neg:
+        neg = [l for l in labels if l != pos]
+    if pos is None or not neg:
+        return None
+    return pos, neg[0]
+
+
+def _fill_path(pr: Pred, unit: Unit, ent: dict, ttype: str, anchor, path: tuple, sem: dict) -> None:
+    """The policy-path anchor applied to one yield row (see `policy_path_signal`)."""
+    pp, m0, y0 = path
+    m = _maturity_years(ent)
+    gap_bp = (pp.anchor - y0) * 100.0
+    gap_bp = max(-PATH_GAP_CAP, min(PATH_GAP_CAP, gap_bp))
+    beta = min(1.0, math.sqrt(PATH_M0 / m)) if m > 0 else 1.0
+    point = PATH_SHARE * gap_bp * beta
+    pr.method = "policy_path"
+    hw = fallback_halfwidth(unit, ent, point, anchor)
+    pr.point, pr.lo, pr.hi = point, point - hw, point + hw
+    pr.strength = abs(point) / (hw / Z90 + 1e-9)
+    rate = pp.rate_name
+    what = ("the Committee's projected year-end policy rate" if pp.anchor_kind == "sep"
+            else f"the current {rate} moved one more step in the signalled direction" if pp.anchor_kind == "step"
+            else f"the current {rate} (no further move signalled)")
+    pr.facts.append(f"near-term policy anchor {pp.anchor:.3f}% ({what}; {rate} {pp.midpoint:.3f}%, last step {pp.step * 100:+.0f} bp) "
+                    f"sits {gap_bp:+.0f} bp from the {m0:g}-year yield of {y0:g}%")
+    pr.facts.append(f"half of that gap is expected to close by the resolution, passed through to the {m:g}-year point at a factor of {beta:.2f}, "
+                    f"an expected change of {point:+.1f} bp")
+    pr.spans.append(pp.span)
+    if pp.sep_span:
+        pr.spans.append(pp.sep_span)
+    if ttype == "classification":
+        pr.label = _label_from_value(unit, ent, sem, point, 0.0, hw / Z90, pr=pr)
+
+
+def _series_unit_scale(unit: Unit, s: Series) -> float:
+    """A basis-point change target read from a series quoted in percent (a yield table whose
+    caption says 'percent') is scaled by 100; any other pairing is left alone."""
+    if not _is_bps(unit):
+        return 1.0
+    doc = unit.docs.get(s.doc_id)
+    caption = ""
+    if doc is not None:
+        if s.title_span:
+            caption += doc.text[s.title_span[0]:s.title_span[1]] + " "
+        caption += doc.text[s.header_span[0]:s.header_span[1]]
+    caption = (caption + " " + s.label).lower()
+    if re.search(r"\bbps?\b|basis point", caption):
+        return 1.0
+    if re.search(r"percent|\bpct\b|%", caption) and all(abs(x) < 50 for x in s.values):
+        return 100.0
+    return 1.0
+
+
+def _peer_median_pass(unit: Unit, preds: list[Pred], ttype: str, change: bool) -> None:
+    """A level target's row with no anchor of its own (no reference column, no series): the
+    median of the other rows' forecasts, with a band that covers their spread, beats a point of
+    zero, which is almost never a level."""
+    if change or ttype not in ("regression", "ranking"):
+        return
+    peers = [p.point for p in preds if p.method not in ("zero_default", "fallback") and finite(p.point)]
+    if len(peers) < 2:
+        return
+    med = statistics.median(peers)
+    hw = max(Z90 * _robust_sd(peers), (max(peers) - min(peers)) / 2.0, abs(med) * 0.15, 1e-3)
+    for pr in preds:
+        if pr.method != "zero_default" or pr.anchor_key is not None:
+            continue
+        pr.point, pr.lo, pr.hi = med, med - hw, med + hw
+        pr.method = "peer_median"
+        pr.facts = [f"no figure of its own fixes this row's level, so the median of the other {len(peers)} rows' forecasts, {med:.4g}, "
+                    f"is used, with a band of {hw:.3g} on either side that covers their spread"]
 
 
 def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: Series | None, v, e, d,
@@ -698,6 +823,10 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         ne = [l for l, s_ in sem.items() if s_ == "noevent"]
         if ev and ne:
             pr.label = ev[0] if p >= 0.5 else ne[0]
+        elif unit.labels:
+            pl = _prob_labels(unit, sem)
+            if pl:
+                pr.label = pl[0] if p >= 0.5 else pl[1]
         pr.point, pr.lo, pr.hi = p, max(0.0, p - 0.35), min(1.0, p + 0.35)
         pr.method = "distress_lexicon"
         pr.strength = abs(p - 0.5)
@@ -709,6 +838,12 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             pr.spans.append(d.span)
         return
 
+    # 3b) policy-path anchor: a sovereign-yield row with a maturity is driven by the policy path,
+    #     ahead of any level series a snapshot table happens to carry for it
+    if change and path is not None and _maturity_years(ent) is not None:
+        _fill_path(pr, unit, ent, ttype, anchor, path, sem)
+        return
+
     # 4) pooled series model
     if s is not None:
         vals = s.values
@@ -716,10 +851,14 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             dev = vals[-1] - statistics.fmean(vals)
             point = -kappa * dev
             sd = h_change_sd(vals, h)
+            scale = _series_unit_scale(unit, s)
+            if scale != 1.0:
+                point, sd = point * scale, sd * scale
             pr.method = "series_reversion"
             pr.facts.append(f"{s.label} stands at {vals[-1]:g} against its {len(vals)}-period average of {statistics.fmean(vals):.4g} "
                             f"(a deviation of {dev:+.4g}); in this unit's own history about {kappa:.0%} of such a deviation reverses "
-                            f"over {h} reports, giving an expected change of {point:+.3g}")
+                            f"over {h} reports, giving an expected change of {point:+.3g}"
+                            + (" (the series is in percent, the target in basis points)" if scale != 1.0 else ""))
         else:
             wl, win = w_level
             point = _level_pred(vals, wl, win)
@@ -763,30 +902,11 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         p = 0.1
         pr.point, pr.lo, pr.hi = p, 0.0, 0.5
         pr.method = "prior_probability"
-        return
-    if change and path is not None and _maturity_years(ent) is not None:
-        pp, m0, y0 = path
-        m = _maturity_years(ent)
-        gap_bp = (pp.anchor - y0) * 100.0
-        gap_bp = max(-PATH_GAP_CAP, min(PATH_GAP_CAP, gap_bp))
-        beta = min(1.0, math.sqrt(PATH_M0 / m)) if m > 0 else 1.0
-        point = PATH_SHARE * gap_bp * beta
-        pr.method = "policy_path"
-        hw = fallback_halfwidth(unit, ent, point, anchor)
-        pr.point, pr.lo, pr.hi = point, point - hw, point + hw
-        pr.strength = abs(point) / (hw / Z90 + 1e-9)
-        what = ("the Committee's projected year-end policy rate" if pp.anchor_kind == "sep"
-                else "the current target-range midpoint moved one more step in the signalled direction" if pp.anchor_kind == "step"
-                else "the current target-range midpoint (no further move signalled)")
-        pr.facts.append(f"near-term policy anchor {pp.anchor:.3f}% ({what}; target-range midpoint {pp.midpoint:.3f}%, last step {pp.step * 100:+.0f} bp) "
-                        f"sits {gap_bp:+.0f} bp from the {m0:g}-year yield of {y0:g}%")
-        pr.facts.append(f"half of that gap is expected to close by the resolution, passed through to the {m:g}-year point at a factor of {beta:.2f}, "
-                        f"an expected change of {point:+.1f} bp")
-        pr.spans.append(pp.span)
-        if pp.sep_span:
-            pr.spans.append(pp.sep_span)
-        if ttype == "classification":
-            pr.label = _label_from_value(unit, ent, sem, point, 0.0, hw / Z90, pr=pr)
+        pr.facts.append(f"no pre-cutoff passage of its own documents signals the event, so the probability stays at a low prior of {p:g}")
+        if unit.labels and "noevent" not in sem.values():
+            pl = _prob_labels(unit, sem)
+            if pl:
+                pr.label = pl[1]  # the negative label: the probability is below one half
         return
     if change:
         point = 0.0
