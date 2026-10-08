@@ -1,0 +1,3 @@
+t3-work/bin/** text eol=lf
+t3-work/Dockerfile text eol=lf
+t3-work/engine/** text eol=lf

@@ -162,3 +162,29 @@ recorded closing prices (post-earnings). They were read only by the local harnes
 (`headroom_truth.py`, `headroom_eval.py`, `run_local.py`); none of this data, and no unit id,
 entity id, date or outcome, is in the image. Development scores on the practice units are
 in-sample with respect to this choice.
+
+## Candidate E3 (E2 predictions + rewritten reasons + zero-lower-bound band floor, 2026-10-08)
+
+Candidate E3 (`submission.e3*.json`, branch `exp/t4polish` commit a4191513; image digest filled in
+after the CI build of `main`) is candidate E2 with two generic changes; no network call
+(`models: []`); no new package, dictionary or stored data; every prediction, label, interval and
+claim on the 11 public units is byte-identical to E2.
+
+* **Reasons engine** (`agent/explain.py`, `agent/answer.py`): `submitted_reasons` are now built
+  from (i) a premise chosen among admissible verbatim passages by prose quality and by whether the
+  passage carries the figures the derivation uses, (ii) a mechanism that states the economic link
+  per signal type and per driver concept the task statement names (templates keyed by concept
+  words such as "net interest income", "going concern", "gasoline", "benchmark", never by unit id
+  or entity), the derivation in words, and the label rule for classification units, and (iii) an
+  implication that restates exactly the submitted point / label / interval of the rows in scope.
+  Three reasons on three distinct drivers; the same passage is never used twice. No constant was
+  fitted; the scoring weights inside `_prose_score` are hand-chosen readability heuristics.
+* **`ZLB_FLOOR_BP_30D = 15`** (bp, `agent/predict.py`): the basis-point fallback band's half-width
+  is floored at `15 * sqrt(window_days / 30)` (and at 10 bp), so a level-proportional band does
+  not collapse in a zero-rate context; it binds only below a yield of about 0.6% and leaves every
+  practice unit unchanged. Chosen by judgment (yields at the zero lower bound still move by tens
+  of basis points over a few weeks); no practice-unit outcome informed it.
+
+The derivation facts in `agent/predict.py` were reworded from algorithmic to economic statements
+(the numbers they carry are unchanged). The full NLI faithfulness check (both pinned judges,
+contradiction check applied) passes on all 11 public units with 0 false claims.

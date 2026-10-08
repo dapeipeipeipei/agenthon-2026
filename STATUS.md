@@ -193,3 +193,12 @@ v5b 已排除（Dev −1.8442 ≤ v5a，House 层没增益）。rev3 不再是�
 - **不能把记住的历史结果写进预测**，也不追 Dev 第一（规则 §7 禁止反推标签；rationale 会被人工筛查）。
 - **Final 只有一份**：只交在 Dev 平台上真实跑过、逐题全部可接纳的版本；选定后尽早传。
 - commit 只署用户一人，不加 Co-Authored-By。
+
+
+---
+
+## T3（加速市场模拟）— 10-08 新开线（详见 `t3-work/STATUS.md`）
+
+第一阶段结论：打包主办方参考引擎合规且可录取（MIT/BSD-3，规则 §6.1，主办方 issue #1 明示慢于基线仍进榜）。本机 Python 3.11 复现基线栈，官方评分器 71/71 PASS。
+`jpsim`（vendored ABIDES + 去掉所有不进输出的工作 + 无 pandas 写 parquet + batch fork 并行）输出 71/71 **逐字节相同**，整进程事件/秒均值 **49 348 vs 13 988**（3.5×）。
+镜像 `ghcr.io/dapeipeipeipei/jinpei-t3@sha256:236d8f18…` CI 全绿、匿名可拉；描述文件已封印；`pack_all.py t3-dev` 即可打包上传（T3 Dev 还有 23 次，每天 5 次，10-12 20:00 UTC 截止）。

@@ -1,0 +1,53 @@
+# jpsim, Cython variant: the same vendored engine, with the hot pure-Python modules compiled by
+# Cython in pure-Python mode (no type annotations, Python semantics preserved: Python ints,
+# Python floats, Python round(), Python dict/list). The .so files sit next to the .py sources and
+# take precedence at import time. Everything else is identical to t3-work/Dockerfile.
+#
+# Build: docker buildx build --platform linux/amd64 -t jpsim:cy -f t3-work/Dockerfile.cython t3-work
+
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS builder
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "cython==3.0.11" "setuptools<75"
+COPY engine /opt/jpsim
+COPY cython_modules.txt /opt/cython_modules.txt
+WORKDIR /opt/jpsim
+RUN python - <<'PY'
+import pathlib, subprocess, sys
+mods = [l.strip() for l in pathlib.Path("/opt/cython_modules.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
+cmd = [sys.executable, "-m", "cython", "-3", "--directive", "language_level=3,binding=True,embedsignature=False,always_allow_keywords=True", *mods]
+print(" ".join(cmd)); subprocess.check_call(cmd)
+PY
+RUN python - <<'PY'
+# compile every generated .c into a .so next to its .py
+import pathlib, subprocess, sys, sysconfig
+inc = sysconfig.get_paths()["include"]
+ext = sysconfig.get_config_var("EXT_SUFFIX")
+cflags = ["-O2", "-fPIC", "-shared", "-fwrapv", "-fno-strict-aliasing", "-w", "-I", inc]
+for c in sorted(pathlib.Path(".").rglob("*.c")):
+    so = c.with_name(c.stem + ext)
+    subprocess.check_call(["gcc", *cflags, str(c), "-o", str(so)])
+    c.unlink()
+    print("built", so)
+PY
+RUN python -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast, abides_core.kernel as k; print('cython build:', k.__file__)"
+
+FROM --platform=linux/amd64 python:3.11-slim-bookworm
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
+ENV PYTHONDONTWRITEBYTECODE=0 PYTHONUNBUFFERED=1 PYTHONUTF8=1 PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 HOME=/tmp PYTHONPATH=/opt/jpsim OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+COPY --from=builder /opt/jpsim /opt/jpsim
+COPY bin/simulate /usr/local/bin/simulate
+COPY bin/simulate-batch /usr/local/bin/simulate-batch
+RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
+ && find /opt/jpsim -type d -exec chmod 0755 {} + \
+ && find /opt/jpsim -type f -exec chmod 0644 {} + \
+ && python -m compileall -q -j 0 /opt/jpsim /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow \
+ && python -c "import sys; sys.modules['pandas']=None; import jpsim.cli, abides_core.kernel as k; assert k.__file__.endswith('.so'), k.__file__; print('import ok:', k.__file__)"
+WORKDIR /tmp
+USER 65534:65534
+CMD ["simulate", "--help"]
