@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-analysis-dev",
+  "team_id": "team-00000000000000000000000000000000",
+  "track": "analysis",
+  "phase": "dev",
+  "category": "api",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "dapeipeipeipei/jinpei-t4",
+    "digest": "sha256:f66ed2076395d6d83ccfbe6723098d90d53e85f057a44aa1160801c823fc9cb2"
+  },
+  "image_access": "public",
+  "models": [],
+  "license": "Apache-2.0",
+  "descriptor_digest": "sha256:5a8dea5cf7c265a991c73a49f2ca2997336642d36a97afd8501bd09f1b74cc8d"
+}
