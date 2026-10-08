@@ -99,7 +99,11 @@ k=0.5、M0=5 是事先定的经济先验（上表敏感性里 k=1 在 Dev 上更
 
 三种 naive 假设（carry / zero / mean）下 Dev10 均值 0.6547 / 0.6532 / 0.6640，相对 C 均 +0.024~+0.025。
 `run_local.py --gate` PASS 11/11（0 虚假 claim、reasons 检查 0 发现）；`robustness.py` 17/17。
-**NLI 全量检查未跑**（按指示等"full speed"）。
+NLI 全量检查（两个 DeBERTa 判官、矛盾检查开启）11/11 PASS：0 虚假、maxP(contra)=0.000、每题 3 条有效理由
+（`harness/out/nli_t4ns.log`）。CI run 37648831922（commit 71a4d88）全绿；镜像
+`ghcr.io/dapeipeipeipei/jinpei-t4@sha256:ff0dd4b6ea64b921d23367a2ad10118e6301d2fcdbda88f3b70e35f647b30fbd`
+匿名可拉（verify_anonymous_pull.sh PASS）；描述文件 `submission/submission.e.json`（dev）与
+`submission.e.final.json`（final）已封签并用 `SubmissionDescriptor.from_mapping` 校验，models []。
 
 ### 哪些能推广、哪些不能（诚实版）
 
