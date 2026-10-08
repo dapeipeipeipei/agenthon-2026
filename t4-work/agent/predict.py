@@ -165,6 +165,10 @@ PATH_M0 = 5.0
 #: The gap is a repricing of the next few meetings: beyond this it is not a policy-path gap but a
 #: regime difference (or a mis-read), so the signal is capped there (bp).
 PATH_GAP_CAP = 150.0
+#: Absolute floor of a basis-point fallback band's half-width over a 30-day window (scaled by
+#: the square root of the window): binds only when the level-proportional band is narrower, i.e.
+#: in zero-rate contexts (a level below about 0.6%).
+ZLB_FLOOR_BP_30D = 15.0
 #: The policy-path rule is about sovereign yields (the expected policy path is their main driver);
 #: a basis-point target that is not one (mortgage rates, credit spreads, swap spreads) does not
 #: get it, however similar the corpus.
@@ -341,7 +345,11 @@ def fallback_halfwidth(unit: Unit, entity: dict, point: float, anchor: tuple[str
                 level = x
         level = level if level and level > 0 else 3.0
         sd = 100.0 * level * 0.30 * math.sqrt(max(h, 1) / 365.0)
-        return max(Z90 * sd * 1.75, 10.0)
+        # the level-proportional band collapses at the zero lower bound (a 0.1% yield still
+        # moves by tens of basis points over weeks on term premium and lift-off expectations):
+        # an absolute floor that grows with the window, 15 bp per 30 days
+        floor = max(10.0, ZLB_FLOOR_BP_30D * math.sqrt(max(h, 1) / 30.0))
+        return max(Z90 * sd * 1.75, floor)
     if "return" in tname or "abnormal return" in p:
         # an earnings release inside the window moves single stocks two to three times a normal
         # day's range: use the wider event scale (the interval score punishes misses 20x)
@@ -486,7 +494,7 @@ def make_consistent(pr: Pred, ent: dict, sem: dict[str, str]) -> None:
         return
     pr.point = p
     pr.lo, pr.hi = min(pr.lo, p), max(pr.hi, p)
-    pr.facts.append(f"point placed on the {pr.label} side of its threshold ({p:.4g}) so value and label agree")
+    pr.facts.append(f"the point is placed on the {pr.label} side of the label boundary ({p:.4g}) so that value and label tell the same story")
 
 
 def fallback_label(unit: Unit) -> str:
@@ -604,11 +612,13 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         cons = _num(ent.get("consensus_eps"))
         delta = e.current - e.prior_year
         pr.spans.append(e.span)
-        pr.facts.append(f"latest filed quarter diluted EPS {e.current:g} vs {e.prior_year:g} a year earlier")
+        pr.facts.append(f"the latest filed quarter's diluted EPS was {e.current:g} against {e.prior_year:g} a year earlier, "
+                        f"a year-over-year change of {delta:+.2f}")
         if prior is not None:
             eps_hat = prior + 0.5 * delta
             sd = 0.35 * abs(delta) + 0.08 * abs(prior) + 0.02
-            pr.facts.append(f"forecast EPS = {prior:g} + 0.5 x ({e.current:g} - {e.prior_year:g}) = {eps_hat:.3f}")
+            pr.facts.append(f"half of that change is expected to persist into the target quarter, so the forecast EPS is the "
+                            f"prior-year quarter's {prior:g} (task table) plus 0.5 x ({e.current:g} - {e.prior_year:g}) = {eps_hat:.3f}")
             pr.method = "eps_momentum"
             pr.strength = abs(eps_hat - prior) / (abs(prior) + 0.05)
             if ttype in ("regression", "ranking") and change and "eps" not in (ent.get("unit") or "").lower():
@@ -617,7 +627,7 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
                 g_lo = ((eps_hat - Z90 * sd) - prior) / base * 100.0
                 g_hi = ((eps_hat + Z90 * sd) - prior) / base * 100.0
                 pr.point, pr.lo, pr.hi = g, g_lo, g_hi
-                pr.facts.append(f"implied YoY growth {g:.1f}%")
+                pr.facts.append(f"relative to the prior-year quarter's {prior:g} that is year-over-year EPS growth of {g:.1f}%")
             else:
                 pr.point, pr.lo, pr.hi = eps_hat, eps_hat - Z90 * sd, eps_hat + Z90 * sd
                 if ttype == "classification":
@@ -663,11 +673,13 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         pr.method = "vintage_revision"
         pr.strength = abs(exp_rev) / (sd + 1e-9)
         up_share = (sum(1 for r in nz if r > 0) / len(nz)) if nz else 0.5
-        scope = f"revision number {v.next_age} of other reference months" if v.age_matched else "routine revisions"
-        pr.facts.append(f"{len(revs)} past {scope} in the vintage table have a robust centre of {c:+.4g}; "
-                        f"{up_share:.0%} of the non-zero ones were upward")
+        scope = (f"revisions of other reference months at the same release age (revision number {v.next_age})" if v.age_matched
+                 else "routine revisions")
+        pr.facts.append(f"the vintage table shows {len(revs)} past {scope}, typically {c:+.4g} (outlier-robust average) with "
+                        f"{up_share:.0%} of the non-zero ones upward, so the latest estimate of {base:g} is expected to move by "
+                        f"{exp_rev:+.4g} to {point:.6g}")
         if steps > 1:
-            pr.facts.append(f"the resolving release is about {steps} releases after the latest pre-cutoff estimate, so the expected cumulative revision is {exp_rev:+.4g}")
+            pr.facts.append(f"the resolving release is about {steps} releases after the latest pre-cutoff estimate, so the revisions of {steps} release ages are added up")
         if v.dropped_jumps:
             pr.facts.append(f"{v.dropped_jumps} one-off level shift(s) in the table (annual or benchmark revisions) were left out of the averages")
         pr.spans += [(v.doc_id, v.row_span[0], v.row_span[1])]
@@ -691,7 +703,8 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
         pr.strength = abs(p - 0.5)
         if d.going_concern:
             pr.facts.append("the company's own filing states substantial doubt about its ability to continue as a going concern")
-        pr.facts.append(f"distress score {d.score:+.2f} (probability {p:.2f})")
+        pr.facts.append(f"the density of distress language in its own filings (going-concern doubt, net losses, default, forbearance, "
+                        f"restructuring, delisting, covenant waivers) scores {d.score:+.2f}, which maps to a probability of {p:.2f}")
         if d.span:
             pr.spans.append(d.span)
         return
@@ -704,7 +717,9 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
             point = -kappa * dev
             sd = h_change_sd(vals, h)
             pr.method = "series_reversion"
-            pr.facts.append(f"{s.label} last {vals[-1]:g} vs its {len(vals)}-period mean {statistics.fmean(vals):.4g}; pooled reversion kappa {kappa:.2f} over {h} steps")
+            pr.facts.append(f"{s.label} stands at {vals[-1]:g} against its {len(vals)}-period average of {statistics.fmean(vals):.4g} "
+                            f"(a deviation of {dev:+.4g}); in this unit's own history about {kappa:.0%} of such a deviation reverses "
+                            f"over {h} reports, giving an expected change of {point:+.3g}")
         else:
             wl, win = w_level
             point = _level_pred(vals, wl, win)
@@ -713,7 +728,10 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
                 sd = max(sd, POOLED_SD_FLOOR * pooled_ratio * _robust_scale(vals))
             pr.method = "series_level"
             tail = vals[-win:]
-            pr.facts.append(f"{s.label}: last {vals[-1]:g}, trailing {len(tail)}-period mean {statistics.fmean(tail):.4g}, weight on last value {wl:.2f} (picked by backtest on all rows)")
+            lean = ("entirely on that average" if wl == 0 else "entirely on the latest reading" if wl == 1
+                    else f"{wl:.0%} on the latest reading and {1 - wl:.0%} on that average")
+            pr.facts.append(f"{s.label}: latest {vals[-1]:g}, average of the last {len(tail)} readings {statistics.fmean(tail):.4g}; "
+                            f"the pre-cutoff history of all rows in this unit is forecast best by leaning {lean}, giving {point:.4g}")
             px = s.__dict__.get("proxy")
             if px is not None:
                 # a higher-frequency series in the corpus already covers part of the target month
@@ -721,9 +739,9 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
                 point = w * px.point + (1 - w) * point
                 sd = math.sqrt(w * px.resid_sd ** 2 + (1 - w) * sd ** 2)
                 pr.method = "series_proxy"
-                pr.facts.insert(0, f"{px.label} moved {px.x_target:+.2f}% in the target month so far ({px.weeks_in_target} observations); "
-                                   f"over {px.n} past months the target tracked it as {px.a:+.2f} + {px.b:.2f} x change (correlation {px.r:.2f}), "
-                                   f"implying {px.point:+.3g}")
+                pr.facts.insert(0, f"the {px.label} series moved {px.x_target:+.2f}% in the target month so far ({px.weeks_in_target} observations); "
+                                   f"over {px.n} earlier months this component tracked it as {px.a:+.2f} + {px.b:.2f} x that change (correlation {px.r:.2f}), "
+                                   f"which implies {px.point:+.3g} for the target month")
                 pr.spans.insert(0, px.span)
         hw = Z90 * sd * 1.1
         pr.point, pr.lo, pr.hi = point, point - hw, point + hw
@@ -762,7 +780,8 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
                 else "the current target-range midpoint (no further move signalled)")
         pr.facts.append(f"near-term policy anchor {pp.anchor:.3f}% ({what}; target-range midpoint {pp.midpoint:.3f}%, last step {pp.step * 100:+.0f} bp) "
                         f"sits {gap_bp:+.0f} bp from the {m0:g}-year yield of {y0:g}%")
-        pr.facts.append(f"half of that gap is expected to close by the resolution, passed through to the {m:g}-year point at {beta:.2f}: {point:+.1f} bp")
+        pr.facts.append(f"half of that gap is expected to close by the resolution, passed through to the {m:g}-year point at a factor of {beta:.2f}, "
+                        f"an expected change of {point:+.1f} bp")
         pr.spans.append(pp.span)
         if pp.sep_span:
             pr.spans.append(pp.sep_span)
@@ -772,11 +791,11 @@ def _fill(pr: Pred, unit: Unit, ent: dict, ttype: str, change: bool, anchor, s: 
     if change:
         point = 0.0
         pr.method = "no_change"
-        pr.facts.append("no pre-cutoff signal strong enough to move the forecast off zero change")
+        pr.facts.append("no pre-cutoff passage gives a directional signal, so the expected change is zero")
     elif anchor is not None:
         point = anchor[1]
         pr.method = "carry_forward"
-        pr.facts.append(f"carry forward {anchor[0]} = {anchor[1]:g}")
+        pr.facts.append(f"no filed figure moves the estimate off the task table's {anchor[0].replace('_', ' ')} of {anchor[1]:g}, which is carried forward")
     else:
         point = 0.0
         pr.method = "zero_default"
