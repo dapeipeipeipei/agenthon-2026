@@ -31,7 +31,7 @@ RUN pypy3 -m pip install --no-cache-dir --upgrade pip \
  && apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip \
  && rm -rf /var/lib/apt/lists/* \
- && python3 -m pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+ && /usr/bin/python3 -m pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
 
 COPY engine /opt/jpsim
 COPY bin/simulate /usr/local/bin/simulate
@@ -41,9 +41,9 @@ RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch \
  && find /opt/jpsim -type d -exec chmod 0755 {} + \
  && find /opt/jpsim -type f -exec chmod 0644 {} + \
  && pypy3 -m compileall -q -o 0 -o 1 /opt/jpsim \
- && python3 -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim \
+ && /usr/bin/python3 -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim \
  && pypy3 -c "import sys; sys.modules['pandas']=None; sys.modules['pyarrow']=None; import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; print('pypy import ok:', sys.version.split()[0])" \
- && python3 -c "import jpsim.writer, jpsim.trace_fast, pyarrow; print('writer import ok', pyarrow.__version__)"
+ && /usr/bin/python3 -c "import jpsim.writer, jpsim.trace_fast, pyarrow; print('writer import ok', pyarrow.__version__)"
 
 WORKDIR /tmp
 USER 65534:65534
