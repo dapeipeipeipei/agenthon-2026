@@ -28,8 +28,9 @@ import time
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--python", required=True)
+    ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--module", default="abides_fork")
+    ap.add_argument("--exe", default=None, help="run this native binary (jpsim-native) instead of a Python module")
     ap.add_argument("--units", required=True, type=pathlib.Path)
     ap.add_argument("--out-root", required=True, type=pathlib.Path)
     ap.add_argument("--only", nargs="*", default=None)
@@ -64,7 +65,9 @@ def main() -> int:
             if out.exists():
                 shutil.rmtree(out)
             out.mkdir(parents=True)
-            if args.module == "abides_fork":
+            if args.exe:
+                cmd = [args.exe, "simulate-batch" if batch else "simulate"]
+            elif args.module == "abides_fork":
                 mod = "abides_fork.simulate_batch" if batch else "abides_fork.simulate"
                 cmd = [args.python, "-m", mod]
             else:

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Python engine verb (debugging / reference path): simulate-batch --batch-dir /input/scenarios --out-dir /output
+exec "${JPSIM_PYTHON:-python}" -O -m jpsim.cli simulate-batch "$@"

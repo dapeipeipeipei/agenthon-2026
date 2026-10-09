@@ -50,20 +50,68 @@ def _reset_abides_counters() -> None:
     setattr(Message, "_Message__message_id_counter", 1)
 
 
+def _use_kernel() -> bool:
+    """The C++ kernel (jpsim.kernel) is the default engine when its library loads; JPSIM_KERNEL=py
+    forces the pure-Python ABIDES path (same outputs, used as the oracle for the kernel's tests)."""
+    mode = os.environ.get("JPSIM_KERNEL", "auto").lower()
+    if mode == "py":
+        return False
+    from jpsim import kernel
+
+    if kernel.available():
+        return True
+    if mode == "cpp":
+        raise SystemExit(f"JPSIM_KERNEL=cpp but the kernel did not load: {kernel.load_error()}")
+    return False
+
+
+def _simulate_kernel(scenario: dict[str, Any], out_path: pathlib.Path, t_start: float) -> dict[str, Any]:
+    from jpsim.kernel import run_kernel
+    from jpsim.trace_fast import message_table, trace_table, write_parquet
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with run_kernel(scenario) as res:
+        trace = trace_table(res.trace)
+        message_trace = message_table(res.messages)
+        write_parquet(trace, str(out_path))
+        msg_out = out_path.parent / "message_trace.parquet"
+        write_parquet(message_trace, str(msg_out))
+        n_events = int(trace.num_rows)
+        n_messages = int(message_trace.num_rows)
+    wall_clock_sec = time.perf_counter() - t_start
+    events = {
+        "scenario_id": str(scenario["scenario_id"]),
+        "seed": int(scenario["seed"]),
+        "n_events": n_events,
+        "wall_clock_sec": float(wall_clock_sec),
+        "events_per_sec": float(n_events / wall_clock_sec) if wall_clock_sec > 0 else 0.0,
+        "trace_sha256": _sha256(out_path),
+        "n_messages": n_messages,
+        "message_trace_sha256": _sha256(msg_out),
+        "peak_memory_bytes": _peak_rss_bytes(),
+        "gpu_seconds": 0.0,
+    }
+    (out_path.parent / "events.json").write_text(json.dumps(events, indent=2) + "\n")
+    return events
+
+
 def simulate(config_path: str | pathlib.Path, out_path: str | pathlib.Path,
              seed: Optional[int] = None) -> dict[str, Any]:
     """Run one scenario; write trace.parquet, message_trace.parquet and events.json next to it."""
     t_start = time.perf_counter()
     t_epoch = time.time()
-    from abides_core import abides
-
-    from jpsim.config import build_config
     from jpsim.scenario_io import read_scenario
-    from jpsim.trace_fast import build_message_trace, build_trace, write_parquet
 
     scenario = json.loads(read_scenario(config_path))
     if seed is not None:
         scenario = {**scenario, "seed": int(seed)}
+    if _use_kernel():
+        return _simulate_kernel(scenario, pathlib.Path(out_path), t_start)
+
+    from abides_core import abides
+
+    from jpsim.config import build_config
+    from jpsim.trace_fast import build_message_trace, build_trace, write_parquet
 
     _reset_abides_counters()
     config = build_config(scenario)

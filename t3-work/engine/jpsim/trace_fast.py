@@ -280,46 +280,85 @@ def _schemas():
     return pa, trace_schema, msg_schema
 
 
+# The arrays are assembled with ``from_buffers`` rather than ``pa.array``: ``pa.array`` consults
+# pyarrow's pandas shim on first use (an ``import pandas`` costing ~0.25 s where pandas is
+# installed), and materialising the string columns from codes is a vectorised numpy gather here
+# instead of an Arrow ``take``. The resulting arrays are the same Arrow data (same types, no
+# validity bitmap on non-null columns, null bitmaps on the nullable ledger columns), so the
+# parquet bytes are unchanged.
+def _int_array(pa, np_arr: np.ndarray, pa_type):
+    a = np.ascontiguousarray(np_arr)
+    return pa.Array.from_buffers(pa_type, len(a), [None, pa.py_buffer(a)])
+
+
+def _nullable_int64(pa, np_arr: np.ndarray):
+    a = np.ascontiguousarray(np_arr, dtype=np.int64)
+    valid = a != _NULL
+    n_null = int(len(a) - np.count_nonzero(valid))
+    if n_null == 0:
+        return pa.Array.from_buffers(pa.int64(), len(a), [None, pa.py_buffer(a)])
+    bitmap = np.packbits(valid, bitorder="little")
+    return pa.Array.from_buffers(pa.int64(), len(a), [pa.py_buffer(bitmap), pa.py_buffer(a)], null_count=n_null)
+
+
+def _string_array(pa, codes: np.ndarray, vocab: list[str | None]):
+    """Strings ``vocab[code]`` for every code, as an Arrow string array (offsets int32); a
+    ``None`` vocabulary entry yields nulls."""
+    enc = [b"" if s is None else s.encode() for s in vocab]
+    lengths = np.fromiter((len(b) for b in enc), dtype=np.int32, count=len(enc))
+    maxlen = int(lengths.max()) if len(enc) else 0
+    table = np.zeros((len(enc), max(maxlen, 1)), dtype=np.uint8)
+    for i, b in enumerate(enc):
+        table[i, : len(b)] = np.frombuffer(b, dtype=np.uint8)
+    c = codes.astype(np.intp, copy=False)
+    row_len = lengths[c]
+    offsets = np.empty(len(c) + 1, dtype=np.int32)
+    offsets[0] = 0
+    np.cumsum(row_len, out=offsets[1:])
+    data = table[c][np.arange(max(maxlen, 1), dtype=np.int32)[None, :] < row_len[:, None]]
+    validity = None
+    n_null = 0
+    null_codes = [i for i, s in enumerate(vocab) if s is None]
+    if null_codes:
+        valid = ~np.isin(c, null_codes)
+        n_null = int(len(c) - np.count_nonzero(valid))
+        if n_null:
+            validity = pa.py_buffer(np.packbits(valid, bitorder="little"))
+    return pa.Array.from_buffers(
+        pa.string(), len(c), [validity, pa.py_buffer(offsets), pa.py_buffer(np.ascontiguousarray(data))],
+        null_count=n_null,
+    )
+
+
 def trace_table(arr: dict[str, np.ndarray]):
     pa, schema, _ = _schemas()
-    types = pa.array(_TRACE_TYPES, type=pa.string())
-    sides = pa.array(_SIDES, type=pa.string())
-    return pa.table(
-        {
-            "t_ns": pa.array(arr["t_ns"], type=pa.int64()),
-            "agent_id": pa.array(arr["agent_id"], type=pa.int32()),
-            "msg_type": types.take(pa.array(arr["msg_type"].astype(np.int64))),
-            "side": sides.take(pa.array(arr["side"].astype(np.int64))),
-            "price": pa.array(arr["price"], type=pa.int64()),
-            "size": pa.array(arr["size"], type=pa.int64()),
-            "order_id": pa.array(arr["order_id"], type=pa.int64()),
-        },
-        schema=schema,
-    )
+    arrays = [
+        _int_array(pa, arr["t_ns"], pa.int64()),
+        _int_array(pa, arr["agent_id"], pa.int32()),
+        _string_array(pa, arr["msg_type"], _TRACE_TYPES),
+        _string_array(pa, arr["side"], _SIDES),
+        _int_array(pa, arr["price"], pa.int64()),
+        _int_array(pa, arr["size"], pa.int64()),
+        _int_array(pa, arr["order_id"], pa.int64()),
+    ]
+    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def message_table(arr: dict[str, Any]):
     pa, _, schema = _schemas()
-    vocab = pa.array(list(arr["vocab"]), type=pa.string())
-
-    def nullable(a: np.ndarray):
-        return pa.array(a, type=pa.int64(), mask=(a == _NULL))
-
-    return pa.table(
-        {
-            "seq": pa.array(arr["seq"], type=pa.int64()),
-            "t_recv_ns": pa.array(arr["t_recv_ns"], type=pa.int64()),
-            "t_send_ns": nullable(arr["t_send_ns"]),
-            "latency_ns": pa.array(arr["latency_ns"], type=pa.int64()),
-            "src_id": pa.array(arr["src_id"], type=pa.int32()),
-            "dst_id": pa.array(arr["dst_id"], type=pa.int32()),
-            "message_id": pa.array(arr["message_id"], type=pa.int64()),
-            "msg_type": vocab.take(pa.array(arr["msg_type"].astype(np.int64))),
-            "order_id": nullable(arr["order_id"]),
-            "causal_parent": nullable(arr["causal_parent"]),
-        },
-        schema=schema,
-    )
+    arrays = [
+        _int_array(pa, arr["seq"], pa.int64()),
+        _int_array(pa, arr["t_recv_ns"], pa.int64()),
+        _nullable_int64(pa, arr["t_send_ns"]),
+        _int_array(pa, arr["latency_ns"], pa.int64()),
+        _int_array(pa, arr["src_id"], pa.int32()),
+        _int_array(pa, arr["dst_id"], pa.int32()),
+        _int_array(pa, arr["message_id"], pa.int64()),
+        _string_array(pa, arr["msg_type"], list(arr["vocab"])),
+        _nullable_int64(pa, arr["order_id"]),
+        _nullable_int64(pa, arr["causal_parent"]),
+    ]
+    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def build_trace(agents: list[Any]):
