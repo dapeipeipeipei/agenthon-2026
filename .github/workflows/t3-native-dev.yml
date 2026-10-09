@@ -101,7 +101,7 @@ jobs:
 
       - name: "Synthetic scenarios: kernel edges + Python fallback (lean native vs JPSIM_KERNEL=py)"
         run: |
-          python t3-work/tools/synthetic_check.py --out /tmp/syn --python python --pythonpath t3-work/engine --exe /tmp/lean | tee lean-synthetic.txt
+          python t3-work/tools/synthetic_check.py --compare content --out /tmp/syn --python python --pythonpath t3-work/engine --exe /tmp/lean | tee lean-synthetic.txt
 
       - name: "Where the fixed cost goes: dynamic loader statistics, syscalls, page faults"
         run: |
