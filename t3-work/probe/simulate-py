@@ -1,0 +1,6 @@
+#!/opt/pyfb/bin/sh
+# Python engine verb (fallback; the static `simulate` execs this for out-of-scope scenarios).
+# Everything the interpreter needs lives under /opt/pyfb and is reached only through this launcher.
+export LD_LIBRARY_PATH=/opt/pyfb/lib PYTHONHOME=/opt/pyfb PYTHONPATH=/opt/jpsim LANG=C.UTF-8 \
+       PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONUTF8=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 HOME=/tmp
+exec /opt/pyfb/bin/python3.11 -O -m jpsim.cli simulate "$@"

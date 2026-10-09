@@ -1,0 +1,66 @@
+# PROBE P2 (Dev-board measurement): the static binary on the hot path + a SELF-CONTAINED Python
+# fallback under /opt/pyfb that nothing else in the image (and no linker cache) knows about.
+#   * no /lib, /usr/lib, /lib64, no /etc/ld.so.conf.d, empty /etc/ld.so.conf, no /etc/ld.so.cache:
+#     an ldconfig run against this rootfs (e.g. the NVIDIA hook's) finds no library directory of ours;
+#   * /opt/pyfb/bin/python3.11 is patched to use /opt/pyfb/lib/ld-linux-x86-64.so.2 as its ELF
+#     interpreter; every shared library it or numpy/pyarrow/scipy need (glibc, libstdc++, libpython,
+#     libffi, ...) is copied into /opt/pyfb/lib and found through LD_LIBRARY_PATH, which only the
+#     fallback launcher (/usr/local/bin/simulate-py, a static busybox sh script) sets;
+#   * /etc holds only passwd/group (+ the empty ld.so.conf).
+# The hot path (simulate / simulate-batch = one static binary) touches nothing under /opt.
+#   docker buildx build --platform linux/amd64 -t jpsim:p2 -f t3-work/Dockerfile.probe-p2 t3-work
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ patchelf busybox-static \
+ && rm -rf /var/lib/apt/lists/*
+COPY engine/jpkernel /src/jpkernel
+RUN g++ -O2 -std=c++17 -fno-fast-math -ffp-contract=off -DJPK_NO_EXPORTS \
+        -static -pthread -Wl,--gc-sections -ffunction-sections -fdata-sections -s \
+        -o /src/jpsim-native /src/jpkernel/jpsim_native.cpp \
+ && (ldd /src/jpsim-native 2>&1 | grep -q "not a dynamic executable")
+RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "scipy==1.17.1"
+COPY engine /stage/opt/jpsim
+COPY probe/simulate-py probe/simulate-batch-py /stage/usr/local/bin/
+RUN set -eu; S=/stage; P=$S/opt/pyfb; mkdir -p $P/bin $P/lib $S/usr/local/bin $S/etc $S/tmp; \
+    find $S/opt/jpsim -type d -exec chmod 0755 {} +; find $S/opt/jpsim -type f -exec chmod 0644 {} +; \
+    PYTHONPATH=$S/opt/jpsim python -m compileall -q -j 0 -o 0 -o 1 $S/opt/jpsim \
+        /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow; \
+    rm -rf /usr/local/lib/python3.11/site-packages/pip* /usr/local/lib/python3.11/site-packages/setuptools* \
+           /usr/local/lib/python3.11/site-packages/wheel* /usr/local/lib/python3.11/ensurepip \
+           /usr/local/lib/python3.11/idlelib /usr/local/lib/python3.11/tkinter /usr/local/lib/python3.11/turtledemo; \
+    cp -a /usr/local/lib/python3.11 $P/lib/; \
+    cp -L /usr/local/lib/libpython3.11.so.1.0 $P/lib/; \
+    cp /usr/local/bin/python3.11 $P/bin/python3.11; \
+    cp /bin/busybox $P/bin/sh; \
+    for i in 1 2; do \
+      find $P -type f \( -name '*.so' -o -name '*.so.*' -o -path "$P/bin/python3.11" \) -print0 \
+        | xargs -0 -n 50 ldd 2>/dev/null | awk '$2 == "=>" && $3 ~ /^\// {print $3}' \
+        | grep -v "^$P/" | sort -u | while read -r l; do cp -Ln "$l" $P/lib/; done; \
+    done; \
+    cp -L /lib64/ld-linux-x86-64.so.2 $P/lib/ld-linux-x86-64.so.2; \
+    patchelf --set-interpreter /opt/pyfb/lib/ld-linux-x86-64.so.2 --set-rpath /opt/pyfb/lib $P/bin/python3.11; \
+    cp /src/jpsim-native $S/usr/local/bin/simulate; \
+    ln $S/usr/local/bin/simulate $S/usr/local/bin/simulate-batch; \
+    ln $S/usr/local/bin/simulate $S/usr/local/bin/jpsim-native; \
+    chmod 0755 $S/usr/local/bin/*; chmod 1777 $S/tmp; \
+    printf 'root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534:nobody:/nonexistent:/sbin/nologin\n' > $S/etc/passwd; \
+    printf 'root:x:0:\nnogroup:x:65534:\n' > $S/etc/group; : > $S/etc/ld.so.conf; \
+    ls $P/lib | grep -v '^python3.11$' | tr '\n' ' '; echo; \
+    find $S -type f | wc -l
+# In-build self-test, isolated from the build stage's system libraries: chroot-free check through
+# the relocated loader with an empty system search path (no /etc/ld.so.cache is consulted for
+# libraries found via LD_LIBRARY_PATH; anything missing from /opt/pyfb/lib would fail in the final
+# image, which CI also tests directly).
+RUN env -i LD_LIBRARY_PATH=/stage/opt/pyfb/lib PYTHONHOME=/stage/opt/pyfb PYTHONPATH=/stage/opt/jpsim \
+      /stage/opt/pyfb/lib/ld-linux-x86-64.so.2 --library-path /stage/opt/pyfb/lib --inhibit-cache \
+      /stage/opt/pyfb/bin/python3.11 -c "import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast, scipy.spatial.distance, pyarrow.parquet; print('fallback import ok')"
+
+FROM scratch
+COPY --from=build /stage /
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
+LABEL org.opencontainers.image.description="Agenthon 2026 Track 3 simulator (jpsim): static C++ kernel binary + relocated self-contained Python ABIDES fallback (probe P2)"
+ENV PATH=/usr/local/bin HOME=/tmp
+WORKDIR /tmp
+USER 65534:65534
+CMD ["simulate", "--help"]

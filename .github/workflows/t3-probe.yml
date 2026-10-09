@@ -1,0 +1,155 @@
+# Track 3 PROBE images for the Dev board's per-container overhead (create->rm, GPU device attached):
+# P1 = static binary only (FROM scratch); P2 = static binary + a relocated self-contained Python
+# fallback that no ldconfig / linker cache sees. Builds both, measures what an ldconfig-running
+# runtime hook faces in each image (vs the current static and native submissions), runs all 71
+# public units in each with the platform flags (row counts + sidecar arithmetic + tables equal to
+# the current static image's; P1 has no fallback, so any out-of-scope public unit fails the run),
+# the synthetic fallback suite in P2, a warm fixed-cost matrix, and pushes both.
+name: t3-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [t3/probe]
+    paths:
+      - "t3-work/**"
+      - ".github/workflows/t3-probe.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
+  STATIC: ghcr.io/dapeipeipeipei/jinpei-t3@sha256:c3b318b87418b4ed229fc03017583fb9c63d1046adc4338b2d9c21d0efb1545e
+  BASELINE: ghcr.io/dapeipeipeipei/jinpei-t3@sha256:e05df48c07b7f2c93ecdd7c3116b6b7986518e3cd5a6efa5e80fe244a2299dc1
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track3-simulation-public
+          ref: main
+          path: track3-simulation-public
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install toolkit v2.6.0 + Track 3 scorer
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$TOOLKIT" "pyarrow>=15" "pandas>=2"
+          pip install --no-deps -e track3-simulation-public
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build P1 and P2
+        run: |
+          docker buildx build --platform linux/amd64 --load -t t3-p1:ci -f t3-work/Dockerfile.probe-p1 t3-work
+          docker buildx build --platform linux/amd64 --load -t t3-p2:ci -f t3-work/Dockerfile.probe-p2 t3-work
+          docker pull -q "$STATIC"; docker pull -q "$BASELINE"
+          for i in t3-p1:ci t3-p2:ci "$STATIC" "$BASELINE"; do
+            echo "$i size=$(docker image inspect "$i" --format '{{ .Size }}') layers=$(docker image inspect "$i" --format '{{ len .RootFS.Layers }}') user=$(docker image inspect "$i" --format '{{ .Config.User }}') label=$(docker image inspect "$i" --format '{{ index .Config.Labels "qfbench2.interface_version" }}') vol=$(docker image inspect "$i" --format '{{ json .Config.Volumes }}') ep=$(docker image inspect "$i" --format '{{ json .Config.Entrypoint }}')"
+          done | tee image-shapes.txt
+          for i in t3-p1:ci t3-p2:ci; do
+            test "$(docker image inspect $i --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
+            test "$(docker image inspect $i --format '{{ .Config.User }}')" = "65534:65534"
+            test "$(docker image inspect $i --format '{{ json .Config.Volumes }}')" = "null"
+            test "$(docker image inspect $i --format '{{ json .Config.Entrypoint }}')" = "null"
+            docker run --rm --network=none --read-only --user 65534:65534 $i simulate --help | head -2
+            docker run --rm --network=none --read-only --user 65534:65534 $i simulate-batch --help | head -2
+            docker run --rm --network=none --read-only $i | head -2
+          done
+          docker run --rm --network=none --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --user 65534:65534 \
+            --entrypoint /opt/pyfb/bin/sh t3-p2:ci -c 'export LD_LIBRARY_PATH=/opt/pyfb/lib PYTHONHOME=/opt/pyfb PYTHONPATH=/opt/jpsim; exec /opt/pyfb/bin/python3.11 -c "import sys, jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast, scipy.spatial.distance, pyarrow.parquet, numpy; print(\"P2 fallback import ok\", sys.prefix, sys.executable, numpy.__version__)"'
+
+      - name: "rootfs / ldconfig measurement (what an ldconfig-running GPU hook faces)"
+        run: |
+          chmod +x t3-work/probe/rootfs_probe.sh
+          for v in "p1=t3-p1:ci" "p2=t3-p2:ci" "static=$STATIC" "native=$BASELINE"; do
+            t3-work/probe/rootfs_probe.sh "${v#*=}" "${v%%=*}" 30
+          done | tee rootfs-probe.txt
+
+      - name: Current static image on all 71 units (reference tables for P1/P2)
+        run: |
+          mkdir -p ci-out
+          python t3-work/tools/ci_run_units.py --image "$STATIC" --units track3-simulation-public/units --out-root ci-out/static --timeout 300 | tail -3
+
+      - name: P1 on all 71 units (no fallback in the image)
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-p1:ci --units track3-simulation-public/units --out-root ci-out/p1 --timeout 300 2>&1 | tee ci-out/run-p1.txt | tail -3
+          python t3-work/tools/check_hashes.py --rows-only --units track3-simulation-public/units --out-root ci-out/p1 --timing ci-out/p1/timing.json | tail -3
+          python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root ci-out/p1 --ref-root ci-out/static | tail -3
+
+      - name: P2 on all 71 units
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-p2:ci --units track3-simulation-public/units --out-root ci-out/p2 --timeout 300 2>&1 | tee ci-out/run-p2.txt | tail -3
+          python t3-work/tools/check_hashes.py --rows-only --units track3-simulation-public/units --out-root ci-out/p2 --timing ci-out/p2/timing.json | tail -3
+          python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root ci-out/p2 --ref-root ci-out/static | tail -3
+
+      - name: Official g0/g1 gates on P1 and P2 outputs
+        run: |
+          python - <<'PY'
+          import pathlib
+          from qfbench2_track_simulation import scoring
+          units = pathlib.Path("track3-simulation-public/units")
+          bad = []
+          for tag in ("p1", "p2"):
+              out = pathlib.Path("ci-out") / tag
+              for u in sorted(units.iterdir()):
+                  ctx = {"unit_dir": str(u), "output_dir": str(out / u.name)}
+                  scoring.build_developer_verifier(ctx)
+                  for name, gate in scoring._GATES[:2]:
+                      r = gate(ctx)
+                      if not r.passed:
+                          bad.append((tag, u.name, name, r.detail)); break
+          print("g0/g1 failures:", bad or "none")
+          raise SystemExit(1 if bad else 0)
+          PY
+
+      - name: "Synthetic suite in P2: kernel edges + relocated Python fallback (simulate vs simulate-py, table-level)"
+        run: |
+          python t3-work/tools/synthetic_check.py --out "$PWD/ci-out/syn" --pythonpath t3-work/engine --image t3-p2:ci --content | tee ci-out/synthetic-p2.txt
+
+      - name: Push P1 and P2
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for p in p1 p2; do
+            docker tag t3-$p:ci "$IMAGE:${GITHUB_SHA::12}-$p"; docker tag t3-$p:ci "$IMAGE:ci-$p"
+            docker push -q "$IMAGE:${GITHUB_SHA::12}-$p"; docker push -q "$IMAGE:ci-$p"
+            echo "$p $(docker image inspect "$IMAGE:${GITHUB_SHA::12}-$p" --format '{{ index .RepoDigests 0 }}')" | tee -a digests.txt
+          done
+
+      - name: "Fixed cost (warm, docker run --rm and phases): native / static / P1 / P2"
+        run: |
+          python t3-work/tools/fixed_cost_bench.py --units track3-simulation-public/units --out ci-out/bench --reps 5 \
+            --only t3-s001-price-time-priority t3-eq-deterministic-baseline t3-as01-base-mix t3-sf-01-baseline-regime t3-mp05-cancel-churn-newest \
+            --variant "native=$BASELINE" --variant "static=$STATIC" --variant "p1=t3-p1:ci" --variant "p2=t3-p2:ci" \
+            --variant "noop-p1=t3-p1:ci|verb=--help" --variant "noop-static=$STATIC|verb=--help" | tee ci-out/bench.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          { echo '```'; cat image-shapes.txt rootfs-probe.txt digests.txt 2>/dev/null; tail -n 14 ci-out/bench.txt 2>/dev/null; tail -n 12 ci-out/synthetic-p2.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t3-probe-ci
+          path: |
+            image-shapes.txt
+            rootfs-probe.txt
+            digests.txt
+            ci-out/*.txt
+            ci-out/p1/timing*.json
+            ci-out/p2/timing*.json
+            ci-out/static/timing*.json
+            ci-out/bench/*.json
+          retention-days: 30

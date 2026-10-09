@@ -1,0 +1,28 @@
+# PROBE P1 (Dev-board measurement): the static simulate/simulate-batch binary ALONE.
+# FROM scratch, one small layer: no Python fallback, no shared library, no /etc (Docker's init
+# layer still creates /etc/hosts etc. at run time), no ld.so.conf / ld.so.cache. A scenario outside
+# the kernel's reproduced scope fails here (exit 1) instead of falling back; all 71 public units
+# are in scope (CI asserts no fallback notice on any of them).
+#   docker buildx build --platform linux/amd64 -t jpsim:p1 -f t3-work/Dockerfile.probe-p1 t3-work
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS static-build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+COPY engine/jpkernel /src/jpkernel
+RUN g++ -O2 -std=c++17 -fno-fast-math -ffp-contract=off -DJPK_NO_EXPORTS \
+        -static -pthread -Wl,--gc-sections -ffunction-sections -fdata-sections -s \
+        -o /src/jpsim-native /src/jpkernel/jpsim_native.cpp \
+ && (ldd /src/jpsim-native 2>&1 | grep -q "not a dynamic executable") \
+ && mkdir -p /stage/usr/local/bin /stage/tmp \
+ && cp /src/jpsim-native /stage/usr/local/bin/simulate \
+ && ln /stage/usr/local/bin/simulate /stage/usr/local/bin/simulate-batch \
+ && chmod 0755 /stage/usr/local/bin/simulate && chmod 1777 /stage/tmp
+
+FROM scratch
+COPY --from=static-build /stage /
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
+LABEL org.opencontainers.image.description="Agenthon 2026 Track 3 simulator (jpsim): static C++ kernel binary only (probe P1)"
+ENV PATH=/usr/local/bin HOME=/tmp
+WORKDIR /tmp
+USER 65534:65534
+CMD ["simulate", "--help"]
