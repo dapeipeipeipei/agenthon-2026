@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -201,6 +202,74 @@ static void snappy_compress(const uint8_t* in, size_t n, std::string& out) {
 }
 
 // ------------------------------------------------------------------------------------- sha256
+static const uint32_t SHA256_K[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+#if defined(__x86_64__) || defined(_M_X64)
+#define JPQ_HAVE_SHANI 1
+#include <cpuid.h>
+#include <immintrin.h>
+// The x86 SHA extensions (SHA-NI): 4 rounds per instruction pair. Selected at run time; the
+// scalar code below is the fallback (and the oracle the dev build checks this against).
+static bool cpu_has_shani() {
+    static int cached = -1;
+    if (cached < 0) {
+        unsigned a = 0, b = 0, c = 0, d = 0;
+        cached = 0;
+        if (__get_cpuid_count(7, 0, &a, &b, &c, &d) && (b & (1u << 29))) {
+            __get_cpuid(1, &a, &b, &c, &d);
+            if ((c & (1u << 19)) && (c & (1u << 9))) cached = 1;  // SSE4.1 + SSSE3
+        }
+        if (const char* e = std::getenv("JPSIM_NO_SHANI")) if (*e) cached = 0;
+    }
+    return cached == 1;
+}
+__attribute__((target("sha,sse4.1,ssse3")))
+static void sha256_blocks_shani(uint32_t state[8], const uint8_t* p, size_t nblocks) {
+    const __m128i MASK = _mm_set_epi64x(0x0c0d0e0f08090a0bLL, 0x0405060700010203LL);
+    __m128i tmp = _mm_loadu_si128((const __m128i*)&state[0]);     // A B C D
+    __m128i s1 = _mm_loadu_si128((const __m128i*)&state[4]);      // E F G H
+    tmp = _mm_shuffle_epi32(tmp, 0xB1);                            // C D A B
+    s1 = _mm_shuffle_epi32(s1, 0x1B);                              // H G F E
+    __m128i s0 = _mm_alignr_epi8(tmp, s1, 8);                      // A B E F
+    s1 = _mm_blend_epi16(s1, tmp, 0xF0);                           // C D G H
+    for (size_t blk = 0; blk < nblocks; blk++, p += 64) {
+        __m128i save0 = s0, save1 = s1;
+        __m128i w[4];
+        for (int i = 0; i < 16; i++) {
+            __m128i wi;
+            if (i < 4) {
+                wi = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)(p + 16 * i)), MASK);
+            } else {
+                __m128i t = _mm_sha256msg1_epu32(w[(i - 4) & 3], w[(i - 3) & 3]);
+                t = _mm_add_epi32(t, _mm_alignr_epi8(w[(i - 1) & 3], w[(i - 2) & 3], 4));
+                wi = _mm_sha256msg2_epu32(t, w[(i - 1) & 3]);
+            }
+            w[i & 3] = wi;
+            __m128i msg = _mm_add_epi32(wi, _mm_loadu_si128((const __m128i*)&SHA256_K[4 * i]));
+            s1 = _mm_sha256rnds2_epu32(s1, s0, msg);
+            msg = _mm_shuffle_epi32(msg, 0x0E);
+            s0 = _mm_sha256rnds2_epu32(s0, s1, msg);
+        }
+        s0 = _mm_add_epi32(s0, save0);
+        s1 = _mm_add_epi32(s1, save1);
+    }
+    tmp = _mm_shuffle_epi32(s0, 0x1B);                             // F E B A
+    s1 = _mm_shuffle_epi32(s1, 0xB1);                              // D C H G
+    s0 = _mm_blend_epi16(tmp, s1, 0xF0);                           // D C B A
+    s1 = _mm_alignr_epi8(s1, tmp, 8);                              // H G F E
+    _mm_storeu_si128((__m128i*)&state[0], s0);
+    _mm_storeu_si128((__m128i*)&state[4], s1);
+}
+#endif
+
 struct Sha256 {
     uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     uint8_t buf[64];
@@ -208,15 +277,13 @@ struct Sha256 {
     uint64_t total = 0;
     static inline uint32_t rotr(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
     void blocks(const uint8_t* p, size_t nblocks) {
-        static const uint32_t K[64] = {
-            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+#if defined(JPQ_HAVE_SHANI)
+        if (cpu_has_shani()) {
+            sha256_blocks_shani(h, p, nblocks);
+            return;
+        }
+#endif
+        const uint32_t* K = SHA256_K;
         for (size_t blk = 0; blk < nblocks; blk++, p += 64) {
             uint32_t w[64];
             for (int i = 0; i < 16; i++)
