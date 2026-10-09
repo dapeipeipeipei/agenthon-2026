@@ -50,7 +50,9 @@ ENV PYTHONDONTWRITEBYTECODE=0 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1
 
-RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2"
+# scipy: only the Python fallback engine needs it (ABIDES line-distance latency model when a
+# scenario has no latency_config); the kit baseline pins the same version.
+RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "scipy==1.17.1"
 
 COPY engine /opt/jpsim
 COPY --from=kernel-build /src/jpkernel/libjpkernel.so /opt/jpsim/jpkernel/libjpkernel.so
@@ -68,7 +70,7 @@ RUN chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-batch /usr/local/
  && find /opt/jpsim -type f -exec chmod 0644 {} + \
  && chmod 0755 /opt/jpsim/jpkernel/libjpkernel.so /opt/jpsim/jpkernel/jpsim-native \
  && python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow \
- && python -c "import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; print('import ok')" \
+ && python -c "import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; import scipy.spatial.distance; print('import ok')" \
  && python -c "from jpsim import kernel; assert kernel.available(), kernel.load_error(); print('jpkernel ok')" \
  && ldd /opt/jpsim/jpkernel/jpsim-native | grep -q "libparquet.so.1500 => /usr/local/lib/python3.11/site-packages/pyarrow" \
  && /opt/jpsim/jpkernel/jpsim-native --help

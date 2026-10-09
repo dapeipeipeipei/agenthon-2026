@@ -75,9 +75,21 @@ struct JParser {
     const std::string& s;
     size_t i = 0;
     explicit JParser(const std::string& src) : s(src) {}
+    std::string error;
+    struct Failed {};
     [[noreturn]] void fail(const char* what) {
-        std::fprintf(stderr, "scenario JSON parse error at offset %zu: %s\n", i, what);
-        std::exit(2);
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "offset %zu: %s", i, what);
+        error = buf;
+        throw Failed{};
+    }
+    std::string try_parse(JVal& out) {
+        try {
+            out = parse();
+            return "";
+        } catch (const Failed&) {
+            return error;
+        }
     }
     void ws() {
         while (i < s.size() && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) i++;
@@ -276,6 +288,183 @@ static std::string get_str(const JVal* obj, const char* key, const std::string& 
     return "None";
 }
 
+// ---------------------------------------------------------------------- scope check / fallback
+// Everything the kernel implements is exactly what the 71 public units (95 scenarios) exercise,
+// plus the ABIDES line-distance latency fallback. A scenario that steps outside that envelope
+// (keys the kit adapter would ignore, options it would route to code paths the kernel has not
+// reproduced, values the kernel's integer model cannot represent) is handed to the Python engine
+// (`simulate-py`, JPSIM_KERNEL=py): same outputs, slower. Unknown keys fall back too, although the
+// adapter ignores them, because "ignored" is only known for the keys we have seen.
+static bool key_allowed(const std::string& k, const char* const* allowed) {
+    if (!k.empty() && k[0] == '_') return true;  // _comment-style keys (templates/scenario.json)
+    for (int i = 0; allowed[i]; i++)
+        if (k == allowed[i]) return true;
+    return false;
+}
+static std::string unknown_keys(const JVal* obj, const char* const* allowed, const char* where) {
+    if (!obj || obj->kind != JVal::OBJ) return "";
+    for (auto& kv : obj->obj)
+        if (!key_allowed(kv.first, allowed)) return std::string("unknown key ") + where + "." + kv.first;
+    return "";
+}
+static bool is_num(const JVal* v) { return v && (v->kind == JVal::NUM || v->kind == JVal::BOOL); }
+static bool fits_int64(const JVal* v) {
+    if (!v) return true;
+    if (v->kind == JVal::NUM && !v->num_is_int) return std::fabs(v->num) < 9.2e18;
+    return true;
+}
+
+static std::string scope_check(const JVal& sc) {
+    static const char* top[] = {"scenario_id", "description", "scenario_family", "schema_version", "seed",
+                                "horizon_ns", "agent_mix", "exchange_config", "oracle_config", "latency_config",
+                                "agent_configs", "output_config", "tolerance", nullptr};
+    static const char* exk[] = {"symbol", "tick_size", "lot_size", "min_price", "max_price", "stp_policy",
+                                "order_types_allowed", "protocol_enforcement", "ack_delay_ns", "compute_delay_ns",
+                                nullptr};
+    static const char* ock[] = {"type", "params", nullptr};
+    static const char* opk[] = {"initial_price", "kappa", "sigma", "dt_ns", "noise_type", "jump_intensity",
+                                "jump_sigma", "scheduled_jump", nullptr};
+    static const char* sjk[] = {"time_ns", "magnitude", nullptr};
+    static const char* lck[] = {"model", "params", nullptr};
+    static const char* lpk[] = {"mean_ns", "sigma", "min_ns", "max_ns", "alpha", "scale_ns", nullptr};
+    static const char* agk[] = {"agent_type", "count", "params", nullptr};
+    static const char* noise[] = {"order_size_mean", "order_size_std", "arrival_rate_hz", "price_offset_ticks",
+                                  "rebalance_interval_ns", nullptr};
+    static const char* value[] = {"fundamental_value_source", "order_size_mean", "threshold_ticks",
+                                  "arrival_rate_hz", "rebalance_interval_ns", nullptr};
+    static const char* mom[] = {"order_size_mean", "threshold_ticks", "lookback", "arrival_rate_hz",
+                                "rebalance_interval_ns", "lookback_ns", "threshold_bps", nullptr};
+    static const char* mm[] = {"spread_ticks", "depth_levels", "size_per_level", "rebalance_interval_ns",
+                               "arrival_rate_hz", nullptr};
+    std::string r;
+    if (sc.kind != JVal::OBJ) return "scenario is not a JSON object";
+    if ((r = unknown_keys(&sc, top, "scenario")) != "") return r;
+    const JVal* seed = sc.get("seed");
+    if (!is_num(seed)) return "seed is not a number";
+    {
+        int64_t sv = py_int(*seed, "seed");
+        if (sv < 0 || sv > 4294967295LL) return "seed outside [0, 2**32)";
+    }
+    const JVal* hz = sc.get("horizon_ns");
+    if (!is_num(hz) || !fits_int64(hz)) return "horizon_ns is not an int64-sized number";
+    const JVal* ex = sc.get("exchange_config");
+    if (!ex || ex->kind != JVal::OBJ) return "exchange_config missing";
+    if ((r = unknown_keys(ex, exk, "exchange_config")) != "") return r;
+    {
+        const JVal* pe = ex->get("protocol_enforcement");
+        bool proto = pe ? pe->truthy() : false;
+        const JVal* stp = ex->get("stp_policy");
+        if (proto && stp && stp->truthy()) {
+            std::string sp = get_str(ex, "stp_policy", "");
+            if (sp != "cancel_newest" && sp != "cancel_oldest")
+                return "stp_policy " + sp + " (only cancel_newest / cancel_oldest reproduced)";
+        }
+        for (const char* k : {"ack_delay_ns", "compute_delay_ns"}) {
+            const JVal* v = ex->get(k);
+            if (v && (!is_num(v) || !fits_int64(v) || py_int(*v, k) < 0))
+                return std::string(k) + " is not a non-negative int64 number";
+        }
+    }
+    const JVal* oc = sc.get("oracle_config");
+    if (!oc || oc->kind != JVal::OBJ) return "oracle_config missing";
+    if ((r = unknown_keys(oc, ock, "oracle_config")) != "") return r;
+    if (get_str(oc, "type", "mean_reverting") != "mean_reverting") return "oracle type " + get_str(oc, "type", "");
+    const JVal* op = oc->get("params");
+    if (op && op->kind != JVal::OBJ) return "oracle_config.params is not an object";
+    if ((r = unknown_keys(op, opk, "oracle_config.params")) != "") return r;
+    if (op) {
+        for (const char* k : {"initial_price", "kappa", "sigma", "jump_intensity", "jump_sigma"}) {
+            const JVal* v = op->get(k);
+            if (v && !is_num(v)) return std::string("oracle param ") + k + " is not a number";
+        }
+        const JVal* ip = op->get("initial_price");
+        if (ip && !fits_int64(ip)) return "initial_price out of int64";
+        const JVal* nt = op->get("noise_type");
+        if (nt && get_str(op, "noise_type", "gaussian") != "gaussian")
+            return "oracle noise_type " + get_str(op, "noise_type", "");
+        const JVal* sj = op->get("scheduled_jump");
+        if (sj && sj->truthy()) {
+            if (sj->kind != JVal::OBJ) return "scheduled_jump is not an object";
+            if ((r = unknown_keys(sj, sjk, "scheduled_jump")) != "") return r;
+            if (!is_num(sj->get("time_ns")) || !is_num(sj->get("magnitude")))
+                return "scheduled_jump needs numeric time_ns and magnitude";
+        }
+    }
+    const JVal* lc = sc.get("latency_config");
+    if (lc && lc->truthy()) {
+        if (lc->kind != JVal::OBJ) return "latency_config is not an object";
+        if ((r = unknown_keys(lc, lck, "latency_config")) != "") return r;
+        std::string model = get_str(lc, "model", "deterministic");
+        if (model != "log_normal" && model != "uniform" && model != "pareto" && model != "deterministic")
+            return "latency model " + model;
+        const JVal* lp = lc->get("params");
+        if (lp && lp->kind != JVal::OBJ) return "latency_config.params is not an object";
+        if ((r = unknown_keys(lp, lpk, "latency_config.params")) != "") return r;
+        if (lp)
+            for (auto& kv : lp->obj)
+                if (!is_num(&kv.second)) return "latency param " + kv.first + " is not a number";
+    }
+    const JVal* ac = sc.get("agent_configs");
+    if (!ac || ac->kind != JVal::ARR) return "agent_configs missing";
+    for (const JVal& cfg : ac->arr) {
+        if (cfg.kind != JVal::OBJ) return "agent config is not an object";
+        if ((r = unknown_keys(&cfg, agk, "agent_configs[]")) != "") return r;
+        std::string type = get_str(&cfg, "agent_type", "");
+        const char* const* allowed = type == "NoiseTrader" ? noise : type == "ValueTrader" ? value
+                                   : type == "MomentumTrader" ? mom : type == "MarketMaker" ? mm : nullptr;
+        if (!allowed) return "agent_type " + type;
+        const JVal* cnt = cfg.get("count");
+        if (!is_num(cnt) || !fits_int64(cnt) || py_int(*cnt, "count") < 0) return "agent count is not a non-negative number";
+        const JVal* p = cfg.get("params");
+        if (p && p->kind != JVal::OBJ) return "agent params is not an object";
+        std::string where = type + ".params";
+        if ((r = unknown_keys(p, allowed, where.c_str())) != "") return r;
+        if (p)
+            for (auto& kv : p->obj) {
+                if (kv.first == "fundamental_value_source") {
+                    if (get_str(p, "fundamental_value_source", "oracle") != "oracle")
+                        return "fundamental_value_source " + get_str(p, "fundamental_value_source", "");
+                    continue;
+                }
+                if (!is_num(&kv.second) || !fits_int64(&kv.second))
+                    return type + " param " + kv.first + " is not an int64-sized number";
+            }
+        if (type == "NoiseTrader" && p && p->get("price_offset_ticks") &&
+            py_int(*p->get("price_offset_ticks"), "price_offset_ticks") < 0)
+            return "negative price_offset_ticks";
+    }
+    return "";
+}
+
+[[noreturn]] static void fallback_exec(const std::string& reason, const std::string& config, const std::string& out,
+                                       bool have_seed, int64_t seed) {
+    std::fprintf(stderr,
+                 "jpsim-native: %s: outside the kernel's reproduced scope (%s); running the Python engine for this scenario\n",
+                 config.c_str(), reason.c_str());
+    std::fflush(stderr);
+#if !defined(_WIN32)
+    setenv("JPSIM_KERNEL", "py", 1);
+    std::string seed_s = std::to_string(seed);
+    const char* verb = std::getenv("JPSIM_PY_VERB");
+    std::string v = verb ? verb : "/usr/local/bin/simulate-py";
+    std::vector<std::string> argv_s;
+    if (access(v.c_str(), X_OK) == 0) argv_s = {v, "--config", config, "--out", out};
+    else argv_s = {"python", "-O", "-m", "jpsim.cli", "simulate", "--config", config, "--out", out};
+    if (have_seed) {
+        argv_s.push_back("--seed");
+        argv_s.push_back(seed_s);
+    }
+    std::vector<char*> argv;
+    for (auto& a : argv_s) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+    execvp(argv[0], argv.data());
+    std::fprintf(stderr, "jpsim-native: exec of the Python engine failed (%s)\n", std::strerror(errno));
+#else
+    std::fprintf(stderr, "jpsim-native: no Python fallback on Windows\n");
+#endif
+    std::exit(1);
+}
+
 // ------------------------------------------------------------------------------- spec build
 static const int64_t DATE_NS = 1612483200000000000LL;
 static const int64_t NS_0930 = 9LL * 3600 * 1000000000LL + 30LL * 60 * 1000000000LL;
@@ -361,13 +550,10 @@ static BuiltSpec build_spec(const JVal& sc, bool have_seed_override, int64_t see
     }
 
     const JVal* lc = sc.get("latency_config");
-    if (!lc || !lc->truthy()) {
-        std::fprintf(stderr, "jpsim-native: scenario has no latency_config (unsupported)\n");
-        std::exit(2);
-    }
-    const JVal* lp = lc->get("params");
-    std::string model = get_str(lc, "model", "deterministic");
-    s.lat_model = model == "log_normal" ? 1 : model == "uniform" ? 2 : model == "pareto" ? 3 : 0;
+    bool have_lc = lc && lc->truthy();
+    const JVal* lp = have_lc ? lc->get("params") : nullptr;
+    std::string model = have_lc ? get_str(lc, "model", "deterministic") : "__line__";
+    s.lat_model = model == "__line__" ? 4 : model == "log_normal" ? 1 : model == "uniform" ? 2 : model == "pareto" ? 3 : 0;
     s.lat_mean_ns = get_float(lp, "mean_ns", 0.0);
     s.lat_sigma = get_float(lp, "sigma", 0.0);
     s.lat_min_ns = get_float(lp, "min_ns", 0.0);
@@ -764,8 +950,17 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
         }
         std::exit(2);
     }
-    JParser parser(text);
-    JVal sc = parser.parse();
+    JVal sc;
+    {
+        JParser parser(text);
+        std::string err = parser.try_parse(sc);
+        if (!err.empty())
+            fallback_exec("JSON not understood by the native parser: " + err, config_path, out_path, have_seed, seed);
+    }
+    {
+        std::string why = scope_check(sc);
+        if (!why.empty()) fallback_exec(why, config_path, out_path, have_seed, seed);
+    }
     BuiltSpec bs = build_spec(sc, have_seed, seed);
 
     Kernel* k = new Kernel();
@@ -923,8 +1118,13 @@ static int simulate_batch(const std::string& batch_dir, const std::string& out_d
             std::fprintf(stderr, "simulate-batch: missing events.json for %s\n", stem.c_str());
             return 1;
         }
+        JVal ev;
         JParser p(text);
-        JVal ev = p.parse();
+        std::string err = p.try_parse(ev);
+        if (!err.empty()) {
+            std::fprintf(stderr, "simulate-batch: events.json of %s unreadable (%s)\n", stem.c_str(), err.c_str());
+            return 1;
+        }
         int64_t ne = get_int(&ev, "n_events", 0);
         total_events += ne;
         peak = std::max(peak, get_int(&ev, "peak_memory_bytes", 0));

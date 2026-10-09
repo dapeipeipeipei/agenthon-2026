@@ -112,6 +112,10 @@ jobs:
           raise SystemExit(bad)
           PY
 
+      - name: "Synthetic scenarios in the image: kernel edges + Python fallback (simulate vs simulate-py)"
+        run: |
+          python t3-work/tools/synthetic_check.py --out "$PWD/t3-ci-out/syn" --pythonpath t3-work/engine --image t3-local:ci | tee t3-ci-out/synthetic.txt
+
       - name: Official scorer g0/g1 gates (reference parquet absent in CI, so g3 is not run here)
         run: |
           python - <<'PY'

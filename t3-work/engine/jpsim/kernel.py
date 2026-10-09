@@ -183,10 +183,12 @@ def build_spec(scenario: dict[str, Any], seed: int | None = None) -> tuple[JpkSp
 
     latency_cfg = scenario.get("latency_config")
     if not latency_cfg:
-        raise NotImplementedError("jpkernel needs latency_config (the ABIDES line-distance fallback is not implemented)")
+        # build_config falls back to ABIDES's line-distance model (generate_latency_model); the
+        # kernel implements it as model 4 and draws the same single global seed for it.
+        latency_cfg = {"model": "__line__", "params": {}}
     params = latency_cfg.get("params", {})
     model = str(latency_cfg.get("model", "deterministic"))
-    spec.lat_model = _LAT_MODELS.get(model, 0)
+    spec.lat_model = 4 if model == "__line__" else _LAT_MODELS.get(model, 0)
     spec.lat_mean_ns = float(params.get("mean_ns", 0.0))
     spec.lat_sigma = float(params.get("sigma", 0.0))
     spec.lat_min_ns = float(params.get("min_ns", 0.0))

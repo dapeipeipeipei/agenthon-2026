@@ -261,7 +261,7 @@ struct JpkSpec {
     int64_t jump_time_ns;
     int64_t jump_magnitude;
     int32_t stp_policy;  // 0 none, 1 cancel_newest, 2 cancel_oldest
-    int32_t lat_model;   // 0 constant, 1 log_normal, 2 uniform, 3 pareto
+    int32_t lat_model;   // 0 constant, 1 log_normal, 2 uniform, 3 pareto, 4 ABIDES line-distance (no latency_config)
     int64_t pipeline_delay;
     int64_t computation_delay;
     double lat_mean_ns;
@@ -504,6 +504,7 @@ struct Kernel {
     JpkSpec spec;
     RandomState global;
     RandomState latency_rs;
+    std::vector<int64_t> line_latency;  // lat_model 4: n x n integer latencies
     Oracle oracle;
     std::vector<Agent> agents;
     OrderBook book;
@@ -542,6 +543,7 @@ struct Kernel {
 
     int64_t get_latency(int32_t sender, int32_t recipient) {
         if (sender == recipient) return 0;
+        if (spec.lat_model == 4) return line_latency[(size_t)sender * agents.size() + (size_t)recipient];
         double value;
         switch (spec.lat_model) {
             case 1: value = latency_rs.lognormal(spec.lat_mu, spec.lat_sigma); break;
@@ -870,6 +872,21 @@ struct Kernel {
             a.sigma_n = s.sigma_n;
         }
         latency_rs.seed((uint32_t)global.randint(0, (int64_t)1 << 32));
+        if (spec.lat_model == 4) {
+            // abides_markets.utils.generate_latency_model("deterministic"): agents sit on a line from
+            // NYC to Seattle; pairwise euclidean distance (scipy pdist of 1-D points, sqrt((xi-xj)^2)
+            // == |xi-xj| exactly in binary floating point) in metres -> light-nanoseconds, truncated.
+            size_t n = agents.size();
+            std::vector<double> x(n);
+            for (size_t i = 0; i < n; i++) x[i] = latency_rs.uniform(0.0, 3866660.0);
+            line_latency.assign(n * n, 0);
+            for (size_t i = 0; i < n; i++)
+                for (size_t j = 0; j < n; j++) {
+                    double d = x[i] - x[j];
+                    double dist = std::sqrt(d * d);
+                    line_latency[i * n + j] = (int64_t)(dist / 299792458e-9);
+                }
+        }
         (void)global.randint(0, (int64_t)1 << 32);  // random_state_kernel (unused by the run)
 
         ex_pipeline_delay = spec.pipeline_delay;
