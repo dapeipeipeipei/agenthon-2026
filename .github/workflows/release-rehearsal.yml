@@ -23,13 +23,19 @@ on:
       track4_ref:
         description: "track4-analysis-public commit (scorer 5.2.2)"
         default: "1c744e1d6725340643a533f436517d72b53ca0e1"
+      t2_image:
+        description: "Track 2 image to rehearse, by digest (default: v5a round-2, Dev upload 970412)"
+        default: "ghcr.io/dapeipeipeipei/jinpei-t2@sha256:5bb2bc08aae6a7ee666cd24191acc4b5300b4a877da9e9d0b9de09794dcb2a76"
+      t4_image:
+        description: "Track 4 image to rehearse, by digest (default: E4, Dev upload 970411)"
+        default: "ghcr.io/dapeipeipeipei/jinpei-t4@sha256:f66ed2076395d6d83ccfbe6723098d90d53e85f057a44aa1160801c823fc9cb2"
 
 permissions:
   contents: read      # no packages scope: GHCR is reached anonymously only
 
 env:
-  T2_IMAGE: ghcr.io/dapeipeipeipei/jinpei-t2@sha256:c558843f6826941ae2e9320417ffc02e036076e252c6717335183348df6b7d74
-  T4_IMAGE: ghcr.io/dapeipeipeipei/jinpei-t4@sha256:bf2a164756244a4ede12e5ea92bf164b60f47c2ba664f9cd955c117f8c68e01c
+  T2_IMAGE: ${{ inputs.t2_image }}
+  T4_IMAGE: ${{ inputs.t4_image }}
   TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
   PYTHONUTF8: "1"
 
