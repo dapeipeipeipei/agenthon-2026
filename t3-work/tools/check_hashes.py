@@ -22,6 +22,8 @@ import sys
 
 import pyarrow.parquet as pq
 
+BYTES = True  # --sidecar-only: compare row counts with the declared references instead of bytes
+
 ALLOWED_SINGLE = {"trace.parquet", "message_trace.parquet", "events.json", "profile.json"}
 ALLOWED_SUB = {"trace.parquet", "message_trace.parquet", "events.json"}
 
@@ -64,10 +66,13 @@ def check_single(unit: pathlib.Path, out: pathlib.Path) -> tuple[list[str], int]
         problems.append(f"files outside the output allowlist: {extra}")
     for fn, key in (("trace.parquet", "trace_sha256"), ("message_trace.parquet", "message_trace_sha256")):
         p = out / fn
+        want = ref['n_events'] if fn == 'trace.parquet' else ref.get('n_messages')
         if not p.is_file():
             problems.append(f"missing {fn}")
-        elif sha(p) != ref[key]:
-            problems.append(f"{fn} sha256 differs from the reference ({rows(p)} rows vs {ref['n_events'] if fn == 'trace.parquet' else ref.get('n_messages')})")
+        elif BYTES and sha(p) != ref[key]:
+            problems.append(f"{fn} sha256 differs from the reference ({rows(p)} rows vs {want})")
+        elif not BYTES and want is not None and rows(p) != int(want):
+            problems.append(f"{fn}: {rows(p)} rows vs reference {want}")
     evp = out / "events.json"
     if not evp.is_file():
         problems.append("missing events.json")
@@ -97,8 +102,10 @@ def check_batch(unit: pathlib.Path, out: pathlib.Path) -> tuple[list[str], int]:
             p = d / fn
             if not p.is_file():
                 problems.append(f"{sub}: missing {fn}")
-            elif sha(p) != s[key]:
+            elif BYTES and sha(p) != s[key]:
                 problems.append(f"{sub}: {fn} sha256 differs from the reference")
+            elif not BYTES and fn == "trace.parquet" and rows(p) != int(s["n_events"]):
+                problems.append(f"{sub}: {rows(p)} trace rows vs reference {s['n_events']}")
         evp = d / "events.json"
         if not evp.is_file():
             problems.append(f"{sub}: missing events.json")
@@ -134,7 +141,11 @@ def main() -> int:
     ap.add_argument("--out-root", required=True, type=pathlib.Path)
     ap.add_argument("--timing", type=pathlib.Path, default=None)
     ap.add_argument("--json", type=pathlib.Path, default=None)
+    ap.add_argument("--sidecar-only", action="store_true",
+                    help="no byte comparison (content-identical writers): row counts vs the references + sidecar arithmetic + allowlist")
     args = ap.parse_args()
+    global BYTES
+    BYTES = not args.sidecar_only
     timing = json.loads(args.timing.read_text()) if args.timing and args.timing.is_file() else {}
     names = sorted(p.name for p in args.units.iterdir() if p.is_dir())
     ok = 0

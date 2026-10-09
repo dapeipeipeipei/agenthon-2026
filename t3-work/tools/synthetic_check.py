@@ -116,8 +116,29 @@ def sha(p: pathlib.Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "MISSING"
 
 
+COMPARE = "bytes"  # --compare content: the kernel path's writer is content-identical, not byte-identical
+
+
 def hashes(out: pathlib.Path) -> tuple[str, str]:
-    return sha(out / "trace.parquet"), sha(out / "message_trace.parquet")
+    """Identity of the two output files: sha256 of the bytes, or (``--compare content``) a digest
+    of what pyarrow reads back (schema with metadata, pandas dtypes, every value)."""
+    if COMPARE == "bytes":
+        return sha(out / "trace.parquet"), sha(out / "message_trace.parquet")
+    import pyarrow.parquet as pq
+
+    def content(p: pathlib.Path) -> str:
+        if not p.is_file():
+            return "MISSING"
+        t = pq.read_table(p)
+        df = t.to_pandas()
+        h = hashlib.sha256()
+        h.update(repr(t.schema.metadata).encode())
+        h.update(str(t.schema).encode())
+        h.update(str(list(df.dtypes.astype(str))).encode())
+        h.update(df.to_csv(index=False).encode())
+        return h.hexdigest()
+
+    return content(out / "trace.parquet"), content(out / "message_trace.parquet")
 
 
 class Runner:
@@ -175,7 +196,11 @@ def main() -> int:
     ap.add_argument("--exe", default=None)
     ap.add_argument("--image", default=None)
     ap.add_argument("--ctypes", action="store_true")
+    ap.add_argument("--compare", choices=["bytes", "content"], default="bytes",
+                    help="content: compare the tables pyarrow reads back (lean native writer) instead of the bytes")
     args = ap.parse_args()
+    global COMPARE
+    COMPARE = args.compare
     root = args.out
     if root.exists():
         shutil.rmtree(root)

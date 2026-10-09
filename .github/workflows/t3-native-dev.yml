@@ -1,17 +1,23 @@
-# Dev loop for the Python-free Track 3 binary (t3-work/engine/jpkernel/jpsim_native.cpp): build it
-# inside the runtime base image against the pyarrow 15.0.2 wheel's libarrow/libparquet, run all 71
-# public units with it, and check every output byte against the organizer's reference hashes.
-# No Docker image is built or pushed here; t3-image.yml does that.
+# Dev loop for the Python-free Track 3 binary (t3-work/engine/jpkernel/jpsim_native.cpp), no Docker:
+# build the lean static binary (own parquet writer) and the Arrow-linked reference variant inside
+# the runtime base image, run all 71 public units with both, check the Arrow variant byte-for-byte
+# against the organizer's reference hashes and the lean variant table-for-table against the Arrow
+# variant's files, run the synthetic / fallback suite with the lean binary, then time the process
+# start-up and the smallest / largest units for each variant (where the fixed cost goes).
+# t3-image.yml builds and pushes the image.
 name: t3-native-dev
 
 on:
   workflow_dispatch:
   push:
-    branches: [t3/kernel-cpp]
+    branches: [t3/kernel-cpp, t3/native-lean]
     paths:
       - "t3-work/engine/jpkernel/**"
       - "t3-work/tools/run_units.py"
       - "t3-work/tools/check_hashes.py"
+      - "t3-work/tools/check_content.py"
+      - "t3-work/tools/bench_native.py"
+      - "t3-work/tools/synthetic_check.py"
       - ".github/workflows/t3-native-dev.yml"
 
 permissions:
@@ -30,9 +36,9 @@ jobs:
     steps:
       - name: Toolchain
         run: |
-          apt-get update && apt-get install -y --no-install-recommends g++ git ca-certificates && rm -rf /var/lib/apt/lists/*
-          pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "scipy==1.17.1"
-          g++ --version; ldd --version 2>&1 || true
+          apt-get update && apt-get install -y --no-install-recommends g++ git ca-certificates strace time file && rm -rf /var/lib/apt/lists/*
+          pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "scipy==1.17.1" "pandas>=2"
+          g++ --version | head -1; ldd --version 2>&1 | head -1; nproc; cat /sys/kernel/mm/transparent_hugepage/enabled || true
 
       - uses: actions/checkout@v4
 
@@ -44,44 +50,107 @@ jobs:
           path: track3-simulation-public
           lfs: false
 
-      - name: Build jpsim-native
+      - name: Build the three variants (lean static, lean dynamic, Arrow-linked reference writer)
         run: |
-          python t3-work/engine/jpkernel/build_native.py --out /tmp/jpsim-native
-          ls -la /tmp/jpsim-native
-          ldd /tmp/jpsim-native | grep -E "arrow|parquet|libstdc|libm"
-          /tmp/jpsim-native --help
+          python t3-work/engine/jpkernel/build_native.py --out /tmp/lean
+          python t3-work/engine/jpkernel/build_native.py --out /tmp/lean-dyn --no-static
+          python t3-work/engine/jpkernel/build_native.py --out /tmp/arrow --arrow
+          ls -la /tmp/lean /tmp/lean-dyn /tmp/arrow
+          file /tmp/lean /tmp/lean-dyn /tmp/arrow
+          echo "--- ldd lean:"; ldd /tmp/lean || true
+          echo "--- ldd lean-dyn:"; ldd /tmp/lean-dyn
+          echo "--- ldd arrow:"; ldd /tmp/arrow | grep -E "arrow|parquet|libstdc|libm|libc\."
+          /tmp/lean --help
+          cp /tmp/lean /tmp/simulate && /tmp/simulate --help | head -1
 
-      - name: "Info: does np.log(mean_ns) equal glibc log on this CPU? (SVML on AVX-512 may differ by 1 ulp; both reproduce the references)"
+      - name: Reference variant (Arrow writer) on every unit + byte-level check against the declared reference hashes
         run: |
+          mkdir -p arrow-out
+          python t3-work/tools/run_units.py --exe /tmp/arrow --units track3-simulation-public/units --out-root arrow-out | tee arrow-run.txt
+          python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root arrow-out --timing arrow-out/timing.json | tee arrow-hashes.txt
+
+      - name: Lean variant on every unit + table content check against the reference variant's files
+        run: |
+          mkdir -p lean-out
+          python t3-work/tools/run_units.py --exe /tmp/lean --units track3-simulation-public/units --out-root lean-out | tee lean-run.txt
+          python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root lean-out --ref-root arrow-out | tee lean-content.txt
+          python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root lean-out --timing lean-out/timing.json --sidecar-only | tee lean-sidecar.txt
+
+      - name: Lean variant, uncompressed pages (JPSIM_CODEC=none) on every unit + content check
+        run: |
+          mkdir -p lean-none
+          python t3-work/tools/run_units.py --exe /tmp/lean --env JPSIM_CODEC=none --units track3-simulation-public/units --out-root lean-none | tail -3
+          python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root lean-none --ref-root arrow-out | tail -2
+
+      - name: Repeat stability (lean, 3 units twice, byte-identical) + file sizes vs reference
+        run: |
+          mkdir -p lean-rep
+          python t3-work/tools/run_units.py --exe /tmp/lean --units track3-simulation-public/units --out-root lean-rep --only t3-s001-price-time-priority t3-mp05-cancel-churn-newest t3-gbatch-varsize t3-gb-mega-throughput | tail -1
           python - <<'PY'
-          import json, pathlib, numpy as np, math, ctypes
-          libm = ctypes.CDLL("libm.so.6"); libm.log.restype = ctypes.c_double; libm.log.argtypes = [ctypes.c_double]
+          import hashlib, pathlib
+          a, b = pathlib.Path("lean-out"), pathlib.Path("lean-rep")
           bad = 0
-          for p in list(pathlib.Path("track3-simulation-public/units").glob("*/scenario.json")) + list(pathlib.Path("track3-simulation-public/units").glob("*/scenarios/*.json")):
-              s = json.loads(p.read_text()); lc = s.get("latency_config") or {}; x = float(lc.get("params", {}).get("mean_ns", 0.0))
-              if x > 0 and float(np.log(x)) != libm.log(x):
-                  bad += 1; print("MISMATCH", p, x, repr(float(np.log(x))), repr(libm.log(x)))
-          print("np.log vs glibc log mismatches:", bad, "(informational)")
+          for p in sorted(b.rglob("*.parquet")):
+              q = a / p.relative_to(b)
+              same = hashlib.sha256(p.read_bytes()).hexdigest() == hashlib.sha256(q.read_bytes()).hexdigest()
+              bad += not same
+              r = pathlib.Path("arrow-out") / p.relative_to(b)
+              print(("same " if same else "DIFF ") + f"{str(p.relative_to(b)):60} lean {p.stat().st_size:10d} B  reference {r.stat().st_size:10d} B")
+          raise SystemExit(bad)
           PY
 
-      - name: Run every public unit with the native binary (one process per unit)
+      - name: "Synthetic scenarios: kernel edges + Python fallback (lean native vs JPSIM_KERNEL=py)"
         run: |
-          mkdir -p native-out
-          python t3-work/tools/run_units.py --exe /tmp/jpsim-native --units track3-simulation-public/units --out-root native-out | tee native-run.txt
+          python t3-work/tools/synthetic_check.py --out /tmp/syn --python python --pythonpath t3-work/engine --exe /tmp/lean | tee lean-synthetic.txt
 
-      - name: Byte-level check against the declared reference hashes
+      - name: "Where the fixed cost goes: dynamic loader statistics, syscalls, page faults"
         run: |
-          python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root native-out --timing native-out/timing.json | tee native-hashes.txt
+          mkdir -p /tmp/ld && cd /tmp/ld
+          for exe in lean-dyn arrow; do
+            echo "=== LD_DEBUG=statistics /tmp/$exe (s001)"
+            LD_DEBUG=statistics /tmp/$exe simulate --config "$GITHUB_WORKSPACE/track3-simulation-public/units/t3-s001-price-time-priority/scenario.json" --out /tmp/ld/$exe/trace.parquet 2>&1 >/dev/null | grep -E "total startup time|time needed for relocation|number of relocations|time needed to load objects|final number of relocations" || true
+          done
+          cd "$GITHUB_WORKSPACE"
+          python t3-work/tools/bench_native.py --units track3-simulation-public/units \
+            --exe lean=/tmp/lean --exe lean-dyn=/tmp/lean-dyn --exe arrow=/tmp/arrow \
+            --only t3-s001-price-time-priority --repeat 15 --strace | tee bench-start.txt
 
-      - name: "Synthetic scenarios: kernel edges + Python fallback (native vs JPSIM_KERNEL=py)"
+      - name: "Per-unit timing: 10 smallest + 5 largest, lean vs arrow, with env variants"
         run: |
-          python t3-work/tools/synthetic_check.py --out /tmp/syn --python python --pythonpath t3-work/engine --exe /tmp/jpsim-native | tee native-synthetic.txt
+          python t3-work/tools/bench_native.py --units track3-simulation-public/units \
+            --exe lean=/tmp/lean --exe arrow=/tmp/arrow \
+            --variant none=JPSIM_CODEC=none --variant hp=GLIBC_TUNABLES=glibc.malloc.hugetlb=1 --variant t1=JPSIM_THREADS=1 \
+            --smallest 10 --largest 5 --repeat 5 --out bench.json | tee bench.txt
 
       - name: Summary
         if: always()
         run: |
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -5 native-run.txt >> "$GITHUB_STEP_SUMMARY" || true
-          tail -3 native-hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
-          cat native-synthetic.txt >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '```'
+            tail -3 arrow-hashes.txt || true
+            tail -2 lean-content.txt || true
+            tail -2 lean-sidecar.txt || true
+            cat lean-synthetic.txt || true
+            echo; cat bench-start.txt || true
+            echo; cat bench.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t3-native-dev
+          path: |
+            arrow-run.txt
+            arrow-hashes.txt
+            arrow-out/timing.json
+            lean-run.txt
+            lean-content.txt
+            lean-sidecar.txt
+            lean-out/timing.json
+            lean-none/timing.json
+            lean-synthetic.txt
+            bench-start.txt
+            bench.txt
+            bench.json
+          retention-days: 30

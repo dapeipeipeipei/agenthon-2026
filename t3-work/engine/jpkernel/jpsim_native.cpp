@@ -1,32 +1,37 @@
 // jpsim-native: the Track 3 `simulate` / `simulate-batch` verbs with no Python at run time.
 //
-// The simulation is jpkernel (included below, same translation unit); the parquet files are
-// written by the parquet-cpp / Arrow C++ libraries that the pyarrow 15.0.2 wheel ships
-// (libarrow.so.1500 + libparquet.so.1500), called with exactly the WriterProperties that
-// pyarrow.parquet.write_table(table, path, compression="snappy") builds, on an Arrow table with
-// the same schema (field types, nullability, the pandas schema metadata) and the same single-chunk
-// arrays jpsim.trace_fast builds: the bytes therefore come from the very same code path as the
-// reference writer. Scenario parsing reproduces jpsim.kernel.build_spec (itself the kit adapter's
-// build_config) including Python's int()/float()/truthiness conventions.
+// The simulation is jpkernel (included below, same translation unit). The two parquet files are
+// written by jpparquet.h, a self-contained writer (thrift compact + own snappy + SHA-256): no
+// Arrow, no shared libraries, so the binary links statically and the process start is the
+// kernel's exec plus nothing. The files are content-identical to the reference writer's (schema,
+// `pandas` + `ARROW:schema` metadata, dtypes, values; tools/check_content.py), not byte-identical
+// (the reference is pyarrow's dictionary pages with statistics). With -DJPSIM_ARROW_WRITER the
+// pyarrow 15.0.2 wheel's libarrow/libparquet are used instead and the bytes equal the reference's
+// (the kernel's own regression gate). Scenario parsing reproduces jpsim.kernel.build_spec (itself
+// the kit adapter's build_config) including Python's int()/float()/truthiness conventions.
 //
 //   jpsim-native simulate --config <scenario.json> --out <dir>/trace.parquet [--seed N]
 //   jpsim-native simulate-batch --batch-dir <dir> --out-dir <dir> [--workers N]
+//   (installed as /usr/local/bin/simulate and /usr/local/bin/simulate-batch: the verb is then
+//    taken from the program name)
 //
 // Copyright (c) 2026 team Jin & Pei. BSD-3-Clause.
 
 #include "jpkernel.cpp"
+#include "jpparquet.h"
 
+#if defined(JPSIM_ARROW_WRITER)
 #include <arrow/api.h>
 #include <arrow/io/file.h>
 #include <parquet/arrow/writer.h>
 #include <parquet/properties.h>
+#endif
 
 #include <chrono>
 #include <cerrno>
 #include <cmath>
-#include <fstream>
+#include <cstdio>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -38,6 +43,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sched.h>
+#else
+#include <direct.h>
+#include <io.h>
+#include <process.h>
 #endif
 
 namespace {
@@ -460,7 +469,24 @@ static std::string scope_check(const JVal& sc) {
     execvp(argv[0], argv.data());
     std::fprintf(stderr, "jpsim-native: exec of the Python engine failed (%s)\n", std::strerror(errno));
 #else
-    std::fprintf(stderr, "jpsim-native: no Python fallback on Windows\n");
+    // Development box only (the image is Linux): spawn the Python engine and exit with its code.
+    _putenv_s("JPSIM_KERNEL", "py");
+    std::string seed_s = std::to_string(seed);
+    const char* py = std::getenv("JPSIM_PYTHON");
+    std::vector<std::string> argv_s = {py ? py : "python", "-O", "-m", "jpsim.cli", "simulate", "--config", config,
+                                       "--out", out};
+    if (have_seed) {
+        argv_s.push_back("--seed");
+        argv_s.push_back(seed_s);
+    }
+    std::vector<std::string> quoted;
+    for (auto& a : argv_s) quoted.push_back(a.find(' ') == std::string::npos ? a : "\"" + a + "\"");
+    std::vector<const char*> argv;
+    for (auto& a : quoted) argv.push_back(a.c_str());
+    argv.push_back(nullptr);
+    intptr_t rc = _spawnvp(_P_WAIT, argv[0], argv.data());
+    if (rc >= 0) std::exit((int)rc);
+    std::fprintf(stderr, "jpsim-native: spawn of the Python engine failed (%s)\n", std::strerror(errno));
 #endif
     std::exit(1);
 }
@@ -484,6 +510,7 @@ static int64_t interval_ns(const JVal* p) {
 }
 
 static BuiltSpec build_spec(const JVal& sc, bool have_seed_override, int64_t seed_override) {
+    init_libm();  // lat_mu below is a libm log (Windows resolves it from ucrtbase.dll)
     BuiltSpec b;
     std::memset(&b.spec, 0, sizeof(b.spec));
     JpkSpec& s = b.spec;
@@ -611,85 +638,103 @@ static BuiltSpec build_spec(const JVal& sc, bool have_seed_override, int64_t see
     return b;
 }
 
-// ---------------------------------------------------------------------------------- SHA-256
-struct Sha256 {
-    uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-    uint8_t buf[64];
-    size_t buf_len = 0;
-    uint64_t total = 0;
-    static inline uint32_t rotr(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
-    void block(const uint8_t* p) {
-        static const uint32_t K[64] = {
-            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
-        uint32_t w[64];
-        for (int i = 0; i < 16; i++)
-            w[i] = (uint32_t)p[4 * i] << 24 | (uint32_t)p[4 * i + 1] << 16 | (uint32_t)p[4 * i + 2] << 8 | p[4 * i + 3];
-        for (int i = 16; i < 64; i++) {
-            uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
-            uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
-        }
-        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
-        for (int i = 0; i < 64; i++) {
-            uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-            uint32_t ch = (e & f) ^ (~e & g);
-            uint32_t t1 = hh + S1 + ch + K[i] + w[i];
-            uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-            uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-            uint32_t t2 = S0 + maj;
-            hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
-        }
-        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+// ------------------------------------------------------------------------------------ files
+static std::string read_file(const std::string& path, bool* ok) {
+    std::string out;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) {
+        *ok = false;
+        return out;
     }
-    void update(const uint8_t* p, size_t n) {
-        total += n;
-        while (n > 0) {
-            size_t take = std::min(n, 64 - buf_len);
-            std::memcpy(buf + buf_len, p, take);
-            buf_len += take;
-            p += take;
-            n -= take;
-            if (buf_len == 64) {
-                block(buf);
-                buf_len = 0;
+    char buf[1 << 16];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    *ok = true;
+    return out;
+}
+
+static bool write_file(const std::string& path, const std::string& data) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    bool ok = data.empty() || std::fwrite(data.data(), 1, data.size(), f) == data.size();
+    ok = (std::fclose(f) == 0) && ok;
+    return ok;
+}
+
+static bool file_exists(const std::string& p) {
+#if defined(_WIN32)
+    return _access(p.c_str(), 0) == 0;
+#else
+    return access(p.c_str(), F_OK) == 0;
+#endif
+}
+
+static void mkdirs(const std::string& dir) {
+    std::string cur;
+    for (size_t i = 0; i < dir.size(); i++) {
+        cur += dir[i];
+        if (dir[i] == '/' || dir[i] == '\\' || i + 1 == dir.size()) {
+            if (cur != "/" && !cur.empty() && cur.back() != ':') {
+#if defined(_WIN32)
+                _mkdir(cur.c_str());
+#else
+                mkdir(cur.c_str(), 0755);
+#endif
             }
         }
     }
-    std::string hexdigest() {
-        uint64_t bits = total * 8;
-        uint8_t pad = 0x80;
-        update(&pad, 1);
-        uint8_t z = 0;
-        while (buf_len != 56) update(&z, 1);
-        uint8_t len[8];
-        for (int i = 0; i < 8; i++) len[i] = (uint8_t)(bits >> (56 - 8 * i));
-        update(len, 8);
-        char out[65];
-        for (int i = 0; i < 8; i++) std::snprintf(out + 8 * i, 9, "%08x", h[i]);
-        return std::string(out, 64);
-    }
-};
-
-static std::string sha256_file(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    Sha256 h;
-    std::vector<uint8_t> buf(1 << 20);
-    while (f) {
-        f.read((char*)buf.data(), (std::streamsize)buf.size());
-        std::streamsize n = f.gcount();
-        if (n > 0) h.update(buf.data(), (size_t)n);
-    }
-    return h.hexdigest();
 }
 
-// ------------------------------------------------------------------------------- Arrow/parquet
+static std::string dirname_of(const std::string& p) {
+    size_t k = p.find_last_of("/\\");
+    return k == std::string::npos ? "." : p.substr(0, k);
+}
+static std::string stem_of(const std::string& p) {
+    size_t k = p.find_last_of("/\\");
+    std::string name = k == std::string::npos ? p : p.substr(k + 1);
+    size_t d = name.find_last_of('.');
+    return d == std::string::npos ? name : name.substr(0, d);
+}
+static std::string basename_of(const std::string& p) {
+    size_t k = p.find_last_of("/\\");
+    std::string name = k == std::string::npos ? p : p.substr(k + 1);
+    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".exe") == 0) name.resize(name.size() - 4);
+    return name;
+}
+
+// CPUs this container may use: the cgroup v2 CPU quota (--cpus=4 is a CFS quota, the affinity mask
+// still shows every host CPU), else the affinity mask, else 1.
+static int usable_cpus() {
+    int n = 0;
+#if !defined(_WIN32)
+    bool ok;
+    std::string q = read_file("/sys/fs/cgroup/cpu.max", &ok);
+    if (ok) {
+        long long quota = 0, period = 0;
+        if (std::sscanf(q.c_str(), "%lld %lld", &quota, &period) == 2 && quota > 0 && period > 0)
+            n = (int)((quota + period - 1) / period);
+    }
+    if (n <= 0) {
+        cpu_set_t set;
+        if (sched_getaffinity(0, sizeof(set), &set) == 0) n = CPU_COUNT(&set);
+    }
+#endif
+    return n > 0 ? n : 1;
+}
+
+static int64_t peak_rss_bytes() {
+#if !defined(_WIN32)
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) return (int64_t)ru.ru_maxrss * 1024;
+#endif
+    return 0;
+}
+
+// ------------------------------------------------------------------------------ table layout
+// Key-value metadata of the reference files: the `pandas` block pandas 1.5.3 + pyarrow 15.0.2
+// wrote, and the `ARROW:schema` IPC message (base64) carrying the same schema, so a reader
+// restores exactly the reference's Arrow schema (nullable Int64 columns included).
 static const char* TRACE_PANDAS_META =
     "{\"index_columns\": [], \"column_indexes\": [], \"columns\": [{\"name\": \"t_ns\", \"field_name\": \"t_ns\", "
     "\"pandas_type\": \"int64\", \"numpy_type\": \"int64\", \"metadata\": null}, {\"name\": \"agent_id\", \"field_name\": "
@@ -715,23 +760,73 @@ static const char* MSG_PANDAS_META =
     "\"pandas_type\": \"int64\", \"numpy_type\": \"Int64\", \"metadata\": null}, {\"name\": \"causal_parent\", "
     "\"field_name\": \"causal_parent\", \"pandas_type\": \"int64\", \"numpy_type\": \"Int64\", \"metadata\": null}], "
     "\"creator\": {\"library\": \"pyarrow\", \"version\": \"15.0.2\"}, \"pandas_version\": \"1.5.3\"}";
+static const char* TRACE_ARROW_SCHEMA =
+    "/////3gFAAAQAAAAAAAKAA4ABgAFAAgACgAAAAABBAAQAAAAAAAKAAwAAAAEAAgACgAAAMADAAAEAAAAAQAAAAwAAAAIAAwA"
+    "BAAIAAgAAAAIAAAAEAAAAAYAAABwYW5kYXMAAIoDAAB7ImluZGV4X2NvbHVtbnMiOiBbXSwgImNvbHVtbl9pbmRleGVzIjog"
+    "W10sICJjb2x1bW5zIjogW3sibmFtZSI6ICJ0X25zIiwgImZpZWxkX25hbWUiOiAidF9ucyIsICJwYW5kYXNfdHlwZSI6ICJp"
+    "bnQ2NCIsICJudW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJhZ2VudF9pZCIsICJm"
+    "aWVsZF9uYW1lIjogImFnZW50X2lkIiwgInBhbmRhc190eXBlIjogImludDMyIiwgIm51bXB5X3R5cGUiOiAiaW50MzIiLCAi"
+    "bWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogIm1zZ190eXBlIiwgImZpZWxkX25hbWUiOiAibXNnX3R5cGUiLCAicGFuZGFz"
+    "X3R5cGUiOiAidW5pY29kZSIsICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAi"
+    "c2lkZSIsICJmaWVsZF9uYW1lIjogInNpZGUiLCAicGFuZGFzX3R5cGUiOiAidW5pY29kZSIsICJudW1weV90eXBlIjogInN0"
+    "cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAicHJpY2UiLCAiZmllbGRfbmFtZSI6ICJwcmljZSIsICJwYW5k"
+    "YXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJz"
+    "aXplIiwgImZpZWxkX25hbWUiOiAic2l6ZSIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogImludDY0"
+    "IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJvcmRlcl9pZCIsICJmaWVsZF9uYW1lIjogIm9yZGVyX2lkIiwgInBh"
+    "bmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAibWV0YWRhdGEiOiBudWxsfV0sICJjcmVhdG9y"
+    "IjogeyJsaWJyYXJ5IjogInB5YXJyb3ciLCAidmVyc2lvbiI6ICIxNS4wLjIifSwgInBhbmRhc192ZXJzaW9uIjogIjEuNS4z"
+    "In0AAAcAAABMAQAABAEAANAAAACkAAAAcAAAADwAAAAEAAAA4P7//wAAAQIQAAAAHAAAAAQAAAAAAAAACAAAAG9yZGVyX2lk"
+    "AAAAANT+//8AAAABQAAAABT///8AAAECEAAAABgAAAAEAAAAAAAAAAQAAABzaXplAAAAAAT///8AAAABQAAAAET///8AAAEC"
+    "EAAAABgAAAAEAAAAAAAAAAUAAABwcmljZQAAADT///8AAAABQAAAAHT///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABzaWRl"
+    "AAAAANT///+c////AAABBRAAAAAgAAAABAAAAAAAAAAIAAAAbXNnX3R5cGUAAAAABAAEAAQAAADM////AAABAhAAAAAcAAAA"
+    "BAAAAAAAAAAIAAAAYWdlbnRfaWQAAAAAwP///wAAAAEgAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAECEAAAACAAAAAEAAAA"
+    "AAAAAAQAAAB0X25zAAAAAAgADAAIAAcACAAAAAAAAAFAAAAAAAAAAA==";
+static const char* MSG_ARROW_SCHEMA =
+    "/////6AHAAAQAAAAAAAKAA4ABgAFAAgACgAAAAABBAAQAAAAAAAKAAwAAAAEAAgACgAAADQFAAAEAAAAAQAAAAwAAAAIAAwA"
+    "BAAIAAgAAAAIAAAAEAAAAAYAAABwYW5kYXMAAPwEAAB7ImluZGV4X2NvbHVtbnMiOiBbXSwgImNvbHVtbl9pbmRleGVzIjog"
+    "W10sICJjb2x1bW5zIjogW3sibmFtZSI6ICJzZXEiLCAiZmllbGRfbmFtZSI6ICJzZXEiLCAicGFuZGFzX3R5cGUiOiAiaW50"
+    "NjQiLCAibnVtcHlfdHlwZSI6ICJpbnQ2NCIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAidF9yZWN2X25zIiwgImZp"
+    "ZWxkX25hbWUiOiAidF9yZWN2X25zIiwgInBhbmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAi"
+    "bWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogInRfc2VuZF9ucyIsICJmaWVsZF9uYW1lIjogInRfc2VuZF9ucyIsICJwYW5k"
+    "YXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJs"
+    "YXRlbmN5X25zIiwgImZpZWxkX25hbWUiOiAibGF0ZW5jeV9ucyIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90"
+    "eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJzcmNfaWQiLCAiZmllbGRfbmFtZSI6ICJzcmNf"
+    "aWQiLCAicGFuZGFzX3R5cGUiOiAiaW50MzIiLCAibnVtcHlfdHlwZSI6ICJpbnQzMiIsICJtZXRhZGF0YSI6IG51bGx9LCB7"
+    "Im5hbWUiOiAiZHN0X2lkIiwgImZpZWxkX25hbWUiOiAiZHN0X2lkIiwgInBhbmRhc190eXBlIjogImludDMyIiwgIm51bXB5"
+    "X3R5cGUiOiAiaW50MzIiLCAibWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogIm1lc3NhZ2VfaWQiLCAiZmllbGRfbmFtZSI6"
+    "ICJtZXNzYWdlX2lkIiwgInBhbmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAibWV0YWRhdGEi"
+    "OiBudWxsfSwgeyJuYW1lIjogIm1zZ190eXBlIiwgImZpZWxkX25hbWUiOiAibXNnX3R5cGUiLCAicGFuZGFzX3R5cGUiOiAi"
+    "dW5pY29kZSIsICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAib3JkZXJfaWQi"
+    "LCAiZmllbGRfbmFtZSI6ICJvcmRlcl9pZCIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0"
+    "IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJjYXVzYWxfcGFyZW50IiwgImZpZWxkX25hbWUiOiAiY2F1c2FsX3Bh"
+    "cmVudCIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0IiwgIm1ldGFkYXRhIjogbnVsbH1d"
+    "LCAiY3JlYXRvciI6IHsibGlicmFyeSI6ICJweWFycm93IiwgInZlcnNpb24iOiAiMTUuMC4yIn0sICJwYW5kYXNfdmVyc2lv"
+    "biI6ICIxLjUuMyJ9AAAAAAoAAAAEAgAAvAEAAIQBAABMAQAAGAEAAOQAAACsAAAAeAAAAEAAAAAEAAAANP7//wAAAQIQAAAA"
+    "IAAAAAQAAAAAAAAADQAAAGNhdXNhbF9wYXJlbnQAAAAw/v//AAAAAUAAAABs/v//AAABAhAAAAAcAAAABAAAAAAAAAAIAAAA"
+    "b3JkZXJfaWQAAAAAZP7//wAAAAFAAAAAoP7//wAAAQUQAAAAIAAAAAQAAAAAAAAACAAAAG1zZ190eXBlAAAAAAQABAAEAAAA"
+    "0P7//wAAAQIQAAAAHAAAAAQAAAAAAAAACgAAAG1lc3NhZ2VfaWQAAMj+//8AAAABQAAAAAT///8AAAECEAAAABgAAAAEAAAA"
+    "AAAAAAYAAABkc3RfaWQAAPj+//8AAAABIAAAADT///8AAAECEAAAABgAAAAEAAAAAAAAAAYAAABzcmNfaWQAACj///8AAAAB"
+    "IAAAAGT///8AAAECEAAAABwAAAAEAAAAAAAAAAoAAABsYXRlbmN5X25zAABc////AAAAAUAAAACY////AAABAhAAAAAcAAAA"
+    "BAAAAAAAAAAJAAAAdF9zZW5kX25zAAAAkP///wAAAAFAAAAAzP///wAAAQIQAAAAHAAAAAQAAAAAAAAACQAAAHRfcmVjdl9u"
+    "cwAAAMT///8AAAABQAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAcAAAABAAAAAAAAAADAAAAc2VxAAgADAAIAAcA"
+    "CAAAAAAAAAFAAAAAAAAAAA==";
 
 static const char* TRACE_TYPE_NAMES[7] = {"ORDER_SUBMITTED", "ORDER_ACCEPTED", "ORDER_CANCELLED", "ORDER_REPLACED",
                                           "PARTIAL_FILL", "ORDER_FILLED", "QUOTE_UPDATE"};
 static const char* SIDE_NAMES[3] = {nullptr, "BID", "ASK"};
 
+#if defined(JPSIM_ARROW_WRITER)
+// ------------------------------------------------------------------- reference writer (Arrow)
 template <typename T>
 static std::shared_ptr<arrow::Buffer> wrap(const std::vector<T>& v) {
     return std::make_shared<arrow::Buffer>((const uint8_t*)v.data(), (int64_t)(v.size() * sizeof(T)));
 }
-
 struct StrCol {
     std::vector<int32_t> offsets;
     std::vector<char> data;
     std::vector<uint8_t> validity;
     int64_t null_count = 0;
 };
-
 template <typename CodeT>
 static StrCol make_strings(const std::vector<CodeT>& codes, const char* const* names, int n_names) {
     StrCol c;
@@ -763,12 +858,10 @@ static StrCol make_strings(const std::vector<CodeT>& codes, const char* const* n
     c.offsets[n] = (int32_t)pos;
     return c;
 }
-
 static std::shared_ptr<arrow::Array> string_array(const StrCol& c, int64_t n) {
     std::shared_ptr<arrow::Buffer> validity = c.null_count ? wrap(c.validity) : nullptr;
     return std::make_shared<arrow::StringArray>(n, wrap(c.offsets), wrap(c.data), validity, c.null_count);
 }
-
 static std::shared_ptr<arrow::Array> int64_array(const std::vector<int64_t>& v) {
     return std::make_shared<arrow::Int64Array>((int64_t)v.size(), wrap(v));
 }
@@ -786,7 +879,6 @@ static std::shared_ptr<arrow::Array> nullable_int64_array(const std::vector<int6
         if (v[i] != NONE64) bitmap[i >> 3] |= (uint8_t)(1u << (i & 7));
     return std::make_shared<arrow::Int64Array>(n, wrap(v), wrap(bitmap), nulls);
 }
-
 static std::shared_ptr<parquet::WriterProperties> writer_props() {
     // == pyarrow 15.0.2 _parquet.pyx _create_writer_properties() for write_table(compression="snappy")
     parquet::WriterProperties::Builder b;
@@ -801,7 +893,6 @@ static std::shared_ptr<parquet::WriterProperties> writer_props() {
     return b.build();
 }
 static std::shared_ptr<parquet::ArrowWriterProperties> arrow_props() {
-    // == _create_arrow_writer_properties(store_schema=True, engine V2, compliant nested types)
     parquet::ArrowWriterProperties::Builder b;
     b.store_schema();
     b.disable_deprecated_int96_timestamps();
@@ -810,15 +901,13 @@ static std::shared_ptr<parquet::ArrowWriterProperties> arrow_props() {
     b.set_engine_version(parquet::ArrowWriterProperties::V2);
     return b.build();
 }
-
 static void check(const arrow::Status& st, const char* what) {
     if (!st.ok()) {
         std::fprintf(stderr, "jpsim-native: %s: %s\n", what, st.ToString().c_str());
         std::exit(1);
     }
 }
-
-static void write_parquet(const std::shared_ptr<arrow::Table>& table, const std::string& path) {
+static void write_parquet_arrow(const std::shared_ptr<arrow::Table>& table, const std::string& path) {
     auto sink_r = arrow::io::FileOutputStream::Open(path);
     check(sink_r.status(), "open output");
     std::shared_ptr<arrow::io::FileOutputStream> sink = *sink_r;
@@ -831,6 +920,12 @@ static void write_parquet(const std::shared_ptr<arrow::Table>& table, const std:
     check(writer->Close(), "close writer");
     check(sink->Close(), "close file");
 }
+static std::string sha256_file(const std::string& path) {
+    bool ok;
+    std::string data = read_file(path, &ok);
+    return jpq::sha256_hex(data);
+}
+#endif
 
 static std::string json_escape(const std::string& s) {
     std::string o;
@@ -852,37 +947,6 @@ static std::string json_escape(const std::string& s) {
         }
     }
     return o;
-}
-
-static int64_t peak_rss_bytes() {
-#if !defined(_WIN32)
-    struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) == 0) return (int64_t)ru.ru_maxrss * 1024;
-#endif
-    return 0;
-}
-
-static void mkdirs(const std::string& dir) {
-#if !defined(_WIN32)
-    std::string cur;
-    for (size_t i = 0; i < dir.size(); i++) {
-        cur += dir[i];
-        if (dir[i] == '/' || i + 1 == dir.size()) {
-            if (cur != "/" && !cur.empty()) mkdir(cur.c_str(), 0755);
-        }
-    }
-#endif
-}
-
-static std::string dirname_of(const std::string& p) {
-    size_t k = p.find_last_of("/\\");
-    return k == std::string::npos ? "." : p.substr(0, k);
-}
-static std::string stem_of(const std::string& p) {
-    size_t k = p.find_last_of("/\\");
-    std::string name = k == std::string::npos ? p : p.substr(k + 1);
-    size_t d = name.find_last_of('.');
-    return d == std::string::npos ? name : name.substr(0, d);
 }
 
 struct SimEvents {
@@ -916,21 +980,12 @@ static std::string events_json(const SimEvents& e) {
     return o;
 }
 
-static std::string read_file(const std::string& path, bool* ok) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        *ok = false;
-        return "";
-    }
-    std::stringstream ss;
-    ss << f.rdbuf();
-    *ok = true;
-    return ss.str();
-}
+static int g_threads = 0;  // 0 = decide from the CPU budget
 
-static bool file_exists(const std::string& p) {
-    std::ifstream f(p);
-    return (bool)f;
+static int writer_threads(int64_t rows) {
+    if (g_threads > 0) return g_threads;
+    if (rows < 20000) return 1;  // a few KB per column: threads cost more than they save
+    return std::min(4, usable_cpus());
 }
 
 static SimEvents simulate_one(const std::string& config_path, const std::string& out_path, bool have_seed,
@@ -963,6 +1018,8 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
     }
     BuiltSpec bs = build_spec(sc, have_seed, seed);
 
+    // The kernel is never freed: the process exits right after the files are written, and tearing
+    // down a large heap object by object is pure cost.
     Kernel* k = new Kernel();
     k->spec = bs.spec;
     k->setup();
@@ -972,29 +1029,32 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
     mkdirs(out_dir);
     std::string msg_out = out_dir + "/message_trace.parquet";
 
-    // The two outputs are independent: build + write + hash each on its own thread (the platform
-    // runs the container with 4 CPUs; each thread writes its own file through its own writer).
-    Result res;
+    // The two tables are independent: build each on its own thread (the trace needs a sort).
+    Result* res = new Result();
+    {
+        std::thread t_trace([&] { build_trace(*k, *res); });
+        build_messages(*k, *res);
+        t_trace.join();
+    }
     std::string trace_sha, msg_sha;
-    std::thread t_trace([&] {
-        build_trace(*k, res);
-        auto meta = arrow::key_value_metadata({"pandas"}, {TRACE_PANDAS_META});
-        auto schema = arrow::schema({arrow::field("t_ns", arrow::int64()), arrow::field("agent_id", arrow::int32()),
-                                     arrow::field("msg_type", arrow::utf8()), arrow::field("side", arrow::utf8()),
-                                     arrow::field("price", arrow::int64()), arrow::field("size", arrow::int64()),
-                                     arrow::field("order_id", arrow::int64())},
-                                    meta);
-        StrCol types = make_strings(res.msg_type, TRACE_TYPE_NAMES, 7);
-        StrCol sides = make_strings(res.side, SIDE_NAMES, 3);
-        auto table = arrow::Table::Make(schema, {int64_array(res.t_ns), int32_array(res.agent_id),
-                                                 string_array(types, res.n_trace), string_array(sides, res.n_trace),
-                                                 int64_array(res.price), int64_array(res.size),
-                                                 int64_array(res.order_id)});
-        write_parquet(table, out_path);
-        trace_sha = sha256_file(out_path);
-    });
-    std::thread t_msg([&] {
-        build_messages(*k, res);
+#if defined(JPSIM_ARROW_WRITER)
+    {
+        std::thread t_trace([&] {
+            auto meta = arrow::key_value_metadata({"pandas"}, {TRACE_PANDAS_META});
+            auto schema = arrow::schema({arrow::field("t_ns", arrow::int64()), arrow::field("agent_id", arrow::int32()),
+                                         arrow::field("msg_type", arrow::utf8()), arrow::field("side", arrow::utf8()),
+                                         arrow::field("price", arrow::int64()), arrow::field("size", arrow::int64()),
+                                         arrow::field("order_id", arrow::int64())},
+                                        meta);
+            StrCol types = make_strings(res->msg_type, TRACE_TYPE_NAMES, 7);
+            StrCol sides = make_strings(res->side, SIDE_NAMES, 3);
+            auto table = arrow::Table::Make(schema, {int64_array(res->t_ns), int32_array(res->agent_id),
+                                                     string_array(types, res->n_trace), string_array(sides, res->n_trace),
+                                                     int64_array(res->price), int64_array(res->size),
+                                                     int64_array(res->order_id)});
+            write_parquet_arrow(table, out_path);
+            trace_sha = sha256_file(out_path);
+        });
         auto meta = arrow::key_value_metadata({"pandas"}, {MSG_PANDAS_META});
         auto schema = arrow::schema(
             {arrow::field("seq", arrow::int64()), arrow::field("t_recv_ns", arrow::int64()),
@@ -1003,32 +1063,69 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
              arrow::field("message_id", arrow::int64()), arrow::field("msg_type", arrow::utf8()),
              arrow::field("order_id", arrow::int64()), arrow::field("causal_parent", arrow::int64())},
             meta);
-        StrCol types = make_strings(res.m_type, MSG_NAMES, M_COUNT);
+        StrCol types = make_strings(res->m_type, MSG_NAMES, M_COUNT);
         std::vector<uint8_t> bm1, bm2, bm3;
         auto table = arrow::Table::Make(
-            schema, {int64_array(res.seq), int64_array(res.t_recv), nullable_int64_array(res.t_send, bm1),
-                     int64_array(res.latency), int32_array(res.src), int32_array(res.dst), int64_array(res.message_id),
-                     string_array(types, res.n_msg), nullable_int64_array(res.m_order_id, bm2),
-                     nullable_int64_array(res.causal, bm3)});
-        write_parquet(table, msg_out);
+            schema, {int64_array(res->seq), int64_array(res->t_recv), nullable_int64_array(res->t_send, bm1),
+                     int64_array(res->latency), int32_array(res->src), int32_array(res->dst), int64_array(res->message_id),
+                     string_array(types, res->n_msg), nullable_int64_array(res->m_order_id, bm2),
+                     nullable_int64_array(res->causal, bm3)});
+        write_parquet_arrow(table, msg_out);
         msg_sha = sha256_file(msg_out);
-    });
-    t_trace.join();
-    t_msg.join();
-    delete k;
+        t_trace.join();
+    }
+#else
+    {
+        jpq::Table tr, mg;
+        tr.num_rows = res->n_trace;
+        tr.columns = {jpq::int64_col("t_ns", res->t_ns), jpq::int32_col("agent_id", res->agent_id),
+                      jpq::str_col("msg_type", res->msg_type, TRACE_TYPE_NAMES, 7),
+                      jpq::str_col("side", res->side, SIDE_NAMES, 3), jpq::int64_col("price", res->price),
+                      jpq::int64_col("size", res->size), jpq::int64_col("order_id", res->order_id)};
+        tr.key_value = {{"pandas", TRACE_PANDAS_META}, {"ARROW:schema", TRACE_ARROW_SCHEMA}};
+        mg.num_rows = res->n_msg;
+        mg.columns = {jpq::int64_col("seq", res->seq), jpq::int64_col("t_recv_ns", res->t_recv),
+                      jpq::int64_col_nullable("t_send_ns", res->t_send, NONE64), jpq::int64_col("latency_ns", res->latency),
+                      jpq::int32_col("src_id", res->src), jpq::int32_col("dst_id", res->dst),
+                      jpq::int64_col("message_id", res->message_id), jpq::str_col("msg_type", res->m_type, MSG_NAMES, M_COUNT),
+                      jpq::int64_col_nullable("order_id", res->m_order_id, NONE64),
+                      jpq::int64_col_nullable("causal_parent", res->causal, NONE64)};
+        mg.key_value = {{"pandas", MSG_PANDAS_META}, {"ARROW:schema", MSG_ARROW_SCHEMA}};
+        jpq::Codec codec = jpq::CODEC_SNAPPY;
+        if (const char* c = std::getenv("JPSIM_CODEC"))
+            if (std::strcmp(c, "none") == 0 || std::strcmp(c, "uncompressed") == 0) codec = jpq::CODEC_NONE;
+        std::vector<std::string> files;
+        int nt = writer_threads(res->n_trace + res->n_msg);
+        jpq::write_tables({&tr, &mg}, codec, nt, files, "jpsim-native");
+        // write + hash each file on its own thread (the hash is of the very buffer written)
+        bool ok_t = true, ok_m = true;
+        std::thread t_trace([&] {
+            ok_t = write_file(out_path, files[0]);
+            trace_sha = jpq::sha256_hex(files[0]);
+        });
+        ok_m = write_file(msg_out, files[1]);
+        msg_sha = jpq::sha256_hex(files[1]);
+        t_trace.join();
+        if (!ok_t || !ok_m) {
+            std::fprintf(stderr, "jpsim-native: cannot write %s\n", ok_t ? msg_out.c_str() : out_path.c_str());
+            std::exit(1);
+        }
+    }
+#endif
     SimEvents ev;
     ev.scenario_id = bs.scenario_id;
     ev.seed = bs.seed;
-    ev.n_events = res.n_trace;
-    ev.n_messages = res.n_msg;
+    ev.n_events = res->n_trace;
+    ev.n_messages = res->n_msg;
     ev.trace_sha = trace_sha;
     ev.msg_sha = msg_sha;
     ev.peak = peak_rss_bytes();
     ev.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     ev.eps = ev.wall > 0 ? (double)ev.n_events / ev.wall : 0.0;
-    std::ofstream ef(out_dir + "/events.json", std::ios::binary);
-    ef << events_json(ev);
-    ef.close();
+    if (!write_file(out_dir + "/events.json", events_json(ev))) {
+        std::fprintf(stderr, "jpsim-native: cannot write %s/events.json\n", out_dir.c_str());
+        std::exit(1);
+    }
     return ev;
 }
 
@@ -1045,6 +1142,13 @@ static std::vector<std::string> list_json_sorted(const std::string& dir) {
         if (n.size() > 5 && n.compare(n.size() - 5, 5, ".json") == 0) names.push_back(n);
     }
     closedir(d);
+#else
+    struct _finddata_t fd;
+    intptr_t h = _findfirst((dir + "/*.json").c_str(), &fd);
+    if (h != -1) {
+        do names.push_back(fd.name); while (_findnext(h, &fd) == 0);
+        _findclose(h);
+    }
 #endif
     std::sort(names.begin(), names.end());
     return names;
@@ -1060,19 +1164,17 @@ static int simulate_batch(const std::string& batch_dir, const std::string& out_d
     mkdirs(out_dir);
     size_t n = subs.size();
     if (workers <= 0) {
-#if !defined(_WIN32)
-        cpu_set_t set;
-        if (sched_getaffinity(0, sizeof(set), &set) == 0) workers = CPU_COUNT(&set);
-#endif
+        workers = usable_cpus();
         if (const char* w = std::getenv("JPSIM_WORKERS")) workers = std::atoi(w);
         if (workers <= 0) workers = 1;
     }
     if ((size_t)workers > n) workers = (int)n;
 #if !defined(_WIN32)
+    // One forked child per sub-scenario, `workers` at a time; the parent has touched almost
+    // nothing yet (no kernel, no tables), so each fork copies a tiny address space.
     std::vector<pid_t> pids(n, 0);
     size_t next = 0, running = 0;
     bool failed = false;
-    std::vector<size_t> pending;
     while (next < n || running > 0) {
         while (next < n && running < (size_t)workers) {
             size_t idx = next++;
@@ -1103,9 +1205,26 @@ static int simulate_batch(const std::string& batch_dir, const std::string& out_d
         return 1;
     }
 #else
-    for (size_t idx = 0; idx < n; idx++)
-        simulate_one(batch_dir + "/" + subs[idx], out_dir + "/" + stem_of(subs[idx]) + "/trace.parquet", false, 0,
-                     std::chrono::steady_clock::now());
+    // Development box: one child process (this program, `simulate`) per sub-scenario, sequentially,
+    // so a sub-scenario's fallback exit does not end the batch.
+    {
+        char self[4096];
+        GetModuleFileNameA(nullptr, self, sizeof self);
+        for (size_t idx = 0; idx < n; idx++) {
+            std::string cfg = batch_dir + "/" + subs[idx];
+            std::string out = out_dir + "/" + stem_of(subs[idx]) + "/trace.parquet";
+            std::vector<std::string> a = {std::string("\"") + self + "\"", "simulate", "--config", "\"" + cfg + "\"",
+                                          "--out", "\"" + out + "\""};
+            std::vector<const char*> argv;
+            for (auto& s : a) argv.push_back(s.c_str());
+            argv.push_back(nullptr);
+            intptr_t rc = _spawnv(_P_WAIT, self, argv.data());
+            if (rc != 0) {
+                std::fprintf(stderr, "simulate-batch: sub-scenario %s failed (rc=%lld)\n", subs[idx].c_str(), (long long)rc);
+                return 1;
+            }
+        }
+    }
 #endif
     // aggregate from the children's events.json
     int64_t total_events = 0, peak = 0;
@@ -1141,10 +1260,11 @@ static int simulate_batch(const std::string& batch_dir, const std::string& out_d
                   n, (long long)total_events, wall, wall > 0 ? (double)total_events / wall : 0.0, (long long)peak);
     o += buf;
     o += "  \"per_scenario\": [\n" + per + "\n  ]\n}\n";
-    std::ofstream bf(out_dir + "/batch_events.json", std::ios::binary);
-    bf << o;
-    bf.close();
-    std::printf("%s", o.c_str());
+    if (!write_file(out_dir + "/batch_events.json", o)) {
+        std::fprintf(stderr, "simulate-batch: cannot write %s/batch_events.json\n", out_dir.c_str());
+        return 1;
+    }
+    std::fputs(o.c_str(), stdout);
     return 0;
 }
 
@@ -1153,20 +1273,44 @@ static void usage() {
                 "       jpsim-native simulate-batch --batch-dir <dir> --out-dir <dir> [--workers N]\n");
 }
 
+[[noreturn]] static void finish(int rc) {
+    std::fflush(stdout);
+    std::fflush(stderr);
+#if !defined(_WIN32)
+    _exit(rc);  // no static destructors, no heap teardown
+#else
+    std::exit(rc);
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     auto t0 = std::chrono::steady_clock::now();
-    if (argc < 2) {
+    if (const char* t = std::getenv("JPSIM_THREADS")) g_threads = std::atoi(t);
+    // verb: argv[1] when it is one, else the program name (installed as `simulate` / `simulate-batch`)
+    std::string verb;
+    int first = 2;
+    if (argc >= 2 && (std::strcmp(argv[1], "simulate") == 0 || std::strcmp(argv[1], "simulate-batch") == 0)) {
+        verb = argv[1];
+    } else {
+        std::string prog = basename_of(argv[0]);
+        if (prog == "simulate" || prog == "simulate-batch") {
+            verb = prog;
+            first = 1;
+        } else if (argc >= 2) {
+            verb = argv[1];
+        }
+    }
+    if (verb.empty()) {
         usage();
         return 0;
     }
-    std::string verb = argv[1];
     std::string config, out, batch_dir, out_dir;
     bool have_seed = false;
     int64_t seed = 0;
     int workers = 0;
-    for (int i = 2; i < argc; i++) {
+    for (int i = first; i < argc; i++) {
         std::string a = argv[i];
         auto need = [&](const char* name) -> std::string {
             if (i + 1 >= argc) {
@@ -1197,15 +1341,15 @@ int main(int argc, char** argv) {
             return 2;
         }
         SimEvents ev = simulate_one(config, out, have_seed, seed, t0);
-        std::printf("%s", events_json(ev).c_str());
-        return 0;
+        std::fputs(events_json(ev).c_str(), stdout);
+        finish(0);
     }
     if (verb == "simulate-batch") {
         if (batch_dir.empty() || out_dir.empty()) {
             usage();
             return 2;
         }
-        return simulate_batch(batch_dir, out_dir, workers, t0);
+        finish(simulate_batch(batch_dir, out_dir, workers, t0));
     }
     if (verb == "--help" || verb == "-h") {
         usage();

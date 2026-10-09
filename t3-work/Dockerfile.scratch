@@ -1,0 +1,19 @@
+# EXPERIMENT ONLY (not a submission): the lean static binary alone in an empty image, to measure
+# whether the Docker-side part of a unit's window (create / start / rm) depends on the image at all
+# (layers, size, files). Same binary as Dockerfile; no Python fallback, so a scenario outside the
+# kernel's scope fails instead of falling back.
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS kernel-build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ file && rm -rf /var/lib/apt/lists/*
+COPY engine/jpkernel /src/jpkernel
+RUN python /src/jpkernel/build_native.py --out /src/jpkernel/jpsim-native \
+ && file /src/jpkernel/jpsim-native | grep -q "statically linked"
+
+FROM scratch
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+COPY --from=kernel-build --chmod=0755 /src/jpkernel/jpsim-native /usr/local/bin/simulate
+COPY --from=kernel-build --chmod=0755 /src/jpkernel/jpsim-native /usr/local/bin/simulate-batch
+ENV PATH=/usr/local/bin
+WORKDIR /
+USER 65534:65534
+CMD ["simulate", "--help"]

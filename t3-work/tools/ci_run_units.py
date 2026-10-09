@@ -11,7 +11,9 @@ fails here first.
 Usage:
     python ci_run_units.py --image <img> --units <kit>/units --out-root <root> [--only ...]
                            [--repeat N] [--timeout 300]
-Writes <root>/<unit>/... and <root>/timing.json {unit: median window seconds}; exit 1 on any
+Writes <root>/<unit>/..., <root>/timing.json {unit: median StartedAt..FinishedAt seconds} (the
+Final's window) and <root>/timing_dev.json {unit: median create..rm seconds on the host clock}
+(the Dev board's window: creation, start, run, log collection and removal); exit 1 on any
 non-zero container exit.
 """
 
@@ -44,8 +46,11 @@ def _parse_ts(s: str) -> float:
     return base.timestamp() + int(frac) / 1e9
 
 
-def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float) -> tuple[int, float, str]:
+def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float,
+             env: list[str] | None = None) -> tuple[int, float, str, float]:
+    """Returns (rc, Final window StartedAt..FinishedAt, stderr tail, Dev window create..rm)."""
     batch = (unit / "batch.json").is_file()
+    env_flags = [f for kv in (env or []) for f in ("-e", kv)]
     out = out.resolve()  # docker -v needs absolute host paths
     staging = pathlib.Path(tempfile.mkdtemp(prefix="t3in_")).resolve()
     try:
@@ -62,10 +67,12 @@ def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float) 
             shutil.rmtree(out)
         out.mkdir(parents=True)
         out.chmod(0o777)
+        t_dev0 = time.perf_counter()
         cid = subprocess.run(
-            ["docker", "create", *PLATFORM_FLAGS, "-v", f"{staging}:/input:ro", "-v", f"{out}:/output", image, *verb],
+            ["docker", "create", *PLATFORM_FLAGS, *env_flags, "-v", f"{staging}:/input:ro", "-v", f"{out}:/output", image, *verb],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
+        dev_window = float("nan")
         try:
             proc = subprocess.run(["docker", "start", "-a", cid], capture_output=True, text=True, timeout=timeout)
             rc = proc.returncode
@@ -81,7 +88,8 @@ def run_once(image: str, unit: pathlib.Path, out: pathlib.Path, timeout: float) 
             rc, window, tail = -1, timeout, "timeout"
         finally:
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
-        return rc, window, tail
+            dev_window = time.perf_counter() - t_dev0  # the Dev board's window: create .. rm, host clock
+        return rc, window, tail, dev_window
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -94,27 +102,34 @@ def main() -> int:
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--timeout", type=float, default=300.0)
+    ap.add_argument("--env", nargs="*", default=[], help="KEY=VALUE passed to the container (e.g. JPSIM_CODEC=none)")
     args = ap.parse_args()
     names = sorted(p.name for p in args.units.iterdir() if p.is_dir())
     if args.only:
         names = [n for n in names if n in set(args.only)]
     args.out_root.mkdir(parents=True, exist_ok=True)
     timing: dict[str, float] = {}
+    timing_dev: dict[str, float] = {}
     failures = []
     t_all = time.perf_counter()
     for name in names:
         windows = []
+        devs = []
         for _ in range(args.repeat):
-            rc, window, tail = run_once(args.image, args.units / name, args.out_root / name, args.timeout)
+            rc, window, tail, dev = run_once(args.image, args.units / name, args.out_root / name, args.timeout, args.env)
             if rc != 0:
                 failures.append(name)
                 print(f"{name:34} FAILED rc={rc} window={window:.2f}s {tail}", flush=True)
                 break
             windows.append(window)
+            devs.append(dev)
         if windows:
             timing[name] = statistics.median(windows)
-            print(f"{name:34} window {timing[name]:7.3f}s  ({' '.join(f'{w:.2f}' for w in windows)})", flush=True)
+            timing_dev[name] = statistics.median(devs)
+            print(f"{name:34} window {timing[name]:7.3f}s  create..rm {timing_dev[name]:7.3f}s  "
+                  f"({' '.join(f'{w:.2f}' for w in windows)})", flush=True)
         (args.out_root / "timing.json").write_text(json.dumps(timing, indent=1, sort_keys=True))
+        (args.out_root / "timing_dev.json").write_text(json.dumps(timing_dev, indent=1, sort_keys=True))
     print(f"\n{len(names) - len(failures)}/{len(names)} ran in {time.perf_counter() - t_all:.0f}s; failures: {failures}")
     return 1 if failures else 0
 

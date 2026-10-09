@@ -1,3 +1,0 @@
-#!/bin/sh
-# Track 3 submission verb: simulate-batch --batch-dir /input/scenarios --out-dir /output
-exec /opt/jpsim/jpkernel/jpsim-native simulate-batch "$@"

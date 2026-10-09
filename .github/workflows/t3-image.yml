@@ -1,20 +1,38 @@
 # Track 3 (Simulation) jpsim image: build for linux/amd64, run every public unit inside the image
 # with the platform's container settings (timed on the Docker daemon's StartedAt..FinishedAt
-# window like the Final), check every output byte-for-byte against the organizer's declared
-# reference hashes + the sidecar arithmetic, run the official scorer's g0/g1 gates, then push the
-# image to GHCR and print its digest.
+# window like the Final AND on the host's create..rm window like the Dev board), check the
+# outputs against the organizer's references (bytes for the Arrow-writer images, row counts +
+# sidecar arithmetic + table content against a baseline image's files for the lean writer), run
+# the official scorer's g0/g1 gates and the synthetic / fallback suite, A/B the ranked mean against
+# a baseline image on the same runner, then push the image to GHCR and print its digest.
 name: t3-image
 
 on:
   workflow_dispatch:
     inputs:
       dockerfile:
-        description: "Dockerfile to build (t3-work/Dockerfile or t3-work/Dockerfile.cython)"
+        description: "Dockerfile to build"
         default: "t3-work/Dockerfile"
         required: false
       tag_suffix:
-        description: "suffix for the pushed tags (e.g. -cy)"
+        description: "suffix for the pushed tags (e.g. -lean)"
         default: ""
+        required: false
+      baseline_image:
+        description: "image to run the same 71 units with on the same runner (A/B + content reference); empty = skip"
+        default: "ghcr.io/dapeipeipeipei/jinpei-t3@sha256:e05df48c07b7f2c93ecdd7c3116b6b7986518e3cd5a6efa5e80fe244a2299dc1"
+        required: false
+      bytes:
+        description: "true = the image's writer is byte-identical to the reference (check hashes); false = content-identical (check row counts + tables vs baseline)"
+        default: "false"
+        required: false
+      scratch_variant:
+        description: "also build t3-work/Dockerfile.scratch (binary alone, empty image) and time it: does the Docker-side window depend on the image?"
+        default: "true"
+        required: false
+      profile:
+        description: "10 smallest + 5 largest units x 3 repeats on the new / baseline / scratch images, both windows"
+        default: "true"
         required: false
   push:
     branches: [ci/t3-image, t3/build]
@@ -30,7 +48,12 @@ env:
   IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
   DOCKERFILE: ${{ github.event.inputs.dockerfile || 't3-work/Dockerfile' }}
   TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || '' }}
+  BASELINE_IMAGE: ${{ github.event.inputs.baseline_image || '' }}
+  BYTES: ${{ github.event.inputs.bytes || 'false' }}
+  SCRATCH: ${{ github.event.inputs.scratch_variant || 'false' }}
+  PROFILE: ${{ github.event.inputs.profile || 'false' }}
   TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+  PROFILE_UNITS: "t3-s001-price-time-priority t3-eq-deterministic-baseline t3-s019-latency-jitter-kendall t3-eq-lognormal-lowsigma t3-eq-uniform-tight t3-eq-pareto-heavytail t3-eq-lognormal-highmag t3-eq-lognormal-highsigma t3-eq-uniform-wide t3-eq001-pareto-latency-tail t3-gb-highfreq-40hz-60s t3-gb-horizon-240s t3-gb-pop-horizon-scale t3-gb-mega-throughput t3-mr-cancel-replace-churn"
 
 defaults:
   run:
@@ -39,7 +62,7 @@ defaults:
 jobs:
   build-test-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +83,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install toolkit v2.6.0 + Track 3 scorer (for the g0/g1 gates and the hash tool)
+      - name: Install toolkit v2.6.0 + Track 3 scorer (for the g0/g1 gates and the hash / content tools)
         run: |
           python -m pip install --upgrade pip
           pip install "$TOOLKIT" "pyarrow>=15" "pandas>=2"
@@ -72,28 +95,73 @@ jobs:
         run: |
           echo "building $DOCKERFILE"
           docker buildx build --platform linux/amd64 --load -t t3-local:ci -f "$DOCKERFILE" t3-work
-          docker image inspect t3-local:ci --format 'label={{ index .Config.Labels "qfbench2.interface_version" }} user={{ .Config.User }} entrypoint={{ json .Config.Entrypoint }} volumes={{ json .Config.Volumes }} size={{ .Size }}'
+          docker image inspect t3-local:ci --format 'label={{ index .Config.Labels "qfbench2.interface_version" }} user={{ .Config.User }} entrypoint={{ json .Config.Entrypoint }} volumes={{ json .Config.Volumes }} size={{ .Size }} layers={{ len .RootFS.Layers }}'
           test "$(docker image inspect t3-local:ci --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
           test "$(docker image inspect t3-local:ci --format '{{ json .Config.Volumes }}')" = "null"
+          if [ "$SCRATCH" = "true" ]; then
+            docker buildx build --platform linux/amd64 --load -t t3-scratch:ci -f t3-work/Dockerfile.scratch t3-work
+            docker image inspect t3-scratch:ci --format 'scratch: size={{ .Size }} layers={{ len .RootFS.Layers }}'
+          fi
 
       - name: Verb contract (no args / --help) in the image
         run: |
           docker run --rm --network=none t3-local:ci simulate --help | head -3
           docker run --rm --network=none t3-local:ci simulate-batch --help | head -3
           docker run --rm --network=none t3-local:ci | head -3
+          docker run --rm --network=none t3-local:ci simulate-py --help | head -2
 
-      - name: Run every public unit in the image (platform settings, Final-style timing window)
+      - name: Run every public unit in the image (platform settings; Final-style and Dev-style windows)
         run: |
           mkdir -p t3-ci-out
           python t3-work/tools/ci_run_units.py --image t3-local:ci \
             --units track3-simulation-public/units --out-root t3-ci-out/out --timeout 300 \
             | tee t3-ci-out/run.txt
 
-      - name: Byte-level check against the declared reference hashes + sidecar arithmetic
+      - name: Check against the declared references (bytes, or row counts + sidecar arithmetic + allowlist)
         run: |
-          python t3-work/tools/check_hashes.py --units track3-simulation-public/units \
+          if [ "$BYTES" = "true" ]; then FLAG=""; else FLAG="--sidecar-only"; fi
+          python t3-work/tools/check_hashes.py --units track3-simulation-public/units $FLAG \
             --out-root t3-ci-out/out --timing t3-ci-out/out/timing.json --json t3-ci-out/hashes.json \
             | tee t3-ci-out/hashes.txt
+
+      - name: Baseline image on the same runner (A/B of the ranked mean, both windows) + table content check against its files
+        run: |
+          if [ -n "$BASELINE_IMAGE" ]; then
+            docker pull -q "$BASELINE_IMAGE"
+            python t3-work/tools/ci_run_units.py --image "$BASELINE_IMAGE" \
+              --units track3-simulation-public/units --out-root t3-ci-out/base --timeout 300 \
+              | tee t3-ci-out/base-run.txt
+            # the baseline (Arrow writer) writes reference-identical bytes: its files ARE the references
+            python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root t3-ci-out/base | tail -3
+            python t3-work/tools/check_content.py --units track3-simulation-public/units \
+              --out-root t3-ci-out/out --ref-root t3-ci-out/base | tee t3-ci-out/content.txt
+            python - <<'PY' | tee t3-ci-out/ab.txt
+          import json, pathlib, statistics
+          units = pathlib.Path("track3-simulation-public/units")
+          def load(p):
+              p = pathlib.Path(p)
+              return json.loads(p.read_text()) if p.exists() else {}
+          new, newd = load("t3-ci-out/out/timing.json"), load("t3-ci-out/out/timing_dev.json")
+          base, based = load("t3-ci-out/base/timing.json"), load("t3-ci-out/base/timing_dev.json")
+          def n_events(u):
+              b = units / u / "batch.json"
+              if b.is_file():
+                  return sum(int(s["n_events"]) for s in json.loads(b.read_text())["subs"])
+              return int(json.loads((units / u / "events.json").read_text())["n_events"])
+          rows = sorted(((n_events(u), u) for u in new), key=lambda r: r[0])
+          print(f"{'unit':34} {'events':>8} | {'base_s':>7} {'new_s':>7} {'delta':>7} | {'base_dev':>8} {'new_dev':>8} {'delta':>7} | {'base_ev/s':>9} {'new_ev/s':>9} {'dev_ev/s':>9}")
+          rn, rb, rnd, rbd = [], [], [], []
+          for n, u in rows:
+              tb, tn, tbd, tnd = base.get(u), new[u], based.get(u), newd.get(u)
+              if tb is None or tbd is None or tnd is None:
+                  continue
+              rn.append(n / tn); rb.append(n / tb); rnd.append(n / tnd); rbd.append(n / tbd)
+              print(f"{u:34} {n:8d} | {tb:7.3f} {tn:7.3f} {tn - tb:+7.3f} | {tbd:8.3f} {tnd:8.3f} {tnd - tbd:+7.3f} | {n / tb:9.0f} {n / tn:9.0f} {n / tnd:9.0f}")
+          print(f"\nranked mean, Final window (StartedAt..FinishedAt), {len(rn)} units: baseline {statistics.mean(rb):.0f}  new {statistics.mean(rn):.0f}  ({statistics.mean(rn) / statistics.mean(rb) - 1:+.1%})")
+          print(f"ranked mean, Dev window (create..rm):                        baseline {statistics.mean(rbd):.0f}  new {statistics.mean(rnd):.0f}  ({statistics.mean(rnd) / statistics.mean(rbd) - 1:+.1%})")
+          print(f"sum of windows (s): Final baseline {sum(base[u] for _, u in rows if u in base):.2f} new {sum(new.values()):.2f}; Dev baseline {sum(based[u] for _, u in rows if u in based):.2f} new {sum(newd.values()):.2f}")
+          PY
+          fi
 
       - name: Repeat stability (3 units, second run must be byte-identical)
         run: |
@@ -114,7 +182,8 @@ jobs:
 
       - name: "Synthetic scenarios in the image: kernel edges + Python fallback (simulate vs simulate-py)"
         run: |
-          python t3-work/tools/synthetic_check.py --out "$PWD/t3-ci-out/syn" --pythonpath t3-work/engine --image t3-local:ci | tee t3-ci-out/synthetic.txt
+          if [ "$BYTES" = "true" ]; then CMP=bytes; else CMP=content; fi
+          python t3-work/tools/synthetic_check.py --compare $CMP --out "$PWD/t3-ci-out/syn" --pythonpath t3-work/engine --image t3-local:ci | tee t3-ci-out/synthetic.txt
 
       - name: Official scorer g0/g1 gates (reference parquet absent in CI, so g3 is not run here)
         run: |
@@ -132,6 +201,43 @@ jobs:
                       bad.append((u.name, name, r.detail)); break
           print("g0/g1 failures:", bad or "none")
           raise SystemExit(1 if bad else 0)
+          PY
+
+      - name: "Profile: 10 smallest + 5 largest units x 3 repeats on new / baseline / scratch images, both windows"
+        if: env.PROFILE == 'true'
+        run: |
+          IMAGES="new=t3-local:ci"
+          if [ -n "$BASELINE_IMAGE" ]; then IMAGES="$IMAGES base=$BASELINE_IMAGE"; fi
+          if [ "$SCRATCH" = "true" ]; then IMAGES="$IMAGES scratch=t3-scratch:ci"; fi
+          for kv in $IMAGES; do
+            name="${kv%%=*}"; img="${kv#*=}"
+            python t3-work/tools/ci_run_units.py --image "$img" --units track3-simulation-public/units \
+              --out-root "t3-ci-out/prof-$name" --repeat 3 --only $PROFILE_UNITS | tail -1
+          done
+          python - "$IMAGES" <<'PY' | tee t3-ci-out/profile.txt
+          import json, pathlib, sys, statistics
+          units = pathlib.Path("track3-simulation-public/units")
+          names = [kv.split("=")[0] for kv in sys.argv[1].split()]
+          def load(n, f):
+              p = pathlib.Path(f"t3-ci-out/prof-{n}/{f}")
+              return json.loads(p.read_text()) if p.exists() else {}
+          fin = {n: load(n, "timing.json") for n in names}
+          dev = {n: load(n, "timing_dev.json") for n in names}
+          def n_events(u):
+              b = units / u / "batch.json"
+              if b.is_file():
+                  return sum(int(s["n_events"]) for s in json.loads(b.read_text())["subs"])
+              return int(json.loads((units / u / "events.json").read_text())["n_events"])
+          us = sorted(fin[names[0]], key=n_events)
+          print("medians of 3 runs, seconds; Final = daemon StartedAt..FinishedAt, Dev = host create..rm")
+          print(f"{'unit':34} {'events':>8} " + " ".join(f"{n + ' Final':>12} {n + ' Dev':>12}" for n in names))
+          for u in us:
+              print(f"{u:34} {n_events(u):8d} " + " ".join(f"{fin[n].get(u, float('nan')):12.3f} {dev[n].get(u, float('nan')):12.3f}" for n in names))
+          small = us[:10]
+          for n in names:
+              f = [fin[n][u] for u in small if u in fin[n]]; d = [dev[n][u] for u in small if u in dev[n]]
+              if f:
+                  print(f"{n:8} 10 smallest: mean Final {statistics.mean(f):.3f} s, mean Dev {statistics.mean(d):.3f} s, Docker-side (Dev-Final) {statistics.mean(d) - statistics.mean(f):.3f} s")
           PY
 
       - name: Push to GHCR
@@ -152,8 +258,11 @@ jobs:
         run: |
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat kit.txt >> "$GITHUB_STEP_SUMMARY" || true
-          tail -n 90 t3-ci-out/hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 4 t3-ci-out/hashes.txt >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for f in t3-ci-out/ab.txt t3-ci-out/content.txt t3-ci-out/synthetic.txt t3-ci-out/profile.txt; do
+            if [ -f "$f" ]; then echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; cat "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; fi
+          done
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -165,6 +274,16 @@ jobs:
             t3-ci-out/hashes.txt
             t3-ci-out/hashes.json
             t3-ci-out/out/timing.json
+            t3-ci-out/out/timing_dev.json
+            t3-ci-out/base/timing.json
+            t3-ci-out/base/timing_dev.json
+            t3-ci-out/base-run.txt
+            t3-ci-out/content.txt
+            t3-ci-out/ab.txt
+            t3-ci-out/synthetic.txt
+            t3-ci-out/profile.txt
+            t3-ci-out/prof-*/timing.json
+            t3-ci-out/prof-*/timing_dev.json
             t3-ci-out/out/**/events.json
             t3-ci-out/out/**/batch_events.json
           retention-days: 30

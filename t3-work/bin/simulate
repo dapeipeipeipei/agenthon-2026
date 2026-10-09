@@ -1,4 +1,0 @@
-#!/bin/sh
-# Track 3 submission verb: simulate --config /input/scenario.json --out /output/trace.parquet
-# jpsim-native: C++ kernel + parquet written by the pyarrow 15.0.2 wheel's libparquet; no Python at run time.
-exec /opt/jpsim/jpkernel/jpsim-native simulate "$@"
