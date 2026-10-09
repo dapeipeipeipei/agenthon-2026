@@ -1,6 +1,23 @@
 # T3（加速市场模拟）— 进度存档
 
-**最后更新：2026-10-09 凌晨**（kernel-cpp 线）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)，C++ 内核线细节看 [KERNEL_NOTES.md](KERNEL_NOTES.md)。
+**最后更新：2026-10-09**（native-lean 线）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)，C++ 内核线细节看 [KERNEL_NOTES.md](KERNEL_NOTES.md)，固定开销线看 [LEAN_NOTES.md](LEAN_NOTES.md)。
+
+## native-lean 线（分支 t3/native-lean，10-09）：无 Arrow 的静态二进制，每单元固定时间到地板
+
+- **平台开销模型**（三个真实平台分 v1 34 774 / v2 87 209 / native 134 487 + 同一套 CI 窗口拟合）：`T_plat = 0.63 s + 0.63 × T_ci`。
+  平台每容器 ≈0.63 s 是主办方的；三张镜像落在同一条线上 ⇒ native 没有平台专属的额外固定成本，我们自己的固定部分在 CI 上只有 ≈0.02 s。
+  纯固定开销天花板 173k；榜首 231k 对应 c≤0.47 s，是 host 批次差异，不是代码能动的。平台分的大头在 13 个大单元的变量时间（73k/129k）。
+- **做了什么**：自写 Parquet 写表器 `engine/jpkernel/jpparquet.h`（thrift compact + 字典页/位打包 + 自写 snappy + SHA-256，≤4 线程按列块并行，
+  整文件内存拼好一次 write，哈希算同一块内存），二进制 `-static` 不链任何 .so，verb 就是二进制（不经 /bin/sh），`_exit` 不析构，
+  worker 数读 cgroup `cpu.max`，SHA-NI 哈希，trace 排序改基数排序。Python 引擎仍在镜像里只做预检回退（scratch 空镜像实测窗口一样，不值得去掉）。
+- **验证**：本机 71/71 表级一致（pyarrow 15 和 25 读取器）+ 官方 verifier 71/71 + 合成场景；CI 裸跑 Arrow 变体 71/71 逐字节（内核门）、
+  lean 变体 71/71 表级 + sidecar/行数 + 重复稳定 + 合成；镜像内 71/71 + 基线同 runner A/B + 官方 g0/g1。
+- **数字**（CI 裸跑 s001 进程 8.8 → 1.4 ms，中位单元 76 → 36 ms；镜像内 Final 窗口均值 465k → 598k（+28.6%，第一版 lean，run 37882764539），
+  Dev 口径 304k → 356k（+17.2%）；最终版再 +7%（SHA-NI + 基数排序）。**平台分估计 141k–149k，中心 ~145k**（原 134.5k；c_p 吃掉一切）。
+- **镜像**：`ghcr.io/dapeipeipeipei/jinpei-t3@sha256:7b118bff490c4c5c4c9d9627d4a34f0356f7441def144a35d91eba17e479b5d8`（匿名可拉已验）（tag `-lean2`，run 37883796088，同 runner Final 窗口均值 481k → 648k = +34.8%，Dev 口径 +21.4%）；描述文件 `submission/submission.lean.json` / `.lean.final.json` 已封印校验
+  → `pack_all.py t3-lean` / `t3-lean.final`。第一版 lean（无 SHA-NI/基数排序）`sha256:691363f6…`（tag `-lean`）也全绿可用。
+- 风险：写表器字节与参考不同（表级一致，评分读表不读字节；自己重复跑逐字节稳定）；SHA-NI 走 cpuid 判断，无则标量；
+  平台 c_p 与 host 批次有关，估计有 ±10% 噪声。
 
 ## kernel-cpp 线（分支 t3/kernel-cpp，10-09 凌晨）：C++ 内核 + 零 Python 运行时，71/71 逐字节相同
 
