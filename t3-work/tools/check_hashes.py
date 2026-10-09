@@ -34,6 +34,9 @@ def sha(p: pathlib.Path) -> str:
     return h.hexdigest()
 
 
+ROWS_ONLY = False  # --rows-only: a different (content-identical) parquet writer; check row counts, not bytes
+
+
 def rows(p: pathlib.Path) -> int:
     return int(pq.ParquetFile(p).metadata.num_rows)
 
@@ -66,6 +69,10 @@ def check_single(unit: pathlib.Path, out: pathlib.Path) -> tuple[list[str], int]
         p = out / fn
         if not p.is_file():
             problems.append(f"missing {fn}")
+        elif ROWS_ONLY:
+            want = ref["n_events"] if fn == "trace.parquet" else ref.get("n_messages")
+            if want is not None and rows(p) != int(want):
+                problems.append(f"{fn}: {rows(p)} rows vs reference {want}")
         elif sha(p) != ref[key]:
             problems.append(f"{fn} sha256 differs from the reference ({rows(p)} rows vs {ref['n_events'] if fn == 'trace.parquet' else ref.get('n_messages')})")
     evp = out / "events.json"
@@ -97,6 +104,9 @@ def check_batch(unit: pathlib.Path, out: pathlib.Path) -> tuple[list[str], int]:
             p = d / fn
             if not p.is_file():
                 problems.append(f"{sub}: missing {fn}")
+            elif ROWS_ONLY:
+                if fn == "trace.parquet" and rows(p) != int(s["n_events"]):
+                    problems.append(f"{sub}: {rows(p)} trace rows vs reference {s['n_events']}")
             elif sha(p) != s[key]:
                 problems.append(f"{sub}: {fn} sha256 differs from the reference")
         evp = d / "events.json"
@@ -134,7 +144,12 @@ def main() -> int:
     ap.add_argument("--out-root", required=True, type=pathlib.Path)
     ap.add_argument("--timing", type=pathlib.Path, default=None)
     ap.add_argument("--json", type=pathlib.Path, default=None)
+    ap.add_argument("--rows-only", action="store_true",
+                    help="outputs from a different parquet writer: check reference row counts instead of bytes "
+                         "(pair with check_content.py for the values)")
     args = ap.parse_args()
+    global ROWS_ONLY
+    ROWS_ONLY = args.rows_only
     timing = json.loads(args.timing.read_text()) if args.timing and args.timing.is_file() else {}
     names = sorted(p.name for p in args.units.iterdir() if p.is_dir())
     ok = 0
@@ -158,7 +173,8 @@ def main() -> int:
         results[name] = {"ok": not problems, "rows": n, "wall_sec": wall, "events_per_sec": rate, "problems": problems}
         print(f"{name:34} {'OK' if not problems else 'FAIL':6} {n:8} {(f'{wall:.3f}' if wall else '-'):>7} "
               f"{(f'{rate:.0f}' if rate is not None else '-'):>8}  {'; '.join(problems)}")
-    print(f"\n{ok}/{len(names)} units byte-identical to the references and sidecar-consistent")
+    what = "row counts equal to" if ROWS_ONLY else "byte-identical to"
+    print(f"\n{ok}/{len(names)} units {what} the references and sidecar-consistent")
     if rates:
         print(f"events/sec over {len(rates)} timed units: mean {statistics.mean(rates):.0f} "
               f"(ranked quantity)  median {statistics.median(rates):.0f}  min {min(rates):.0f}  max {max(rates):.0f}")

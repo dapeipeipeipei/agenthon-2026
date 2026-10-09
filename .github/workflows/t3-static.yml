@@ -1,0 +1,214 @@
+# Track 3 STATIC image (t3-work/Dockerfile.static): a fully static simulate/simulate-batch binary
+# (C++ kernel + in-tree parquet writer) over a squashed FROM-scratch root filesystem that still
+# carries the Python fallback. This workflow builds it, runs all 71 public units in it with the
+# platform's container settings, checks every output table against the byte-identical native
+# image (current submission) run on the same runner, re-runs the sidecar/row-count arithmetic and
+# the official g0/g1 gates, checks repeat stability and the synthetic fallback suite, measures the
+# per-container fixed cost of several image shapes (tools/fixed_cost_bench.py), and pushes.
+name: t3-static
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench_reps:
+        description: "repetitions for the fixed-cost matrix"
+        default: "5"
+        required: false
+      push_image:
+        description: "push to GHCR when everything passes"
+        default: "true"
+        required: false
+  push:
+    branches: [t3/static]
+    paths:
+      - "t3-work/**"
+      - ".github/workflows/t3-static.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
+  BASELINE: ghcr.io/dapeipeipeipei/jinpei-t3@sha256:e05df48c07b7f2c93ecdd7c3116b6b7986518e3cd5a6efa5e80fe244a2299dc1
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+  BENCH_REPS: ${{ github.event.inputs.bench_reps || '5' }}
+  PUSH_IMAGE: ${{ github.event.inputs.push_image || 'true' }}
+  BENCH_UNITS: >-
+    t3-s001-price-time-priority t3-eq-deterministic-baseline t3-as01-base-mix t3-gbatch-dense-3
+    t3-gbatch-homog-8 t3-sf-01-baseline-regime t3-mp01-stp-newest-baseline t3-as06-throughput-fast
+    t3-mp03-mm-heavy-newest t3-mr-checkpoint-cadence-fine t3-mp05-cancel-churn-newest
+    t3-gb-pop-128-agents t3-mr-cancel-replace-churn t3-gb-highfreq-40hz-60s t3-gb-mega-throughput
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 3 kit (units + scorer; LFS parquet NOT fetched)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track3-simulation-public
+          ref: main
+          path: track3-simulation-public
+          lfs: false
+
+      - name: Pin the kit revision actually used
+        run: |
+          git -C track3-simulation-public log -1 --format='kit %H %s' | tee -a kit.txt
+          test "$(ls track3-simulation-public/units | wc -l)" = "71"
+          nproc; lscpu | grep -E "Model name|Flags" | sed 's/Flags:.*\(sha_ni\).*/sha_ni present/' | head -3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install toolkit v2.6.0 + Track 3 scorer
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$TOOLKIT" "pyarrow>=15" "pandas>=2"
+          pip install --no-deps -e track3-simulation-public
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the static image and the two measurement-only shapes
+        run: |
+          docker buildx build --platform linux/amd64 --load -t t3-static:ci -f t3-work/Dockerfile.static t3-work
+          docker buildx build --platform linux/amd64 --load -t t3-static-layered:ci --target rootfs -f t3-work/Dockerfile.static t3-work
+          docker buildx build --platform linux/amd64 --load -t t3-static-min:ci -f t3-work/Dockerfile.static-min t3-work
+          docker pull -q "$BASELINE"
+          for i in t3-static:ci t3-static-layered:ci t3-static-min:ci "$BASELINE"; do
+            echo "$i size=$(docker image inspect "$i" --format '{{ .Size }}') layers=$(docker image inspect "$i" --format '{{ len .RootFS.Layers }}') user=$(docker image inspect "$i" --format '{{ .Config.User }}') label=$(docker image inspect "$i" --format '{{ index .Config.Labels "qfbench2.interface_version" }}')"
+          done | tee image-shapes.txt
+          test "$(docker image inspect t3-static:ci --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
+          test "$(docker image inspect t3-static:ci --format '{{ json .Config.Volumes }}')" = "null"
+          test "$(docker image inspect t3-static:ci --format '{{ json .Config.Entrypoint }}')" = "null"
+          test "$(docker image inspect t3-static:ci --format '{{ .Config.User }}')" = "65534:65534"
+
+      - name: Verb contract (no args / --help) in the image; the binary is static
+        run: |
+          docker run --rm --network=none t3-static:ci simulate --help | head -3
+          docker run --rm --network=none t3-static:ci simulate-batch --help | head -3
+          docker run --rm --network=none t3-static:ci | head -3
+          docker run --rm --network=none --entrypoint /usr/bin/file t3-static:ci /usr/local/bin/simulate 2>/dev/null || true
+          docker run --rm --network=none --entrypoint /bin/sh t3-static:ci -c 'ls -la /usr/local/bin/simulate /usr/local/bin/simulate-batch; head -c 64 /usr/local/bin/simulate | od -c | head -2; grep -c "interp" /proc/self/maps >/dev/null; true'
+
+      - name: Baseline (current native submission, byte-identical to the references) on all 71 units
+        run: |
+          mkdir -p ci-out
+          python t3-work/tools/ci_run_units.py --image "$BASELINE" --units track3-simulation-public/units --out-root ci-out/base --timeout 300 | tee ci-out/run-base.txt
+          python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root ci-out/base --timing ci-out/base/timing.json | tail -3 | tee ci-out/hashes-base.txt
+
+      - name: Static image on all 71 units (platform settings, Final-style window)
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-static:ci --units track3-simulation-public/units --out-root ci-out/static --timeout 300 | tee ci-out/run-static.txt
+
+      - name: "Static outputs: row counts + sidecar arithmetic, and every table equal to the baseline's"
+        run: |
+          python t3-work/tools/check_hashes.py --rows-only --units track3-simulation-public/units --out-root ci-out/static --timing ci-out/static/timing.json --json ci-out/static-hashes.json | tee ci-out/hashes-static.txt
+          python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root ci-out/static --ref-root ci-out/base | tee ci-out/content-static.txt | tail -3
+
+      - name: Repeat stability (3 units, second run must be byte-identical)
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-static:ci --units track3-simulation-public/units --out-root ci-out/repeat \
+            --only t3-s001-price-time-priority t3-mp05-cancel-churn-newest t3-gbatch-varsize t3-gb-mega-throughput
+          python - <<'PY'
+          import hashlib, pathlib
+          a, b = pathlib.Path("ci-out/static"), pathlib.Path("ci-out/repeat")
+          bad = 0
+          for p in sorted(b.rglob("*.parquet")):
+              q = a / p.relative_to(b)
+              same = hashlib.sha256(p.read_bytes()).hexdigest() == hashlib.sha256(q.read_bytes()).hexdigest()
+              bad += not same
+              print(("same " if same else "DIFF ") + str(p.relative_to(b)))
+          raise SystemExit(bad)
+          PY
+
+      - name: "Synthetic scenarios in the image: kernel edges + Python fallback (simulate vs simulate-py, table-level)"
+        run: |
+          python t3-work/tools/synthetic_check.py --out "$PWD/ci-out/syn" --pythonpath t3-work/engine --image t3-static:ci --content | tee ci-out/synthetic.txt
+
+      - name: Official scorer g0/g1 gates on the static outputs
+        run: |
+          python - <<'PY'
+          import pathlib
+          from qfbench2_track_simulation import scoring
+          units = pathlib.Path("track3-simulation-public/units"); out = pathlib.Path("ci-out/static")
+          bad = []
+          for u in sorted(units.iterdir()):
+              ctx = {"unit_dir": str(u), "output_dir": str(out / u.name)}
+              v = scoring.build_developer_verifier(ctx)
+              for name, gate in scoring._GATES[:2]:
+                  r = gate(ctx)
+                  if not r.passed:
+                      bad.append((u.name, name, r.detail)); break
+          print("g0/g1 failures:", bad or "none")
+          raise SystemExit(1 if bad else 0)
+          PY
+
+      - name: "Fixed-cost matrix (warm): baseline / static / static layered / static-min / no-op floor"
+        run: |
+          python t3-work/tools/fixed_cost_bench.py --units track3-simulation-public/units --out ci-out/bench-warm --reps "$BENCH_REPS" \
+            --only $BENCH_UNITS \
+            --variant "base=$BASELINE" \
+            --variant "static=t3-static:ci" \
+            --variant "static-layered=t3-static-layered:ci" \
+            --variant "static-min=t3-static-min:ci" \
+            --variant "static-thp=t3-static:ci|GLIBC_TUNABLES=glibc.malloc.hugetlb=1" \
+            --variant "noop-min=t3-static-min:ci|verb=--help" \
+            --variant "noop-base=$BASELINE|verb=--help" | tee ci-out/bench-warm.txt
+
+      - name: "Fixed-cost matrix (cold page cache before every run): baseline vs static"
+        run: |
+          python t3-work/tools/fixed_cost_bench.py --units track3-simulation-public/units --out ci-out/bench-cold --reps 3 --drop-caches \
+            --modes run \
+            --only t3-s001-price-time-priority t3-as01-base-mix t3-sf-01-baseline-regime t3-gbatch-homog-8 t3-mp05-cancel-churn-newest \
+            --variant "base=$BASELINE" \
+            --variant "static=t3-static:ci" \
+            --variant "static-min=t3-static-min:ci" | tee ci-out/bench-cold.txt
+
+      - name: Push to GHCR
+        if: env.PUSH_IMAGE == 'true'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag t3-static:ci "$IMAGE:${GITHUB_SHA::12}-static"
+          docker tag t3-static:ci "$IMAGE:ci-static"
+          docker push "$IMAGE:${GITHUB_SHA::12}-static"
+          docker push "$IMAGE:ci-static"
+          DIGEST=$(docker image inspect "$IMAGE:${GITHUB_SHA::12}-static" --format '{{ index .RepoDigests 0 }}')
+          echo "image digest: $DIGEST" | tee -a ci-out/hashes-static.txt
+          echo "### T3 static image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary to job page
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat kit.txt image-shapes.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 3 ci-out/hashes-base.txt ci-out/hashes-static.txt ci-out/content-static.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 12 ci-out/bench-warm.txt >> "$GITHUB_STEP_SUMMARY" || true
+          tail -n 6 ci-out/bench-cold.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t3-static-ci
+          path: |
+            kit.txt
+            image-shapes.txt
+            ci-out/*.txt
+            ci-out/*.json
+            ci-out/base/timing.json
+            ci-out/static/timing.json
+            ci-out/static/**/events.json
+            ci-out/static/**/batch_events.json
+            ci-out/bench-warm/*.json
+            ci-out/bench-cold/*.json
+          retention-days: 30

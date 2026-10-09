@@ -16,10 +16,17 @@
 
 #include "jpkernel.cpp"
 
+#if defined(JPSIM_ARROW_WRITER)
+// Legacy writer: the pyarrow 15.0.2 wheel's libarrow/libparquet (byte-identical to the references).
 #include <arrow/api.h>
 #include <arrow/io/file.h>
 #include <parquet/arrow/writer.h>
 #include <parquet/properties.h>
+#else
+// Default writer: in-tree Parquet + Snappy (static binary, no shared libraries at all).
+#include "pqlite.h"
+#endif
+#include "sha256ni.h"
 
 #include <chrono>
 #include <cerrno>
@@ -33,11 +40,14 @@
 
 #if !defined(_WIN32)
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sched.h>
+#else
+#include <direct.h>
 #endif
 
 namespace {
@@ -677,6 +687,7 @@ struct Sha256 {
     }
 };
 
+#if defined(JPSIM_ARROW_WRITER)
 static std::string sha256_file(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     Sha256 h;
@@ -687,6 +698,56 @@ static std::string sha256_file(const std::string& path) {
         if (n > 0) h.update(buf.data(), (size_t)n);
     }
     return h.hexdigest();
+}
+#endif
+
+// SHA-256 of an in-memory buffer: SHA-NI when the CPU has it (JPSIM_NO_SHANI=1 forces the portable
+// code), the portable implementation otherwise. Same digest either way.
+static std::string sha256_buf(const uint8_t* p, size_t n) {
+    Sha256 h;
+#if defined(JP_HAVE_SHANI_CODE)
+    static const bool use_ni = shani::available() && !std::getenv("JPSIM_NO_SHANI");
+    if (use_ni) {
+        size_t blocks = n / 64;
+        shani::process(h.h, p, blocks);
+        h.total = blocks * 64;
+        p += blocks * 64;
+        n -= blocks * 64;
+    }
+#endif
+    h.update(p, n);
+    return h.hexdigest();
+}
+
+// One open + one write(2) per output file, mode 0644, no fsync.
+static void write_whole(const std::string& path, const uint8_t* p, size_t n) {
+#if !defined(_WIN32)
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        std::fprintf(stderr, "jpsim-native: cannot open %s: %s\n", path.c_str(), std::strerror(errno));
+        std::exit(1);
+    }
+    while (n > 0) {
+        ssize_t w = ::write(fd, p, n);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            std::fprintf(stderr, "jpsim-native: write %s: %s\n", path.c_str(), std::strerror(errno));
+            std::exit(1);
+        }
+        p += w;
+        n -= (size_t)w;
+    }
+    if (::close(fd) != 0) {
+        std::fprintf(stderr, "jpsim-native: close %s: %s\n", path.c_str(), std::strerror(errno));
+        std::exit(1);
+    }
+#else
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f || std::fwrite(p, 1, n, f) != n || std::fclose(f) != 0) {
+        std::fprintf(stderr, "jpsim-native: cannot write %s\n", path.c_str());
+        std::exit(1);
+    }
+#endif
 }
 
 // ------------------------------------------------------------------------------- Arrow/parquet
@@ -720,6 +781,77 @@ static const char* TRACE_TYPE_NAMES[7] = {"ORDER_SUBMITTED", "ORDER_ACCEPTED", "
                                           "PARTIAL_FILL", "ORDER_FILLED", "QUOTE_UPDATE"};
 static const char* SIDE_NAMES[3] = {nullptr, "BID", "ASK"};
 
+#if !defined(JPSIM_ARROW_WRITER)
+// The organizer's references carry the Arrow IPC schema (with the pandas block) base64-encoded under
+// ARROW:schema; these are those exact strings, so pyarrow restores the same schema on read.
+static const char* TRACE_ARROW_SCHEMA =
+    "/////3gFAAAQAAAAAAAKAA4ABgAFAAgACgAAAAABBAAQAAAAAAAKAAwAAAAEAAgACgAAAMADAAAEAAAAAQAAAAwAAAAIAAwABAAI"
+    "AAgAAAAIAAAAEAAAAAYAAABwYW5kYXMAAIoDAAB7ImluZGV4X2NvbHVtbnMiOiBbXSwgImNvbHVtbl9pbmRleGVzIjogW10sICJj"
+    "b2x1bW5zIjogW3sibmFtZSI6ICJ0X25zIiwgImZpZWxkX25hbWUiOiAidF9ucyIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJu"
+    "dW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJhZ2VudF9pZCIsICJmaWVsZF9uYW1lIjog"
+    "ImFnZW50X2lkIiwgInBhbmRhc190eXBlIjogImludDMyIiwgIm51bXB5X3R5cGUiOiAiaW50MzIiLCAibWV0YWRhdGEiOiBudWxs"
+    "fSwgeyJuYW1lIjogIm1zZ190eXBlIiwgImZpZWxkX25hbWUiOiAibXNnX3R5cGUiLCAicGFuZGFzX3R5cGUiOiAidW5pY29kZSIs"
+    "ICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAic2lkZSIsICJmaWVsZF9uYW1lIjog"
+    "InNpZGUiLCAicGFuZGFzX3R5cGUiOiAidW5pY29kZSIsICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0YSI6IG51bGx9"
+    "LCB7Im5hbWUiOiAicHJpY2UiLCAiZmllbGRfbmFtZSI6ICJwcmljZSIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90"
+    "eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJzaXplIiwgImZpZWxkX25hbWUiOiAic2l6ZSIsICJw"
+    "YW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJv"
+    "cmRlcl9pZCIsICJmaWVsZF9uYW1lIjogIm9yZGVyX2lkIiwgInBhbmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAi"
+    "aW50NjQiLCAibWV0YWRhdGEiOiBudWxsfV0sICJjcmVhdG9yIjogeyJsaWJyYXJ5IjogInB5YXJyb3ciLCAidmVyc2lvbiI6ICIx"
+    "NS4wLjIifSwgInBhbmRhc192ZXJzaW9uIjogIjEuNS4zIn0AAAcAAABMAQAABAEAANAAAACkAAAAcAAAADwAAAAEAAAA4P7//wAA"
+    "AQIQAAAAHAAAAAQAAAAAAAAACAAAAG9yZGVyX2lkAAAAANT+//8AAAABQAAAABT///8AAAECEAAAABgAAAAEAAAAAAAAAAQAAABz"
+    "aXplAAAAAAT///8AAAABQAAAAET///8AAAECEAAAABgAAAAEAAAAAAAAAAUAAABwcmljZQAAADT///8AAAABQAAAAHT///8AAAEF"
+    "EAAAABgAAAAEAAAAAAAAAAQAAABzaWRlAAAAANT///+c////AAABBRAAAAAgAAAABAAAAAAAAAAIAAAAbXNnX3R5cGUAAAAABAAE"
+    "AAQAAADM////AAABAhAAAAAcAAAABAAAAAAAAAAIAAAAYWdlbnRfaWQAAAAAwP///wAAAAEgAAAAEAAUAAgABgAHAAwAAAAQABAA"
+    "AAAAAAECEAAAACAAAAAEAAAAAAAAAAQAAAB0X25zAAAAAAgADAAIAAcACAAAAAAAAAFAAAAAAAAAAA==";
+static const char* MSG_ARROW_SCHEMA =
+    "/////6AHAAAQAAAAAAAKAA4ABgAFAAgACgAAAAABBAAQAAAAAAAKAAwAAAAEAAgACgAAADQFAAAEAAAAAQAAAAwAAAAIAAwABAAI"
+    "AAgAAAAIAAAAEAAAAAYAAABwYW5kYXMAAPwEAAB7ImluZGV4X2NvbHVtbnMiOiBbXSwgImNvbHVtbl9pbmRleGVzIjogW10sICJj"
+    "b2x1bW5zIjogW3sibmFtZSI6ICJzZXEiLCAiZmllbGRfbmFtZSI6ICJzZXEiLCAicGFuZGFzX3R5cGUiOiAiaW50NjQiLCAibnVt"
+    "cHlfdHlwZSI6ICJpbnQ2NCIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAidF9yZWN2X25zIiwgImZpZWxkX25hbWUiOiAi"
+    "dF9yZWN2X25zIiwgInBhbmRhc190eXBlIjogImludDY0IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAibWV0YWRhdGEiOiBudWxs"
+    "fSwgeyJuYW1lIjogInRfc2VuZF9ucyIsICJmaWVsZF9uYW1lIjogInRfc2VuZF9ucyIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIs"
+    "ICJudW1weV90eXBlIjogIkludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJsYXRlbmN5X25zIiwgImZpZWxkX25h"
+    "bWUiOiAibGF0ZW5jeV9ucyIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogImludDY0IiwgIm1ldGFkYXRh"
+    "IjogbnVsbH0sIHsibmFtZSI6ICJzcmNfaWQiLCAiZmllbGRfbmFtZSI6ICJzcmNfaWQiLCAicGFuZGFzX3R5cGUiOiAiaW50MzIi"
+    "LCAibnVtcHlfdHlwZSI6ICJpbnQzMiIsICJtZXRhZGF0YSI6IG51bGx9LCB7Im5hbWUiOiAiZHN0X2lkIiwgImZpZWxkX25hbWUi"
+    "OiAiZHN0X2lkIiwgInBhbmRhc190eXBlIjogImludDMyIiwgIm51bXB5X3R5cGUiOiAiaW50MzIiLCAibWV0YWRhdGEiOiBudWxs"
+    "fSwgeyJuYW1lIjogIm1lc3NhZ2VfaWQiLCAiZmllbGRfbmFtZSI6ICJtZXNzYWdlX2lkIiwgInBhbmRhc190eXBlIjogImludDY0"
+    "IiwgIm51bXB5X3R5cGUiOiAiaW50NjQiLCAibWV0YWRhdGEiOiBudWxsfSwgeyJuYW1lIjogIm1zZ190eXBlIiwgImZpZWxkX25h"
+    "bWUiOiAibXNnX3R5cGUiLCAicGFuZGFzX3R5cGUiOiAidW5pY29kZSIsICJudW1weV90eXBlIjogInN0cmluZyIsICJtZXRhZGF0"
+    "YSI6IG51bGx9LCB7Im5hbWUiOiAib3JkZXJfaWQiLCAiZmllbGRfbmFtZSI6ICJvcmRlcl9pZCIsICJwYW5kYXNfdHlwZSI6ICJp"
+    "bnQ2NCIsICJudW1weV90eXBlIjogIkludDY0IiwgIm1ldGFkYXRhIjogbnVsbH0sIHsibmFtZSI6ICJjYXVzYWxfcGFyZW50Iiwg"
+    "ImZpZWxkX25hbWUiOiAiY2F1c2FsX3BhcmVudCIsICJwYW5kYXNfdHlwZSI6ICJpbnQ2NCIsICJudW1weV90eXBlIjogIkludDY0"
+    "IiwgIm1ldGFkYXRhIjogbnVsbH1dLCAiY3JlYXRvciI6IHsibGlicmFyeSI6ICJweWFycm93IiwgInZlcnNpb24iOiAiMTUuMC4y"
+    "In0sICJwYW5kYXNfdmVyc2lvbiI6ICIxLjUuMyJ9AAAAAAoAAAAEAgAAvAEAAIQBAABMAQAAGAEAAOQAAACsAAAAeAAAAEAAAAAE"
+    "AAAANP7//wAAAQIQAAAAIAAAAAQAAAAAAAAADQAAAGNhdXNhbF9wYXJlbnQAAAAw/v//AAAAAUAAAABs/v//AAABAhAAAAAcAAAA"
+    "BAAAAAAAAAAIAAAAb3JkZXJfaWQAAAAAZP7//wAAAAFAAAAAoP7//wAAAQUQAAAAIAAAAAQAAAAAAAAACAAAAG1zZ190eXBlAAAA"
+    "AAQABAAEAAAA0P7//wAAAQIQAAAAHAAAAAQAAAAAAAAACgAAAG1lc3NhZ2VfaWQAAMj+//8AAAABQAAAAAT///8AAAECEAAAABgA"
+    "AAAEAAAAAAAAAAYAAABkc3RfaWQAAPj+//8AAAABIAAAADT///8AAAECEAAAABgAAAAEAAAAAAAAAAYAAABzcmNfaWQAACj///8A"
+    "AAABIAAAAGT///8AAAECEAAAABwAAAAEAAAAAAAAAAoAAABsYXRlbmN5X25zAABc////AAAAAUAAAACY////AAABAhAAAAAcAAAA"
+    "BAAAAAAAAAAJAAAAdF9zZW5kX25zAAAAkP///wAAAAFAAAAAzP///wAAAQIQAAAAHAAAAAQAAAAAAAAACQAAAHRfcmVjdl9ucwAA"
+    "AMT///8AAAABQAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAcAAAABAAAAAAAAAADAAAAc2VxAAgADAAIAAcACAAAAAAA"
+    "AAFAAAAAAAAAAA==";
+static const char* CREATED_BY = "jpsim-static (in-tree parquet writer)";
+
+// Pages are left uncompressed (fastest to write) unless a file would be large: then snappy keeps
+// every output well inside the 256 MiB per-file / per-unit limits. JPSIM_SNAPPY=0/1 forces it;
+// JPSIM_SNAPPY_MIN (bytes) moves the threshold. The choice depends only on the row counts, so a
+// repeat run writes the same bytes.
+static size_t g_snappy_min = (size_t)24 << 20;
+static int codec_for(size_t raw_bytes) {
+    static int forced = [] {
+        const char* e = std::getenv("JPSIM_SNAPPY");
+        if (const char* m = std::getenv("JPSIM_SNAPPY_MIN")) g_snappy_min = (size_t)std::strtoull(m, nullptr, 10);
+        return e ? std::atoi(e) : -1;
+    }();
+    if (forced == 0) return pql::CODEC_UNCOMPRESSED;
+    if (forced == 1) return pql::CODEC_SNAPPY;
+    return raw_bytes >= g_snappy_min ? pql::CODEC_SNAPPY : pql::CODEC_UNCOMPRESSED;
+}
+#endif
+
+#if defined(JPSIM_ARROW_WRITER)
 template <typename T>
 static std::shared_ptr<arrow::Buffer> wrap(const std::vector<T>& v) {
     return std::make_shared<arrow::Buffer>((const uint8_t*)v.data(), (int64_t)(v.size() * sizeof(T)));
@@ -832,6 +964,8 @@ static void write_parquet(const std::shared_ptr<arrow::Table>& table, const std:
     check(sink->Close(), "close file");
 }
 
+#endif  // JPSIM_ARROW_WRITER
+
 static std::string json_escape(const std::string& s) {
     std::string o;
     for (unsigned char c : s) {
@@ -870,6 +1004,12 @@ static void mkdirs(const std::string& dir) {
         if (dir[i] == '/' || i + 1 == dir.size()) {
             if (cur != "/" && !cur.empty()) mkdir(cur.c_str(), 0755);
         }
+    }
+#else
+    std::string cur;
+    for (size_t i = 0; i < dir.size(); i++) {
+        cur += dir[i];
+        if (dir[i] == '/' || dir[i] == '\\' || i + 1 == dir.size()) _mkdir(cur.c_str());
     }
 #endif
 }
@@ -972,10 +1112,13 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
     mkdirs(out_dir);
     std::string msg_out = out_dir + "/message_trace.parquet";
 
+    // Kernel and result buffers are deliberately leaked: the process _exit()s right after the
+    // outputs are written (or a batch child does), so freeing ~GB of heap would be wasted time.
+    Result& res = *new Result();
+    std::string trace_sha, msg_sha;
+#if defined(JPSIM_ARROW_WRITER)
     // The two outputs are independent: build + write + hash each on its own thread (the platform
     // runs the container with 4 CPUs; each thread writes its own file through its own writer).
-    Result res;
-    std::string trace_sha, msg_sha;
     std::thread t_trace([&] {
         build_trace(*k, res);
         auto meta = arrow::key_value_metadata({"pandas"}, {TRACE_PANDAS_META});
@@ -1013,9 +1156,47 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
         write_parquet(table, msg_out);
         msg_sha = sha256_file(msg_out);
     });
+#else
+    // The two outputs are independent: each thread builds its columns, encodes its whole file in
+    // memory, writes it with one write(2) and hashes the same bytes (no read-back).
+    std::thread t_trace([&] {
+        build_trace(*k, res);
+        std::vector<pql::Col> cols = {
+            pql::col_i64("t_ns", res.t_ns),          pql::col_i32("agent_id", res.agent_id),
+            pql::col_str8("msg_type", res.msg_type, TRACE_TYPE_NAMES, 7),
+            pql::col_str8("side", res.side, SIDE_NAMES, 3),
+            pql::col_i64("price", res.price),        pql::col_i64("size", res.size),
+            pql::col_i64("order_id", res.order_id)};
+        pql::Out file;
+        size_t n = (size_t)res.n_trace;
+        pql::build_file(file, cols, n, {{"pandas", TRACE_PANDAS_META}, {"ARROW:schema", TRACE_ARROW_SCHEMA}},
+                        codec_for(pql::raw_size(cols, n)), CREATED_BY);
+        write_whole(out_path, file.b.data(), file.size());
+        trace_sha = sha256_buf(file.b.data(), file.size());
+    });
+    std::thread t_msg([&] {
+        build_messages(*k, res);
+        std::vector<pql::Col> cols = {
+            pql::col_i64("seq", res.seq),
+            pql::col_i64("t_recv_ns", res.t_recv),
+            pql::col_i64_null("t_send_ns", res.t_send, NONE64),
+            pql::col_i64("latency_ns", res.latency),
+            pql::col_i32("src_id", res.src),
+            pql::col_i32("dst_id", res.dst),
+            pql::col_i64("message_id", res.message_id),
+            pql::col_str16("msg_type", res.m_type, MSG_NAMES, M_COUNT),
+            pql::col_i64_null("order_id", res.m_order_id, NONE64),
+            pql::col_i64_null("causal_parent", res.causal, NONE64)};
+        pql::Out file;
+        size_t n = (size_t)res.n_msg;
+        pql::build_file(file, cols, n, {{"pandas", MSG_PANDAS_META}, {"ARROW:schema", MSG_ARROW_SCHEMA}},
+                        codec_for(pql::raw_size(cols, n)), CREATED_BY);
+        write_whole(msg_out, file.b.data(), file.size());
+        msg_sha = sha256_buf(file.b.data(), file.size());
+    });
+#endif
     t_trace.join();
     t_msg.join();
-    delete k;
     SimEvents ev;
     ev.scenario_id = bs.scenario_id;
     ev.seed = bs.seed;
@@ -1026,9 +1207,8 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
     ev.peak = peak_rss_bytes();
     ev.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     ev.eps = ev.wall > 0 ? (double)ev.n_events / ev.wall : 0.0;
-    std::ofstream ef(out_dir + "/events.json", std::ios::binary);
-    ef << events_json(ev);
-    ef.close();
+    std::string ej = events_json(ev);
+    write_whole(out_dir + "/events.json", (const uint8_t*)ej.data(), ej.size());
     return ev;
 }
 
@@ -1045,6 +1225,14 @@ static std::vector<std::string> list_json_sorted(const std::string& dir) {
         if (n.size() > 5 && n.compare(n.size() - 5, 5, ".json") == 0) names.push_back(n);
     }
     closedir(d);
+#else
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "/*.json").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do names.push_back(fd.cFileName);
+        while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
 #endif
     std::sort(names.begin(), names.end());
     return names;
@@ -1059,6 +1247,10 @@ static int simulate_batch(const std::string& batch_dir, const std::string& out_d
     }
     mkdirs(out_dir);
     size_t n = subs.size();
+#if !defined(JPSIM_ARROW_WRITER)
+    // keep the uncompressed total of the whole batch within the same budget as one unit
+    g_snappy_min = std::max<size_t>((size_t)1 << 20, g_snappy_min / n);
+#endif
     if (workers <= 0) {
 #if !defined(_WIN32)
         cpu_set_t set;
@@ -1157,16 +1349,33 @@ static void usage() {
 
 int main(int argc, char** argv) {
     auto t0 = std::chrono::steady_clock::now();
-    if (argc < 2) {
-        usage();
-        return 0;
+    init_libm();
+    // Invoked as `simulate` / `simulate-batch` (the verbs on PATH are this very binary, so the
+    // harness's command execs it directly: no shell, no wrapper), the verb is argv[0]'s basename;
+    // invoked as `jpsim-native <verb> ...`, it is argv[1].
+    std::string self = argv[0] ? argv[0] : "";
+    {
+        size_t k = self.find_last_of("/\\");
+        if (k != std::string::npos) self = self.substr(k + 1);
+        if (self.size() > 4 && self.compare(self.size() - 4, 4, ".exe") == 0) self.resize(self.size() - 4);
     }
-    std::string verb = argv[1];
+    int first = 1;
+    std::string verb;
+    if (self == "simulate" || self == "simulate-batch") {
+        verb = self;
+    } else {
+        if (argc < 2) {
+            usage();
+            return 0;
+        }
+        verb = argv[1];
+        first = 2;
+    }
     std::string config, out, batch_dir, out_dir;
     bool have_seed = false;
     int64_t seed = 0;
     int workers = 0;
-    for (int i = 2; i < argc; i++) {
+    for (int i = first; i < argc; i++) {
         std::string a = argv[i];
         auto need = [&](const char* name) -> std::string {
             if (i + 1 >= argc) {
@@ -1197,15 +1406,21 @@ int main(int argc, char** argv) {
             return 2;
         }
         SimEvents ev = simulate_one(config, out, have_seed, seed, t0);
-        std::printf("%s", events_json(ev).c_str());
-        return 0;
+        std::string ej = events_json(ev);
+        std::fwrite(ej.data(), 1, ej.size(), stdout);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        _exit(0);  // outputs are closed; skip global destructors and heap teardown
     }
     if (verb == "simulate-batch") {
         if (batch_dir.empty() || out_dir.empty()) {
             usage();
             return 2;
         }
-        return simulate_batch(batch_dir, out_dir, workers, t0);
+        int rc = simulate_batch(batch_dir, out_dir, workers, t0);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        _exit(rc);
     }
     if (verb == "--help" || verb == "-h") {
         usage();

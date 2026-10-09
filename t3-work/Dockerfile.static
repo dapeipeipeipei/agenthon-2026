@@ -1,0 +1,82 @@
+# Agenthon 2026 Track 3 (Accelerated Market Simulation) — team Jin & Pei: jpsim, STATIC variant.
+#
+# Hot path: `simulate` / `simulate-batch` on PATH are ONE fully static binary (glibc 2.36 static,
+# libstdc++ static; no ELF interpreter, no shared library, no shell wrapper): the C++ kernel
+# (engine/jpkernel/jpkernel.cpp) + an in-tree Parquet/Snappy writer (engine/jpkernel/pqlite.h) +
+# SHA-256 (SHA-NI when present). The process maps ~3 MB and starts in well under a millisecond.
+#
+# Cold path (only read when a scenario is outside the kernel's reproduced scope): the full Python
+# engine (vendored ABIDES + jpsim, numpy 1.26.4, pyarrow 15.0.2, scipy 1.17.1) behind
+# `simulate-py`, exec'd by the binary per scenario / batch sub-scenario.
+#
+# The final image is `FROM scratch` + ONE layer (the whole root filesystem squashed): fewer layers
+# for the overlay mount, nothing inherited (no VOLUME, no ENTRYPOINT), the same Debian bookworm
+# userland as the dynamic image for anything the runtime (e.g. the NVIDIA hook's ldconfig) expects.
+#
+# Build (linux/amd64; .github/workflows/t3-static.yml):
+#   docker buildx build --platform linux/amd64 -t jpsim:static -f t3-work/Dockerfile.static t3-work
+
+# ---------------------------------------------------------------- stage 1: the static binary
+# Same distribution (Debian bookworm, glibc 2.36) as the dynamic image: the kernel's log/exp/pow
+# come from this glibc's libm.a — the same code (and the same ifunc variant selection) as the
+# libm.so the reference's numpy/CPython called.
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS static-build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+COPY engine/jpkernel /src/jpkernel
+RUN g++ -O2 -std=c++17 -fno-fast-math -ffp-contract=off -DJPK_NO_EXPORTS \
+        -static -pthread -Wl,--gc-sections -ffunction-sections -fdata-sections -s \
+        -o /src/jpsim-native /src/jpkernel/jpsim_native.cpp \
+ && /src/jpsim-native --help \
+ && ls -la /src/jpsim-native \
+ && (ldd /src/jpsim-native 2>&1 | grep -q "not a dynamic executable")
+
+# ---------------------------------------------------------------- stage 2: the root filesystem
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS rootfs
+
+# scipy: only the Python fallback needs it (ABIDES line-distance latency model when a scenario has
+# no latency_config); the kit baseline pins the same version.
+RUN pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "scipy==1.17.1"
+
+COPY engine /opt/jpsim
+COPY bin/simulate-py /usr/local/bin/simulate-py
+COPY bin/simulate-batch-py /usr/local/bin/simulate-batch-py
+COPY --from=static-build /src/jpsim-native /usr/local/bin/simulate
+
+# `simulate-batch` is a hard link to the same file (argv[0] selects the verb); `jpsim-native` too,
+# for `jpsim-native <verb> ...`. The kernel sources stay in /opt/jpsim/jpkernel for provenance.
+RUN ln /usr/local/bin/simulate /usr/local/bin/simulate-batch \
+ && ln /usr/local/bin/simulate /usr/local/bin/jpsim-native \
+ && chmod 0755 /usr/local/bin/simulate /usr/local/bin/simulate-py /usr/local/bin/simulate-batch-py \
+ && find /opt/jpsim -type d -exec chmod 0755 {} + \
+ && find /opt/jpsim -type f -exec chmod 0644 {} + \
+ && PYTHONPATH=/opt/jpsim python -m compileall -q -j 0 -o 0 -o 1 /opt/jpsim /usr/local/lib/python3.11/site-packages/numpy /usr/local/lib/python3.11/site-packages/pyarrow \
+ && PYTHONPATH=/opt/jpsim python -c "import jpsim.cli, abides_core.abides, jpsim.config, jpsim.trace_fast; import scipy.spatial.distance; print('fallback import ok')" \
+ && simulate --help && simulate-batch --help \
+ && rm -rf /root/.cache /tmp/* /var/cache/debconf/*-old /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------- final: one squashed layer
+FROM scratch
+COPY --from=rootfs / /
+
+LABEL qfbench2.interface_version="2.0"
+LABEL qfbench2.track="simulation"
+LABEL org.opencontainers.image.source="https://github.com/dapeipeipeipei/agenthon"
+LABEL org.opencontainers.image.description="Agenthon 2026 Track 3 simulator (jpsim): static C++ kernel binary + Python ABIDES fallback"
+
+# FROM scratch inherits no environment: restate what the Python fallback needs (the binary needs none).
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    HOME=/tmp \
+    PYTHONPATH=/opt/jpsim \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1
+
+WORKDIR /tmp
+USER 65534:65534
+
+# No ENTRYPOINT: the harness passes the verb (`simulate ...` / `simulate-batch ...`) as the
+# command and it resolves from PATH. No VOLUME anywhere.
+CMD ["simulate", "--help"]

@@ -120,6 +120,26 @@ def hashes(out: pathlib.Path) -> tuple[str, str]:
     return sha(out / "trace.parquet"), sha(out / "message_trace.parquet")
 
 
+CONTENT = False  # --content: equal tables (schema + metadata + values) count as SAME, not just equal bytes
+
+
+def same_outputs(a: pathlib.Path, b: pathlib.Path) -> bool:
+    if hashes(a) == hashes(b):
+        return True
+    if not CONTENT:
+        return False
+    import pyarrow.parquet as pq
+
+    for name in ("trace.parquet", "message_trace.parquet"):
+        pa_, pb_ = a / name, b / name
+        if not (pa_.is_file() and pb_.is_file()):
+            return False
+        ta, tb = pq.read_table(pa_), pq.read_table(pb_)
+        if not ta.schema.equals(tb.schema, check_metadata=True) or not ta.equals(tb):
+            return False
+    return True
+
+
 class Runner:
     def __init__(self, args):
         self.args = args
@@ -175,7 +195,11 @@ def main() -> int:
     ap.add_argument("--exe", default=None)
     ap.add_argument("--image", default=None)
     ap.add_argument("--ctypes", action="store_true")
+    ap.add_argument("--content", action="store_true",
+                    help="kernel outputs written by a different parquet writer: compare tables, not bytes")
     args = ap.parse_args()
+    global CONTENT
+    CONTENT = args.content
     root = args.out
     if root.exists():
         shutil.rmtree(root)
@@ -218,7 +242,7 @@ def main() -> int:
         rc_k, err_k = r.kernel(cfg, root / "k" / name)
         hk = hashes(root / "k" / name)
         fb = "running the Python engine" in err_k
-        status = "SAME" if (rc_k == 0 and hk == h1) else "DIFF"
+        status = "SAME" if (rc_k == 0 and same_outputs(root / "k" / name, root / "py1" / name)) else "DIFF"
         if status == "DIFF":
             problems.append(f"{name}: kernel path differs (rc={rc_k}) {hk} vs {h1}: {err_k[-400:]}")
         if can_fallback:
@@ -243,7 +267,8 @@ def main() -> int:
         rc_p, err_p = r.python(b / "scenarios" / f"{stem}.json", root / "py1" / "syn-batch" / stem)
         hp = hashes(root / "py1" / "syn-batch" / stem)
         hk = hashes(root / "k" / "syn-batch" / stem)
-        status = "SAME" if (rc_p == 0 and hk == hp) else "DIFF"
+        status = "SAME" if (rc_p == 0 and same_outputs(root / "k" / "syn-batch" / stem,
+                                                        root / "py1" / "syn-batch" / stem)) else "DIFF"
         if status == "DIFF":
             problems.append(f"syn-batch/{stem}: differs {hk} vs {hp}")
         rows.append((f"syn-batch/{stem}", status, ""))
