@@ -105,10 +105,10 @@ jobs:
 
       - name: Verb contract (no args / --help) in the image
         run: |
-          docker run --rm --network=none t3-local:ci simulate --help | head -3
-          docker run --rm --network=none t3-local:ci simulate-batch --help | head -3
-          docker run --rm --network=none t3-local:ci | head -3
-          docker run --rm --network=none t3-local:ci simulate-py --help | head -2
+          docker run --rm --network=none t3-local:ci simulate --help | sed -n '1,3p'
+          docker run --rm --network=none t3-local:ci simulate-batch --help | sed -n '1,3p'
+          docker run --rm --network=none t3-local:ci | sed -n '1,3p'
+          docker run --rm --network=none t3-local:ci simulate-py --help | sed -n '1,2p'
 
       - name: Run every public unit in the image (platform settings; Final-style and Dev-style windows)
         run: |

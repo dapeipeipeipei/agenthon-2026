@@ -38,7 +38,7 @@ jobs:
         run: |
           apt-get update && apt-get install -y --no-install-recommends g++ git ca-certificates strace time file && rm -rf /var/lib/apt/lists/*
           pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "scipy==1.17.1" "pandas>=2"
-          g++ --version | head -1; ldd --version 2>&1 | head -1; nproc; cat /sys/kernel/mm/transparent_hugepage/enabled || true
+          g++ --version | sed -n '1,1p'; ldd --version 2>&1 | sed -n '1,1p'; nproc; cat /sys/kernel/mm/transparent_hugepage/enabled || true
 
       - uses: actions/checkout@v4
 
@@ -61,7 +61,7 @@ jobs:
           echo "--- ldd lean-dyn:"; ldd /tmp/lean-dyn
           echo "--- ldd arrow:"; ldd /tmp/arrow | grep -E "arrow|parquet|libstdc|libm|libc\."
           /tmp/lean --help
-          cp /tmp/lean /tmp/simulate && /tmp/simulate --help | head -1
+          cp /tmp/lean /tmp/simulate && /tmp/simulate --help | sed -n '1,1p'
 
       - name: Reference variant (Arrow writer) on every unit + byte-level check against the declared reference hashes
         run: |
