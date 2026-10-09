@@ -83,9 +83,19 @@ def parquet_hashes(out: pathlib.Path) -> dict[str, str]:
     return res
 
 
+def wipe(path: pathlib.Path) -> None:
+    """Remove a previous run's output; batch sub-directories are created by uid 65534 inside the
+    container (mode 755), so the runner user may need sudo to delete their files."""
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        subprocess.run(["sudo", "-n", "rm", "-rf", str(path)], check=True)
+
+
 def run_once(image: str, staging: pathlib.Path, verb: list[str], out: pathlib.Path, timeout: float) -> dict:
-    if out.exists():
-        shutil.rmtree(out)
+    wipe(out)
     out.mkdir(parents=True)
     out.chmod(0o777)
     t0 = time.perf_counter()
