@@ -9,7 +9,9 @@
 - 验证：本机 71/71、CI 裸跑 71/71、CI 镜像内（平台容器参数）71/71 + 重复稳定 + g0/g1 全过；`tools/rng_check.py` RNG 逐位 0 失败。
 - 速度（榜分口径 71 单元算术平均）：本机 Python 包装 306k（v1 50.7k，参考 14.0k）；CI 镜像内 **575 460**（v1 镜像同口径 36.7k）；
   CI 裸跑 0.9–1.3M。gb-mega 1.17M 事件整进程 0.9 s（v1 19.4 s，参考 87 s）。
-- 镜像：`ghcr.io/dapeipeipeipei/jinpei-t3@sha256:97678c5cc5e5258bef000893bb9b9b8937fcd384bf97e5ec5f07ad3efedf4bbf`（tag `-native2`，匿名可拉已验）；描述文件
+- **安全网（第二轮）**：native 跑前预检范围（未知键/选项/类型 → stderr 说明原因并 exec `simulate-py`，JPSIM_KERNEL=py，输出相同只是慢；批量按子场景）；
+  镜像里 Python 回退带 scipy；内核补了无 latency_config 的线距延迟模型；`tools/synthetic_check.py` 9 场景+混合批量在本机/CI 裸跑/CI 镜像内三处全绿。
+- 镜像：`ghcr.io/dapeipeipeipei/jinpei-t3@sha256:e05df48c07b7f2c93ecdd7c3116b6b7986518e3cd5a6efa5e80fe244a2299dc1`（tag `-native3`，匿名可拉已验；上一版 `sha256:97678c5c…` 无安全网）；描述文件
   `submission/submission.cpp.json` / `.cpp.final.json` 已封印校验 → `pack_all.py t3-cpp` / `t3-cpp.final`。
   备选（Python 包装内核镜像，同样 71/71）：`sha256:db41a1960ab14ed5546581b5fc7dd6d0e91d15ed00373ce0c743018a1f8fd6ce`（142k）。
 - 风险：私有单元若用到公开单元没有的分支（MarketOrder/Replace/无 latency_config），native 直接报错不出错误结果；
