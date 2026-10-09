@@ -27,6 +27,12 @@
 #include <thread>
 #include <vector>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#define JPQ_HAVE_SHANI 1
+#include <cpuid.h>
+#include <immintrin.h>
+#endif
+
 namespace jpq {
 
 // ------------------------------------------------------------------------------ thrift compact
@@ -212,10 +218,7 @@ static const uint32_t SHA256_K[64] = {
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
-#if defined(__x86_64__) || defined(_M_X64)
-#define JPQ_HAVE_SHANI 1
-#include <cpuid.h>
-#include <immintrin.h>
+#if defined(JPQ_HAVE_SHANI)
 // The x86 SHA extensions (SHA-NI): 4 rounds per instruction pair. Selected at run time; the
 // scalar code below is the fallback (and the oracle the dev build checks this against).
 static bool cpu_has_shani() {
