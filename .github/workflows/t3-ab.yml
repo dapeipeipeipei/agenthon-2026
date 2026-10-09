@@ -1,0 +1,120 @@
+# Same-runner A/B of Track 3 images (t3-work/tools/ab_bench.py): every public unit, every image,
+# interleaved (order rotated per unit), N reps with the platform's container flags; Final-style
+# (StartedAt->FinishedAt, median of the last N-1) and Dev-style (create->rm) scores, byte stability
+# across reps, row counts + sidecar checks, and table content vs the first (byte-identical) image.
+# Two replicas run as separate jobs, i.e. on two different runners, to see runner noise.
+name: t3-ab
+
+on:
+  workflow_dispatch:
+    inputs:
+      images:
+        description: "Comma-separated label=digest (ghcr.io/dapeipeipeipei/jinpei-t3@ is prepended to a bare sha256:...); the first one is the byte-identical reference"
+        required: true
+        default: "cpp=sha256:e05df48c07b7f2c93ecdd7c3116b6b7986518e3cd5a6efa5e80fe244a2299dc1,static=sha256:c3b318b87418b4ed229fc03017583fb9c63d1046adc4338b2d9c21d0efb1545e,lean=sha256:7b118bff490c4c5c4c9d9627d4a34f0356f7441def144a35d91eba17e479b5d8"
+      reps:
+        description: "Runs per image per unit (the Final: 5, median of the last 4)"
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the public Track 3 kit (units; LFS parquet NOT fetched)
+        uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track3-simulation-public
+          ref: main
+          path: track3-simulation-public
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Checker dependencies
+        run: pip install --no-cache-dir "numpy==1.26.4" "pyarrow==15.0.2" "pandas==2.2.3"
+
+      - name: Runner
+        run: |
+          echo "runner=$RUNNER_NAME replica=${{ matrix.replica }}"; nproc; grep -m1 "model name" /proc/cpuinfo; free -g; docker version --format '{{.Server.Version}}'
+
+      - name: Pull every image anonymously
+        env:
+          IMAGES: ${{ inputs.images }}
+        run: |
+          docker logout ghcr.io || true
+          args=()
+          IFS=',' read -ra items <<< "$IMAGES"
+          for it in "${items[@]}"; do
+            it="$(echo "$it" | xargs)"; lab="${it%%=*}"; ref="${it#*=}"
+            case "$ref" in sha256:*) ref="ghcr.io/dapeipeipeipei/jinpei-t3@$ref";; esac
+            docker pull -q "$ref"
+            docker image inspect "$ref" --format "$lab {{.Size}} bytes {{.Id}}"
+            args+=(--image "$lab=$ref")
+          done
+          printf '%s\n' "${args[@]}" > ab_args.txt
+          cat ab_args.txt
+
+      - name: Interleaved A/B (all units x all images x reps)
+        run: |
+          mapfile -t args < ab_args.txt
+          python t3-work/tools/ab_bench.py --units track3-simulation-public/units --work ab --reps "${{ inputs.reps }}" "${args[@]}" | tee ab-run.txt
+
+      - name: Checks (rows + sidecar for all; bytes for the reference; table content vs the reference)
+        if: always()
+        run: |
+          mapfile -t args < ab_args.txt
+          ref=""; rc=0
+          : > ab-checks.txt
+          for ((i=1; i<${#args[@]}; i+=2)); do
+            lab="${args[$i]%%=*}"
+            echo "=== $lab: row counts + sidecar" | tee -a ab-checks.txt
+            python t3-work/tools/check_hashes.py --sidecar-only --units track3-simulation-public/units --out-root "ab/out/$lab" > "chk-$lab.txt" || rc=1
+            tail -1 "chk-$lab.txt" | tee -a ab-checks.txt
+            if [ -z "$ref" ]; then
+              ref="$lab"
+              echo "=== $lab (reference): bytes vs the organizer's declared hashes" | tee -a ab-checks.txt
+              python t3-work/tools/check_hashes.py --units track3-simulation-public/units --out-root "ab/out/$lab" > "chk-$lab-bytes.txt" || rc=1
+              tail -1 "chk-$lab-bytes.txt" | tee -a ab-checks.txt
+            else
+              echo "=== $lab: table content vs $ref" | tee -a ab-checks.txt
+              python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root "ab/out/$lab" --ref-root "ab/out/$ref" > "content-$lab.txt" || rc=1
+              grep -E "DIFF|^ {4}" "content-$lab.txt" | head -20 | tee -a ab-checks.txt || true
+              tail -1 "content-$lab.txt" | tee -a ab-checks.txt
+            fi
+          done
+          exit $rc
+
+      - name: Summary
+        if: always()
+        run: |
+          cat ab/ab_summary.md >> "$GITHUB_STEP_SUMMARY" || true
+          { echo; echo '```'; cat ab-checks.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t3-ab-replica-${{ matrix.replica }}
+          path: |
+            ab/ab_results.json
+            ab/ab_summary.md
+            ab-run.txt
+            ab-checks.txt
+            chk-*.txt
+            content-*.txt
