@@ -80,11 +80,26 @@ def _trim_numpy() -> None:
     class MaskedArray:  # pyarrow tests isinstance(obj, np.ma.MaskedArray): must be a class
         pass
 
+    class LinAlgError(Exception):
+        pass
+
+    def _unavailable(*args, **kwargs):
+        raise RuntimeError("numpy subpackage trimmed by jpsim (set JPSIM_FULL_NUMPY=1)")
+
     stubs = {
         "numpy.ma": {"masked_array": MaskedArray, "MaskedArray": MaskedArray},
         "numpy.polynomial": {},
         "numpy.fft": {},
         "numpy.ctypeslib": {},
+        # numpy.matrixlib.defmatrix and numpy.lib.polynomial import these from numpy.linalg
+        # (~9 ms, LAPACK bindings); bound to a function that raises if anything ever calls it
+        "numpy.linalg": {"__all__": [], "LinAlgError": LinAlgError, "matrix_power": _unavailable,
+                         "eigvals": _unavailable, "lstsq": _unavailable, "inv": _unavailable},
+        # numpy.random.bit_generator imports secrets (hmac, base64, random: ~4 ms) only for
+        # secrets.randbits, the entropy of an unseeded SeedSequence (mtrand's import-time global
+        # RandomState, re-seeded by build_config before any draw); same os.urandom source
+        "secrets": {"randbits": lambda k: int.from_bytes(os.urandom((k + 7) // 8), "little") & ((1 << k) - 1),
+                    "token_bytes": _unavailable, "SystemRandom": _unavailable},
         "numpy.random._pickle": {"__bit_generator_ctor": None, "__generator_ctor": None, "__randomstate_ctor": None},
         "numpy.random._generator": {"Generator": None, "default_rng": None},
         "numpy.random._pcg64": {"PCG64": None, "PCG64DXSM": None},
