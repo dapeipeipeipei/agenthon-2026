@@ -31,7 +31,7 @@ def main() -> int:
     libdirs = pa.get_library_dirs()
     here = pathlib.Path(__file__).resolve().parent
     out = pathlib.Path(args.out) if args.out else here / "jpsim-native"
-    cmd = [args.cxx, "-O2", "-std=c++17", "-fno-fast-math", "-ffp-contract=off", "-DJPK_NO_EXPORTS",
+    cmd = [args.cxx, "-O2", "-std=c++17", "-fno-fast-math", "-ffp-contract=off", "-DJPK_NO_EXPORTS", "-DJPSIM_ARROW_WRITER",
            "-I" + inc, "-o", str(out), str(here / "jpsim_native.cpp")]
     for d in libdirs:
         cmd += ["-L" + d, "-Wl,-rpath," + d]

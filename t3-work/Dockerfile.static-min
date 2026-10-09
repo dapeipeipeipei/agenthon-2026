@@ -1,0 +1,17 @@
+# MEASUREMENT ONLY (not a submission): the static binary alone in a FROM-scratch image, one ~3 MB
+# layer, no Python fallback, no /etc, no /tmp. Used by .github/workflows/t3-static.yml to separate
+# what the container runtime costs from what the image's size / layer count costs.
+FROM --platform=linux/amd64 python:3.11-slim-bookworm AS static-build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+COPY engine/jpkernel /src/jpkernel
+RUN g++ -O2 -std=c++17 -fno-fast-math -ffp-contract=off -DJPK_NO_EXPORTS \
+        -static -pthread -Wl,--gc-sections -ffunction-sections -fdata-sections -s \
+        -o /src/jpsim-native /src/jpkernel/jpsim_native.cpp
+
+FROM scratch
+COPY --from=static-build /src/jpsim-native /usr/local/bin/simulate
+COPY --from=static-build /src/jpsim-native /usr/local/bin/simulate-batch
+LABEL qfbench2.interface_version="2.0"
+ENV PATH=/usr/local/bin
+USER 65534:65534
+CMD ["simulate", "--help"]

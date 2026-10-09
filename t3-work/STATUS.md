@@ -1,6 +1,36 @@
 # T3（加速市场模拟）— 进度存档
 
-**最后更新：2026-10-09 凌晨**（kernel-cpp 线）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)，C++ 内核线细节看 [KERNEL_NOTES.md](KERNEL_NOTES.md)。
+**最后更新：2026-10-09 上午**（Final 定版：同 runner A/B 选 static）。来龙去脉和第一阶段结论看 [PLAN.md](PLAN.md)，来源声明看 [PROVENANCE.md](PROVENANCE.md)，C++ 内核线细节看 [KERNEL_NOTES.md](KERNEL_NOTES.md)。
+
+## Final 定版（10-09 上午）：同 runner A/B → **static（`sha256:c3b318b8…`）**
+
+`submission/submission.final.json` 现在指向 **`ghcr.io/dapeipeipeipei/jinpei-t3@sha256:c3b318b87418b4ed229fc03017583fb9c63d1046adc4338b2d9c21d0efb1545e`**
+（t3/static 线：全静态二进制 + 自写 pqlite 写表器，FROM scratch 单层镜像，Python 回退在内；已 seal + `SubmissionDescriptor` 校验，descriptor_digest `sha256:9f233db1…`）。
+逐字节同参考的保底：`submission.cpp.final.json`（`sha256:e05df48c…`）；lean 候选：`submission.lean(.final).json`（`sha256:7b118bff…`）。
+
+**测法**（`.github/workflows/t3-ab.yml` + `tools/ab_bench.py`，run 37884713536）：同一台 runner 上三张镜像匿名拉取；71 个公开单元 × 3 镜像 × 5 次，
+同一单元内三张镜像轮流跑（轮换起始顺序逐单元旋转）；平台参数（`--network=none --cpus=4 --memory=16g --pids-limit 256 --read-only --user 65534:65534`，64 MiB noexec /tmp，输入只读）；
+Final 口径 = daemon `StartedAt→FinishedAt` 后 4 次中位数，Dev 口径 = host 上 `docker create→rm`；单元分 = 参考行数 / 窗口，71 单元算术平均。两个 replica 是两台不同 runner。
+
+| runner | 镜像 | Final 口径均值 ev/s | Dev 口径均值（第 1 次 / 5 次中位） | 小单元中位 (10) | 中单元中位 (48) | 大单元中位 (13) | vs cpp |
+|---|---|---:|---:|---:|---:|---:|---:|
+| EPYC 9V74 | cpp `e05df48c` | 454 405 | 292 360 / 293 385 | 141 847 | 475 742 | 886 429 | 1.000 |
+| EPYC 9V74 | **static `c3b318b8`** | **662 451** | 373 501 / 374 387 | 182 950 | 654 680 | 1 379 231 | **1.458** |
+| EPYC 9V74 | lean `7b118bff` | 627 675 | 364 832 / 364 820 | 174 905 | 628 282 | 1 279 264 | 1.381 |
+| EPYC 7763 | cpp | 475 757 | 302 446 / 304 428 | 148 291 | 496 456 | 929 057 | 1.000 |
+| EPYC 7763 | **static** | **693 023** | 386 791 / 387 675 | 188 686 | 682 535 | 1 432 048 | **1.457** |
+| EPYC 7763 | lean | 653 587 | 374 147 / 375 847 | 184 032 | 645 733 | 1 364 035 | 1.374 |
+
+（小 < 2 万行 ≤ 中 ≤ 12 万 < 大；分桶中位数是该桶单元 Final 口径 ev/s 的中位数。）
+
+- 正确性（两台都一样）：三张镜像 71/71 成功、5 次重复 parquet **逐字节自稳定 71/71**；行数 + sidecar 算术 71/71；cpp 71/71 与主办方声明哈希逐字节相同；
+  static、lean 各 190 个 parquet 读回的表（schema+元数据、值、pandas dtype）与 cpp 完全相同。
+- 噪声：两台 runner 之间绝对值差 ~4.6%（CPU 不同），但**比值几乎不变**（static/cpp 1.458 vs 1.457）；单元内 5 次的 (max−min)/中位 ≈ 4–6%。
+- static vs lean 逐单元配对：几何均值 1.054 / 1.056，static 快的单元 63/71、61/71（中单元 45/48、46/48），两台一致 → 不是噪声。gb-mega 两者持平（0.675/0.673 s、0.634/0.634 s），差别在中小单元的固定部分。
+- **决定：static。** 两台都第一，比逐字节相同的 cpp 高 46%（远超 5% 门槛），比 lean 高 5.5%，而且部件更少（单线程写表、snappy 只在 ≥24 MiB 文件启用、无基数排序/多线程编码）。
+- 合并方式：`t3/static` 整支合进 main（`Dockerfile.static` / `t3-static.yml` 构建它；main 的 `Dockerfile`/`t3-image.yml` 仍构建 cpp 版，`build_native.py` 带 `-DJPSIM_ARROW_WRITER`）。
+  lean 线只合了笔记和工具（`LEAN_NOTES.md`、`tools/bench_native.py`、`tools/ci_run_units.py` 的 create→rm 计时、lean 描述文件），源码留在分支 `t3/native-lean`。
+- 平台预估（LEAN_NOTES §1 模型：T_plat = 0.63 s + 0.63·T_ci，代入本次各单元 Final 窗口）：cpp 128k / 129k → **static 139k / 140k（+8.5% / +8.2%）**，lean 138k / 139k（+8.0% / +7.7%）；平台固定开销主导，static 与 lean 在平台上只差 ~0.5%，但方向一致、没有任何一项变差。
 
 ## kernel-cpp 线（分支 t3/kernel-cpp，10-09 凌晨）：C++ 内核 + 零 Python 运行时，71/71 逐字节相同
 

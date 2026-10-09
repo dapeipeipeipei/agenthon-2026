@@ -169,7 +169,8 @@ def main() -> int:
         results[name] = {"ok": not problems, "rows": n, "wall_sec": wall, "events_per_sec": rate, "problems": problems}
         print(f"{name:34} {'OK' if not problems else 'FAIL':6} {n:8} {(f'{wall:.3f}' if wall else '-'):>7} "
               f"{(f'{rate:.0f}' if rate is not None else '-'):>8}  {'; '.join(problems)}")
-    print(f"\n{ok}/{len(names)} units byte-identical to the references and sidecar-consistent")
+    what = "byte-identical to" if BYTES else "row counts equal to"
+    print(f"\n{ok}/{len(names)} units {what} the references and sidecar-consistent")
     if rates:
         print(f"events/sec over {len(rates)} timed units: mean {statistics.mean(rates):.0f} "
               f"(ranked quantity)  median {statistics.median(rates):.0f}  min {min(rates):.0f}  max {max(rates):.0f}")
