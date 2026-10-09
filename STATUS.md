@@ -6,6 +6,17 @@
 ---
 
 
+
+## 10-08 晚：四赛道 Final 候选与当日新上传
+
+| 赛道 | Final 候选镜像 | 描述文件 / 打包任务 | Dev 验证 |
+|---|---|---|---|
+| T1 | v2 审查修复版 `928abdcd` | `t1-work/submission/submission(.final).json` / `t1-dev`、`t1-final` | 970099 = v1（排队中）；v2 明天传 |
+| T2 | v5a 加固版 `5bb2bc08`（保守版 v5a_h 加固 `72aa96bc`） | `submission.v5a_r2(.final).json` / `t2-v5a_r2`；`submission.v5a_h_r2(.final).json` / `t2-v5a_h_r2` | 970412 排队中（预期 −1.8424） |
+| T3 | **C++ 内核原生二进制 + 安全网** `e05df48c`（CI 71/71 逐字节一致，镜像内 47–58 万 ev/s） | `submission.cpp(.final).json` / `t3-cpp`、`t3-cpp.final` | v2 Cython 970408 = **87,209**；原生版 970434（无安全网，同一内核）排队中；安全网版刚传 |
+| T4 | E4 `f66ed207`（E3 + 未见题族加固；公开 11 题与 E3 逐位相同） | `submission.e4(.final).json` / `t4-e4` | E3 969947、E4 970411 排队中（预期 0.5673） |
+
+T3 口径说明（V2_NOTES §1）：单元分 = 行数 ÷ 容器 create→remove 整段时间；主办方机器固定开销比 CI 大（v2 CI 估 15 万、平台 8.7 万），原生版平台分待出。
 ## 10-08 新增上传（四个赛道齐了）
 
 | 赛道 | 上传 ID | 版本 | 镜像 | 状态 |
