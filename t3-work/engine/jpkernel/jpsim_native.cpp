@@ -988,8 +988,28 @@ static int writer_threads(int64_t rows) {
     return std::min(4, usable_cpus());
 }
 
+// JPSIM_PHASES=1: one line on stderr with the phase boundaries (seconds since process start).
+struct Phases {
+    bool on = std::getenv("JPSIM_PHASES") != nullptr;
+    std::chrono::steady_clock::time_point t0;
+    std::string line;
+    void mark(const char* name) {
+        if (!on) return;
+        char b[64];
+        std::snprintf(b, sizeof b, "%s%s=%.6f", line.empty() ? "" : " ", name,
+                      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        line += b;
+    }
+    void done() {
+        if (on) std::fprintf(stderr, "JPSIM_PHASES %s\n", line.c_str());
+    }
+};
+
 static SimEvents simulate_one(const std::string& config_path, const std::string& out_path, bool have_seed,
                               int64_t seed, std::chrono::steady_clock::time_point t_start) {
+    Phases ph;
+    ph.t0 = t_start;
+    ph.mark("main");
     bool ok;
     std::string text = read_file(config_path, &ok);
     if (!ok) {
@@ -1017,13 +1037,16 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
         if (!why.empty()) fallback_exec(why, config_path, out_path, have_seed, seed);
     }
     BuiltSpec bs = build_spec(sc, have_seed, seed);
+    ph.mark("parsed");
 
     // The kernel is never freed: the process exits right after the files are written, and tearing
     // down a large heap object by object is pure cost.
     Kernel* k = new Kernel();
     k->spec = bs.spec;
     k->setup();
+    ph.mark("setup");
     k->run();
+    ph.mark("run");
 
     std::string out_dir = dirname_of(out_path);
     mkdirs(out_dir);
@@ -1036,6 +1059,7 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
         build_messages(*k, *res);
         t_trace.join();
     }
+    ph.mark("tables");
     std::string trace_sha, msg_sha;
 #if defined(JPSIM_ARROW_WRITER)
     {
@@ -1097,6 +1121,7 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
         std::vector<std::string> files;
         int nt = writer_threads(res->n_trace + res->n_msg);
         jpq::write_tables({&tr, &mg}, codec, nt, files, "jpsim-native");
+        ph.mark("encoded");
         // write + hash each file on its own thread (the hash is of the very buffer written)
         bool ok_t = true, ok_m = true;
         std::thread t_trace([&] {
@@ -1122,10 +1147,12 @@ static SimEvents simulate_one(const std::string& config_path, const std::string&
     ev.peak = peak_rss_bytes();
     ev.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     ev.eps = ev.wall > 0 ? (double)ev.n_events / ev.wall : 0.0;
+    ph.mark("written");
     if (!write_file(out_dir + "/events.json", events_json(ev))) {
         std::fprintf(stderr, "jpsim-native: cannot write %s/events.json\n", out_dir.c_str());
         std::exit(1);
     }
+    ph.done();
     return ev;
 }
 

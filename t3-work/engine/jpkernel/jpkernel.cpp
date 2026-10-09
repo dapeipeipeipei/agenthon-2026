@@ -1132,11 +1132,55 @@ static void build_trace(Kernel& k, Result& res) {
     all.reserve(rows.size() + q_unique.size());
     for (uint32_t i = 0; i < rows.size(); i++) all.push_back(Row{rows[i].t, rows[i].order_id, i});
     for (uint32_t i = 0; i < q_unique.size(); i++) all.push_back(Row{q_unique[i].t, -1, i | 0x80000000u});
-    std::stable_sort(all.begin(), all.end(), [](const Row& a, const Row& b) {
-        if (a.t != b.t) return a.t < b.t;
-        return a.oid < b.oid;
-    });
     size_t n = all.size();
+    // The stable (t, order_id) sort as an LSD radix sort on one 64-bit key when (t - t_min) and
+    // (order_id + 1) fit together in 63 bits (every public unit: horizons of seconds, order ids
+    // in the millions); std::stable_sort on the pair otherwise. Same permutation either way.
+    {
+        int64_t t_min = INT64_MAX, t_max = INT64_MIN, o_max = -1;
+        for (const Row& r : all) {
+            t_min = std::min(t_min, r.t);
+            t_max = std::max(t_max, r.t);
+            o_max = std::max(o_max, r.oid);
+        }
+        int o_bits = 1;
+        while (o_max + 1 >= (int64_t(1) << o_bits)) o_bits++;
+        uint64_t t_span = n ? (uint64_t)(t_max - t_min) : 0;
+        int t_bits = 1;
+        while (t_bits < 63 && (t_span >> t_bits) != 0) t_bits++;
+        if (n > 1 && o_bits + t_bits <= 63) {
+            std::vector<std::pair<uint64_t, uint32_t>> a(n), b(n);
+            uint64_t key_max = 0;
+            for (size_t i = 0; i < n; i++) {
+                uint64_t key = ((uint64_t)(all[i].t - t_min) << o_bits) | (uint64_t)(all[i].oid + 1);
+                a[i] = {key, (uint32_t)i};
+                key_max = std::max(key_max, key);
+            }
+            int key_bits = 1;
+            while (key_bits < 64 && (key_max >> key_bits) != 0) key_bits++;
+            std::vector<uint32_t> count(1 << 16);
+            for (int shift = 0; shift < key_bits; shift += 16) {
+                std::fill(count.begin(), count.end(), 0u);
+                for (size_t i = 0; i < n; i++) count[(a[i].first >> shift) & 0xFFFF]++;
+                uint32_t sum = 0;
+                for (uint32_t& c : count) {
+                    uint32_t t = c;
+                    c = sum;
+                    sum += t;
+                }
+                for (size_t i = 0; i < n; i++) b[count[(a[i].first >> shift) & 0xFFFF]++] = a[i];
+                a.swap(b);
+            }
+            std::vector<Row> sorted(n);
+            for (size_t i = 0; i < n; i++) sorted[i] = all[a[i].second];
+            all.swap(sorted);
+        } else {
+            std::stable_sort(all.begin(), all.end(), [](const Row& x, const Row& y) {
+                if (x.t != y.t) return x.t < y.t;
+                return x.oid < y.oid;
+            });
+        }
+    }
     res.n_trace = (int64_t)n;
     res.t_ns.resize(n);
     res.agent_id.resize(n);
