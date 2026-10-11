@@ -10,6 +10,9 @@
 #        non -O byte-code, unused stdlib, stripped .so), checked byte-identical before/after on every
 #        synthetic scenario the Python engine runs.
 #   docker buildx build --platform linux/amd64 --build-arg TRIM=0 -t jpsim:p3 -f t3-work/Dockerfile.probe-p34 t3-work
+#   P5 = P4 + packed: stdlib in one python311.zip (sourceless -O byte-code), site-packages and
+#        /opt/jpsim as sourceless legacy .pyc (one file per module), checked byte-identical again.
+#   docker buildx build --platform linux/amd64 --build-arg TRIM=2 -t jpsim:p5 -f t3-work/Dockerfile.probe-p34 t3-work
 #   docker buildx build --platform linux/amd64 --build-arg TRIM=1 -t jpsim:p4 -f t3-work/Dockerfile.probe-p34 t3-work
 #
 # --- P2 description (unchanged below) ---
@@ -64,7 +67,7 @@ RUN set -eu; S=/stage; P=$S/opt/pyfb; mkdir -p $P/bin $P/lib $S/usr/local/bin $S
 # P4 only: trim the fallback to what the Python engine loads, checked byte-identical before/after.
 ARG TRIM=0
 COPY probe/trim_pyfb.py tools/synthetic_check.py /src/trim/
-RUN if [ "$TRIM" = "1" ]; then       ln -s /stage/opt/pyfb /opt/pyfb && ln -s /stage/opt/jpsim /opt/jpsim       && python /src/trim/trim_pyfb.py /stage /src/trim/synthetic_check.py       && rm /opt/pyfb /opt/jpsim && du -sh /stage /stage/opt/pyfb && find /stage -type f | wc -l;     fi
+RUN if [ "$TRIM" != "0" ]; then       ln -s /stage/opt/pyfb /opt/pyfb && ln -s /stage/opt/jpsim /opt/jpsim       && python /src/trim/trim_pyfb.py /stage /src/trim/synthetic_check.py $([ "$TRIM" = "2" ] && echo --pack)       && rm /opt/pyfb /opt/jpsim && du -sh /stage /stage/opt/pyfb && find /stage -type f | wc -l;     fi
 # In-build self-test, isolated from the build stage's system libraries: chroot-free check through
 # the relocated loader with an empty system search path (no /etc/ld.so.cache is consulted for
 # libraries found via LD_LIBRARY_PATH; anything missing from /opt/pyfb/lib would fail in the final

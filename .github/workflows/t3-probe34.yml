@@ -10,12 +10,6 @@ name: t3-probe34
 
 on:
   workflow_dispatch:
-  push:
-    branches: [t3/probe]
-    paths:
-      - "t3-work/Dockerfile.probe-p34"
-      - "t3-work/probe/**"
-      - ".github/workflows/t3-probe34.yml"
 
 permissions:
   contents: read

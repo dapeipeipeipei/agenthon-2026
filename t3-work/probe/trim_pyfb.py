@@ -214,3 +214,52 @@ if outs2 != outs:
 if missing:
     raise SystemExit(f"modules no longer imported after trimming: {missing[:20]}")
 print(f"trim check ok: {len(outs)} outputs byte-identical, {len(mods2)} modules")
+
+
+# ----------------------------------------------------------------------------- --pack (P5)
+# Fewer files: the pure-Python stdlib goes into ONE zip (<prefix>/lib/python311.zip, on CPython's
+# default sys.path ahead of lib/python3.11) as sourceless -O byte-code; every .py under
+# site-packages and /opt/jpsim becomes a sourceless legacy `<module>.pyc` next to where the .py was
+# (one file instead of .py + __pycache__/*.pyc). Extension modules and shared libraries stay files.
+if "--pack" in sys.argv:
+    import py_compile
+    import zipfile
+
+    def to_pyc(src: pathlib.Path, dst: pathlib.Path, rel: str) -> None:
+        py_compile.compile(str(src), cfile=str(dst), dfile=rel, optimize=1, doraise=True,
+                           invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+
+    zpath = LIB / "python311.zip"
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="pyc-"))
+    keep = {"site-packages", "lib-dynload"}
+    moved = []
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+        for f in sorted(STD.rglob("*")):
+            rel = f.relative_to(STD)
+            if rel.parts[0] in keep or not f.is_file() or "__pycache__" in rel.parts:
+                continue
+            if f.suffix == ".py":
+                out = tmp / (str(rel) + "c")
+                out.parent.mkdir(parents=True, exist_ok=True)
+                to_pyc(f, out, str(rel))
+                z.write(out, str(rel.with_suffix(".pyc")))
+            else:
+                z.write(f, str(rel))
+    for child in list(STD.iterdir()):
+        if child.name not in keep:
+            rm(child)
+    shutil.rmtree(tmp)
+    for base in (SITE, ROOT / "opt/jpsim"):
+        for f in list(base.rglob("*.py")):
+            to_pyc(f, f.with_suffix(".pyc"), str(f.relative_to(ROOT)))
+            f.unlink()
+        for d in list(base.rglob("__pycache__")):
+            rm(d)
+    nfiles = sum(1 for f in ROOT.rglob("*") if f.is_file())
+    print(f"packed: python311.zip {zpath.stat().st_size / 1e6:.1f} MB; /opt/pyfb {du(PYFB) / 1e6:.1f} MB; files under the stage: {nfiles}")
+    mods3, sos3, outs3 = run_all("packed")
+    if outs3 != outs:
+        raise SystemExit(f"outputs changed after packing: {sorted(k for k in outs if outs.get(k) != outs3.get(k))}")
+    if mods - mods3:
+        raise SystemExit(f"modules no longer imported after packing: {sorted(mods - mods3)[:20]}")
+    print(f"pack check ok: {len(outs)} outputs byte-identical")
