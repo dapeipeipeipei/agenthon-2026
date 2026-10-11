@@ -12,7 +12,8 @@ on:
   push:
     branches: [t3/probe]
     paths:
-      - "t3-work/**"
+      - "t3-work/Dockerfile.probe-p1"
+      - "t3-work/Dockerfile.probe-p2"
       - ".github/workflows/t3-probe.yml"
 
 permissions:
