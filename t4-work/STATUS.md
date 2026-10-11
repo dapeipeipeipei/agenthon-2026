@@ -13,6 +13,16 @@
 
 打包：`.venv\Scripts\python pack_all.py t4-e2`（Dev）/ `pack_all.py t4-e2.final`（决赛）。
 
+### 第七轮（10-11，分支 t4/push）：E5 = E4 + 水平模型选参的"一倍标准误"规则
+
+- 改动只有一处：`predict.fit_level_weight` 在截止前一步回测里，不再取损失最小的 (最新值权重, 窗口)，而是在"与最优之差 ≤ 1 个配对标准误"的组合中取最平滑的（最新值权重最小、窗口最长）。常数 1 个（`LEVEL_ONE_SE=1.0`，惯例值）。
+- 不是 bug：E4 选的 (0.75,12) 确是回测最优，但只比 (0.25,12) 好 0.03，标准误 0.08，属噪声内。cpicomp 改选 (0.25,12)：0.556 → **0.596**；auction 最优本就是最平滑的 (0,12)，不变；其余 9 题逐位不变。
+- Dev10（核实真值）0.6547 → **0.6587**（榜面估 0.5615 → **0.5666**）；zero/mean 两种 naive 假设下同向（0.6532→0.6565、0.6640→0.6680）。没有任何 unit 变差。
+- 验证：gate 11/11、robustness 31/31、mock House PASS、NLI 全量 11/11（0 虚假、maxP(contra)=0.000）；CI run 38110529171 全绿（镜像内 11/11）；匿名拉取 PASS。
+- 镜像 `ghcr.io/dapeipeipeipei/jinpei-t4@sha256:b3f6b6606838ab52c24dc3ff5a3f7af67e48a1b4f2aef8f2df6ef6b40ac9a074`；描述文件 `submission/submission.e5.json` / `submission.e5.final.json`（已封签+校验）；打包 `pack_all.py t4-e5` / `t4-e5.final`。
+- 诚实说明：这个规则是看到 cpicomp 在真值上"任一固定组合都不差于现选"后才去检查的（ARTIFACT_PROVENANCE 已按 issue #24 披露）；规则本身只读截止前数据、方向（向平滑收缩）是事先惯例。增益小（榜面约 +0.005）。
+- 其它查过不改：区间倍数 ×0.5…×3 每 unit ≤0.02 且多数已最优；EPS 持续系数 0.5 是局部最优；fomc-2022 无 SEP、无诚实杠杆。
+
 ### 第六轮（10-08，分支 exp/t4robust）：未见家族稳健性 —— 14 个从零合成的 unit，E3 的 11 题逐位不变
 
 决赛 unit 的家族"比公开的多"，所以用 `harness/synth_units.py` 从零造了 14 个公开集没有的形状（排序/Spearman 的 EM 外汇横截面、
