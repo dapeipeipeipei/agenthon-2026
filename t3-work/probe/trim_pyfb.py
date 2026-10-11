@@ -45,7 +45,6 @@ def env():
         "LD_LIBRARY_PATH": "/opt/pyfb/lib", "PYTHONHOME": "/opt/pyfb", "PYTHONPATH": "/opt/jpsim",
         "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "OMP_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1", "HOME": "/tmp", "JPSIM_KERNEL": "py", "PATH": "/usr/bin:/bin",
-        "LD_DEBUG": "files",
     }
 
 
@@ -70,17 +69,22 @@ def run_all(tag: str) -> tuple[set[str], set[str], dict[str, str]]:
     jobs.append(("batch", ["simulate-batch", "--batch-dir", str(batch_dir), "--out-dir", str(work / "batch-out")], work / "batch-out"))
     for name, args, out in jobs:
         out.mkdir(parents=True, exist_ok=True)
-        cmd = ["/opt/pyfb/bin/python3.11", "-O", "-X", "importtime", "-m", "jpsim.cli"] + args
+        trace = work / f"{name}.strace"
+        cmd = ["strace", "-f", "-qq", "-z", "-e", "trace=openat,open", "-o", str(trace),
+               "/opt/pyfb/bin/python3.11", "-O", "-X", "importtime", "-m", "jpsim.cli"] + args
         p = subprocess.run(cmd, env=env(), capture_output=True, text=True)
         if p.returncode != 0:
-            print(p.stderr[-4000:])
+            for line in p.stderr.splitlines()[-40:]:
+                if not line.startswith("import time:"):
+                    print("TRIMERR " + line)
             raise SystemExit(f"[{tag}] {name}: rc={p.returncode}")
         for line in p.stderr.splitlines():
             m = re.match(r"import time:\s+\d+ \|\s+\d+ \|\s+(\S.*)$", line)
             if m:
                 mods.add(m.group(1).strip())
-            m = re.search(r"calling init: (\S+)", line)
-            if m:
+        for line in trace.read_text().splitlines():
+            m = re.search(r'open(?:at)?\((?:AT_FDCWD, )?"([^"]+)"', line)
+            if m and re.search(r"\.so(\.|$)", m.group(1)):
                 sos.add(os.path.realpath(m.group(1)))
         for f in sorted(out.rglob("*.parquet")):
             outs[f"{name}/{f.relative_to(out)}"] = hashlib.sha256(f.read_bytes()).hexdigest()
@@ -169,8 +173,18 @@ for f in list(PYFB.rglob("*.pyc")) + list((ROOT / "opt/jpsim").rglob("*.pyc")):
 # --- 5. strip the site-packages ELF objects and libpython
 elves = [f for f in SITE.rglob("*") if f.is_file() and (f.suffix == ".so" or ".so." in f.name)]
 elves.append(LIB / "libpython3.11.so.1.0")
-for f in elves:
+backup = pathlib.Path(tempfile.mkdtemp(prefix="strip-bak-"))
+for i, f in enumerate(elves):
+    shutil.copy2(f, backup / str(i))
     subprocess.run(["strip", "--strip-unneeded", str(f)], check=False, capture_output=True)
+try:
+    run_all("strip-check")
+    print("strip ok")
+except SystemExit as e:
+    print(f"strip broke the fallback ({e}); restoring the unstripped objects")
+    for i, f in enumerate(elves):
+        shutil.copy2(backup / str(i), f)
+shutil.rmtree(backup)
 
 # --- 6. system libraries in /opt/pyfb/lib that no remaining ELF file needs
 remaining = [f for f in PYFB.rglob("*") if f.is_file() and (f.suffix == ".so" or ".so." in f.name or f.name == "python3.11")]
@@ -189,6 +203,9 @@ for d in list(PYFB.rglob("__pycache__")):
     if d.is_dir() and not any(d.iterdir()):
         d.rmdir()
 
+big = sorted((f.stat().st_size, f) for f in ROOT.rglob("*") if f.is_file() and not f.is_symlink())[-25:]
+for size, f in reversed(big):
+    print(f"  big {size / 1e6:7.1f} MB  {f.relative_to(ROOT)}")
 print(f"after:  /opt/pyfb {du(PYFB) / 1e6:.1f} MB; /opt/jpsim {du(ROOT / 'opt/jpsim') / 1e6:.1f} MB")
 mods2, sos2, outs2 = run_all("after")
 missing = sorted(mods - mods2)

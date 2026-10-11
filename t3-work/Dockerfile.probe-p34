@@ -25,7 +25,7 @@
 # The hot path (simulate / simulate-batch = one static binary) touches nothing under /opt.
 #   docker buildx build --platform linux/amd64 -t jpsim:p2 -f t3-work/Dockerfile.probe-p2 t3-work
 FROM --platform=linux/amd64 python:3.11-slim-bookworm AS build
-RUN apt-get update && apt-get install -y --no-install-recommends g++ patchelf busybox-static \
+RUN apt-get update && apt-get install -y --no-install-recommends g++ patchelf busybox-static strace \
  && rm -rf /var/lib/apt/lists/*
 COPY engine/jpkernel /src/jpkernel
 RUN g++ -O2 -std=c++17 -fno-fast-math -ffp-contract=off -DJPK_NO_EXPORTS \
