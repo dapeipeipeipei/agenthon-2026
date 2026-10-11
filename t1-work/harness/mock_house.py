@@ -17,6 +17,14 @@ Modes (per request stream of one unit):
   slow        answers after 20 s (set JP_CALL_TIMEOUT_SEC=5 on the agent side to test timeouts).
   down        the port is closed (use --port of a closed port on the agent side; the server is
               not started).
+  reasoning   thinking-on calls spend every token thinking: content null, reasoning_content set,
+              finish_reason "length" (v3 must still proceed from the reasoning text).
+  disagree    every code reply writes a different value (candidates disagree) -> the judge names
+              candidate B with one defect -> the fix call is exercised.
+
+Thinking-on requests (v3 analysis/judge) get `reasoning_content` in the reply, like the served
+model with a reasoning parser. Latency simulation: MOCK_THINK_DELAY / MOCK_CODE_DELAY (seconds,
+env vars or --think-delay/--code-delay) delay thinking-on / other replies.
 
 Usage:  python harness/mock_house.py --port 18081 --mode good
 """
@@ -27,11 +35,13 @@ import json
 import re
 import sys
 import threading
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = "mock-token"
 MODE = {"m": "good"}
+DELAY = {"think": float(os.environ.get("MOCK_THINK_DELAY", 0) or 0), "code": float(os.environ.get("MOCK_CODE_DELAY", 0) or 0)}
 LOCK = threading.Lock()
 SEEN: list[dict] = []
 STATE: dict[str, dict] = {}       # per unit key: counters
@@ -140,6 +150,8 @@ def _unit_key(user: str) -> str:
 def _kind(user: str) -> str:
     if "extract the output contract" in user:
         return "plan"
+    if "Decide which candidate is correct" in user:
+        return "judge"
     if "Audit the written files" in user:
         return "review"
     if "Your reply was cut off" in user:
@@ -181,6 +193,10 @@ def reply_for(body: dict) -> tuple[int, str, str]:
         return 200, _plan_reply(user), "stop"
     if kind == "review":
         return 200, "OK", "stop"
+    if kind == "judge":
+        if mode == "disagree":
+            return 200, json.dumps({"best": "B", "errors": ["the value must be computed as in the task (mock defect)"]}), "stop"
+        return 200, json.dumps({"best": "A", "errors": []}), "stop"
     if kind == "continue":
         rest = st.get("partial", "")
         return 200, "```python\n" + rest + "```", "stop"
@@ -201,6 +217,8 @@ def reply_for(body: dict) -> tuple[int, str, str]:
             with LOCK:
                 st["partial"] = tail
             return 200, "```python\n" + head, "length"
+        if mode == "disagree" and "mock wrote" in script:
+            script = script.replace('"value": 0.0', f'"value": {float(n)}').replace("1,2", f"1,{n + 1}")
         content = "```python\n" + script + "```"
         if mode == "think":
             content = "<think>Let me think about the formulas... {not json}</think>\nHere is the script:\n\n" + content + "\n\nThat should do it."
@@ -239,11 +257,21 @@ class H(BaseHTTPRequestHandler):
                "unit": _unit_key(body["messages"][-1]["content"]) if body.get("messages") else "?"}
         with LOCK:
             SEEN.append(rec)
+        think = bool((body.get("chat_template_kwargs") or {}).get("enable_thinking"))
+        d = DELAY["think"] if think else DELAY["code"]
+        if d > 0:
+            time.sleep(d)
         status, content, finish = reply_for(body)
         if status != 200:
             return self._send(status, content.encode())
+        msg = {"role": "assistant", "content": content}
+        if think:
+            msg["reasoning_content"] = "Let me work through the formulas and conventions step by step. " * 20
+            if MODE["m"] == "reasoning":
+                msg["content"] = None
+                finish = "length"
         out = json.dumps({"id": "mock", "object": "chat.completion", "model": body.get("model"),
-                          "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": finish}],
+                          "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
                           "usage": {"prompt_tokens": len(json.dumps(body)) // 4, "completion_tokens": 4000 if finish == "length" else len(content) // 4}}).encode()
         try:
             self._send(200, out)
@@ -263,8 +291,14 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=18081)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--mode", default="good")
+    ap.add_argument("--think-delay", type=float, default=None)
+    ap.add_argument("--code-delay", type=float, default=None)
     a = ap.parse_args()
     MODE["m"] = a.mode
+    if a.think_delay is not None:
+        DELAY["think"] = a.think_delay
+    if a.code_delay is not None:
+        DELAY["code"] = a.code_delay
     srv = start(a.port, a.host)
     print(f"mock House on http://{a.host}:{srv.server_address[1]} mode={a.mode} token={TOKEN}", flush=True)
     try:

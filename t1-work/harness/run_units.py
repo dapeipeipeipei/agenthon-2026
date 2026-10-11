@@ -144,6 +144,8 @@ def main() -> int:
     ap.add_argument("--docker-image", default=None)
     ap.add_argument("--budget", type=float, default=300.0, help="JP_UNIT_BUDGET_SEC for the agent")
     ap.add_argument("--agent-env", nargs="*", default=[], help="extra KEY=VALUE for the agent")
+    ap.add_argument("--think-delay", type=float, default=0.0, help="mock latency of thinking-on replies (s)")
+    ap.add_argument("--code-delay", type=float, default=0.0, help="mock latency of other replies (s)")
     ap.add_argument("--mock-host", default=None, help="bind address of the mock (default 127.0.0.1; 0.0.0.0 for docker)")
     args = ap.parse_args()
 
@@ -167,6 +169,7 @@ def main() -> int:
         host = args.mock_host or ("0.0.0.0" if args.docker_image else "127.0.0.1")
         if args.mode != "down":
             mh.MODE["m"] = args.mode
+            mh.DELAY.update({"think": args.think_delay, "code": args.code_delay})
             srv = mh.start(0, host)
             port = srv.server_address[1]
         else:

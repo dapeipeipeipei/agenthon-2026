@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ TAIL_CHARS = 3500
 MAX_CHILD_CPUS = 16          # the card's quota; os.cpu_count() in the container reports the HOST's cores
 
 ACTIVE: dict[int, subprocess.Popen] = {}     # running children, killed by `kill_active` on the alarm path
+STOPPED = threading.Event()                  # set by `kill_active`: no new child may start (finalize has begun)
 
 
 @dataclass
@@ -106,6 +108,8 @@ def _clean_stderr(text: str, scratch: Path) -> str:
 def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib: float = 40.0,
                threads: int = 8, name: str = "solution.py") -> RunResult:
     """`name`: the script file in `scratch` (candidates run concurrently, each with its own file)."""
+    if STOPPED.is_set():
+        return RunResult(returncode=-1, seconds=0.0, stdout_tail="", stderr_tail="not started: the agent is finalizing")
     scratch.mkdir(parents=True, exist_ok=True)
     script = scratch / name
     script.write_text(code, encoding="utf-8")
@@ -137,6 +141,8 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
     except Exception as exc:  # noqa: BLE001
         return RunResult(returncode=-1, seconds=0.0, stdout_tail="", stderr_tail=f"could not start interpreter: {exc!r}")
     ACTIVE[p.pid] = p
+    if STOPPED.is_set():
+        _kill_tree(p)
     timed_out = False
     try:
         out, err = p.communicate(timeout=max(1.0, timeout))
@@ -162,6 +168,7 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
 
 def kill_active() -> None:
     """Kill every child still running (used on the alarm / exception path before finalizing)."""
+    STOPPED.set()
     for p in list(ACTIVE.values()):
         _kill_tree(p)
         try:

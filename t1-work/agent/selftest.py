@@ -68,7 +68,18 @@ class _Mock(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(n))
         assert self.path.endswith("/v1/chat/completions"), self.path
         assert self.headers.get("Authorization") == "Bearer selftest-token"
-        assert body.get("chat_template_kwargs") == {"enable_thinking": False}
+        assert isinstance((body.get("chat_template_kwargs") or {}).get("enable_thinking"), bool)
+        if "Decide which candidate is correct" in body["messages"][-1]["content"]:
+            content = json.dumps({"best": "A", "errors": []})
+            _Mock.calls.append("judge")
+            out = json.dumps({"choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                              "usage": {"completion_tokens": 50}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
         assert 0 < body.get("max_tokens", 0) <= 4000
         user = body["messages"][-1]["content"]
         if "extract the output contract" in user:

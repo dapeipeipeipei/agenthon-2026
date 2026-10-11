@@ -1,30 +1,36 @@
-"""The agent loop: plan -> code -> run -> check -> repair ... -> review -> finalize.
+"""The agent loop (v3): analyse || candidates -> run/repair each -> agree or judge -> fix -> finalize.
 
-Time: everything is bounded by one deadline computed from the process start (`budget`), itself
-the smaller of JP_UNIT_BUDGET_SEC (default 420 s) and the card's [agent].timeout_sec minus a
-margin. The 12-hour Development stage clock across the whole roster (~8 min per unit over 86
-units, DEVELOPMENT-RUNTIME.md "Execution clocks") is the binding limit, which is why the default
-is well under every card's own ceiling.
+v1 on the Development platform (run 970099): 86/86 units exited 0 with their output accepted, but
+77 were `domain_gate_failed` -- wrong answers, not crashes or time. v3 therefore spends more of the
+unit's House allowance and time on getting the numbers right:
 
-Requests: `house.Client` counts every request sent (max JP_MAX_REQUESTS, default 18 of the 25 the
-House admits). Before each call we check that the expected call time plus what must follow it
-(a run, the final stub/sanitize pass) still fits.
+1. ANALYSIS (thinking ON, one call): deliverable contract + exact method + checks, as JSON. Runs in
+   parallel with candidate 0, which is written straight from the task (thinking OFF).
+2. Candidates 1..K-1 (thinking OFF) are written with the analysis in the prompt.
+3. Every candidate runs in its own workspace (`_jp_c<i>` under the output directory) and is repaired
+   from its execution report (bounded rounds). The first candidate that runs clean is promoted to
+   the output directory at once (a draft); later choices replace it.
+4. Clean candidates are compared value by value (`compare.py`). Unanimous -> done (early finish).
+   Otherwise (or a single clean candidate) a JUDGE call (thinking ON) picks the best candidate and
+   lists definite defects; a FIX call (thinking OFF) applies them; the fixed script replaces the
+   pick only if it runs clean.
+5. Finalize always: workspaces removed, stubs for missing deliverables, output tree sanitised.
 
-Every stage degrades: no plan -> contract from the task text; no code -> stubs; a failing run ->
-repair; no repair -> keep the best files written so far; and the output folder is sanitised last.
+Time: one hard deadline `budget` = min(JP_UNIT_BUDGET_SEC, card timeout - JP_CARD_MARGIN_SEC), and
+a soft deadline after which no optional stage (late repairs of a non-best candidate, judge, fix)
+starts. Requests: at most JP_MAX_REQUESTS (default 23 of the 25 the House admits).
 """
 from __future__ import annotations
 
 import ast
 import json
-import os
-import shutil
 import threading
 import time
 from pathlib import Path
 
 from . import house, prompts
-from .outputs import (BACKUP_MAX_BYTES, Contract, check_deliverables, contract_from_model, preview_outputs,
+from .compare import agreement, clear_workspaces, diff_table, fingerprint, promote, workspace
+from .outputs import (Contract, Deliverable, check_deliverables, contract_from_model, preview_outputs,
                       rewrite_paths, sanitize_tree, tree_summary, write_stub)
 from .runner import RunResult, run_script
 from .unit import Unit, compact_unit, load_unit
@@ -32,21 +38,44 @@ from .unit import Unit, compact_unit, load_unit
 FINAL_RESERVE_S = 15.0        # stubs + sanitation
 RUN_RESERVE_S = 20.0          # a run must leave at least this much before the deadline
 TOO_BIG = ("http_400", "http_413", "http_422")   # refused before admission (prompt does not fit the context window)
+UNANIMOUS = 0.97
+LABELS = "ABCDEFGH"
 
 
 def cfg() -> dict:
     return {
-        "unit_budget": house.env_float("JP_UNIT_BUDGET_SEC", 420.0),
-        "card_margin": house.env_float("JP_CARD_MARGIN_SEC", 150.0),
-        "max_requests": house.env_int("JP_MAX_REQUESTS", 18),
+        "unit_budget": house.env_float("JP_UNIT_BUDGET_SEC", 510.0),
+        "soft_budget": house.env_float("JP_SOFT_BUDGET_SEC", 330.0),
+        "card_margin": house.env_float("JP_CARD_MARGIN_SEC", 60.0),
+        "max_requests": house.env_int("JP_MAX_REQUESTS", 23),
         "call_timeout": house.env_float("JP_CALL_TIMEOUT_SEC", 150.0),
+        "think_timeout": house.env_float("JP_THINK_TIMEOUT_SEC", 200.0),
         "run_timeout": house.env_float("JP_RUN_TIMEOUT_SEC", 180.0),
+        "cand_repairs": house.env_int("JP_CAND_REPAIRS", 2),
         "max_repairs": house.env_int("JP_MAX_REPAIRS", 6),
-        "candidates": max(1, min(3, house.env_int("JP_CANDIDATES", 2))),
-        "review": house.env_int("JP_REVIEW", 1) == 1,
-        "mem_gib": house.env_float("JP_MEM_GIB", 40.0),
-        "threads": house.env_int("JP_THREADS", 8),
+        "candidates": max(1, min(4, house.env_int("JP_CANDIDATES", 3))),
+        "think": house.env_int("JP_THINK", 1) == 1,
+        "judge": house.env_int("JP_JUDGE", 1) == 1,
+        "mem_gib": house.env_float("JP_MEM_GIB", 24.0),
+        "threads": house.env_int("JP_THREADS", 6),
     }
+
+
+class Cand:
+    def __init__(self, idx: int, label: str, with_notes: bool) -> None:
+        self.idx = idx
+        self.label = label
+        self.with_notes = with_notes
+        self.dir: Path | None = None
+        self.src: str | None = None          # the script as the model wrote it (shown back to the model)
+        self.res: RunResult | None = None
+        self.problems: list[str] = ["did not run"]
+        self.started = 0.0
+        self.rounds = 0
+
+    @property
+    def clean(self) -> bool:
+        return self.dir is not None and self.res is not None and not self.problems
 
 
 class Solver:
@@ -58,28 +87,47 @@ class Solver:
         self.t0 = t0
         self.events: list[str] = []
         self.unit: Unit | None = None
-        self.pu: Unit | None = None       # the unit as shown in prompts (swapped for a compact copy after a TOO_BIG refusal)
-        self.lock = threading.Lock()
+        self.pu: Unit | None = None       # the unit as shown in prompts (compact copy after a TOO_BIG refusal)
+        self.lock = threading.RLock()
         self.contract = Contract()
         self.deadline = t0 + self.c["unit_budget"]
+        self.soft_deadline = self.deadline
         self.client: house.Client | None = None
-        self.last_code: str | None = None
-        self.last_run: RunResult | None = None
+        self.notes: str | None = None
+        self.notes_ready = threading.Event()
+        self.abort = False
+        self.cands: list[Cand] = []
+        self.promoted: Cand | None = None
+        self.closed = False
         self.last_problems: list[str] = ["nothing ran"]
+        self.stage_log: list[str] = []
         self.finalized = False
         self.arm_alarm = None       # set by cli on POSIX: re-arm the hard alarm to the final budget
 
     # ---- helpers
     def log(self, msg: str) -> None:
-        self.events.append(f"[{time.monotonic() - self.t0:6.1f}s] {msg}")
-        print(self.events[-1], flush=True)
+        line = f"[{time.monotonic() - self.t0:6.1f}s] {msg}"
+        with self.lock:
+            self.events.append(line)
+        print(line, flush=True)
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
 
+    def soft_left(self) -> float:
+        return self.soft_deadline - time.monotonic()
+
     @property
     def out_posix(self) -> str:
         return self.out_dir.as_posix()
+
+    def run_limit(self) -> int:
+        return int(max(30.0, min(self.c["run_timeout"], self.remaining() - RUN_RESERVE_S)))
+
+    def think_kw(self) -> dict:
+        if self.c["think"]:
+            return {"think": True, "temperature": house.THINK_TEMPERATURE, "timeout": self.c["think_timeout"]}
+        return {"think": False, "temperature": house.TEMPERATURE}
 
     # ---- main
     def run(self) -> None:
@@ -88,97 +136,112 @@ class Solver:
         u = self.pu = self.unit
         budget = min(self.c["unit_budget"], max(120.0, u.timeout_sec - self.c["card_margin"]))
         self.deadline = self.t0 + budget
+        self.soft_deadline = self.t0 + min(self.c["soft_budget"], 0.68 * budget)
         if self.arm_alarm is not None:
             try:
                 self.arm_alarm(budget)
             except Exception:  # noqa: BLE001
                 pass
-        self.log(f"unit {u.unit_id}: card timeout {u.timeout_sec:.0f}s, our budget {budget:.0f}s, "
-                 f"{len(u.files)} data files, {len(u.canaries)} canary ids, mapping {len(u.mapping)} paths"
-                 + (f", checks shipped ({len(u.checks_names)} names)" if u.checks_text else ""))
+        self.contract = contract_from_model(None, u, self.out_posix)
+        self.log(f"unit {u.unit_id}: card timeout {u.timeout_sec:.0f}s, budget {budget:.0f}s (soft {self.soft_deadline - self.t0:.0f}s), "
+                 f"{len(u.files)} data files, {len(u.canaries)} canary ids, mapping {len(u.mapping)} paths, "
+                 f"text deliverables={[d.name for d in self.contract.deliverables]}")
         if not house.configured():
             self.log("House route not configured (MODEL_ENDPOINT/MODEL_TOKEN/MODEL_NAME missing): offline fallback")
-            self.contract = contract_from_model(None, u, self.out_posix)
             return
         self.client = house.Client(deadline=self.deadline - FINAL_RESERVE_S, max_requests=self.c["max_requests"],
                                    call_timeout=self.c["call_timeout"])
-        # 1. plan + contract
-        plan_obj = None
-        r = self.client.chat(prompts.plan_messages(self.pu, self.out_posix), max_tokens=1800, tag="plan")
+        k = self.c["candidates"]
+        self.cands = [Cand(i, LABELS[i], with_notes=(k == 1 or i > 0)) for i in range(k)]
+        threads = [threading.Thread(target=self._guard, args=(self.analyse,), daemon=True)]
+        threads += [threading.Thread(target=self._guard, args=(self.worker, c), daemon=True) for c in self.cands]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(max(0.5, self.remaining() - FINAL_RESERVE_S))
+        if self.abort or self.remaining() < FINAL_RESERVE_S + 5:
+            return
+        self.select()
+
+    def _guard(self, fn, *args) -> None:
+        try:
+            fn(*args)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"{getattr(fn, '__name__', 'stage')} raised {type(exc).__name__}: {str(exc)[:200]}")
+        finally:
+            if fn == self.analyse:
+                self.notes_ready.set()
+
+    # ---- stage 1: analysis
+    def analyse(self) -> None:
+        cl = self.client
+        kw = self.think_kw()
+        r = cl.chat(prompts.analysis_messages(self.pu, self.out_posix), max_tokens=house.MAX_OUTPUT_TOKENS, tag="analysis", **kw)
         if r.status in TOO_BIG and self.shrink_prompts():
-            r = self.client.chat(prompts.plan_messages(self.pu, self.out_posix), max_tokens=1800, tag="plan+compact")
-        if r.ok:
-            plan_obj = house.extract_json(r.content)
-        self.contract = contract_from_model(plan_obj, u, self.out_posix)
-        self.log(f"plan: {r.status} ({r.seconds:.0f}s, {r.completion_tokens} tok); contract source={self.contract.source}, "
-                 f"deliverables={[d.name for d in self.contract.deliverables]}")
+            r = cl.chat(prompts.analysis_messages(self.pu, self.out_posix), max_tokens=house.MAX_OUTPUT_TOKENS, tag="analysis+compact", **kw)
         if r.status in ("http_401", "http_403"):
             self.log("House refuses our credentials; nothing more to do")
+            self.abort = True
             return
-        # 2. code candidates
-        codes = self.generate_candidates()
-        if not codes:
-            self.log("no code obtained; stubs only")
-            return
-        # 3. run + repair
-        best = self.first_working(codes)
-        code, res, problems = best
-        rounds = 0
-        while problems and rounds < self.c["max_repairs"]:
-            need = self.client.expected_call_seconds() + RUN_RESERVE_S + 25.0
-            if not self.client.can_call(reserve=need):
-                self.log(f"stop repairing: {self.client.left} requests left, {self.remaining():.0f}s left")
-                break
-            rounds += 1
-            report = self.report(res, problems)
-            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, code, report, self.run_limit()), tag=f"repair{rounds}")
-            if not new:
-                break
-            code, res, problems = self.try_code(new, tag=f"repair{rounds}")
-        # 4. review
-        if not problems and self.c["review"]:
-            self.review(code)
-
-    # ---- stages
-    def run_limit(self) -> int:
-        return int(max(30.0, min(self.c["run_timeout"], self.remaining() - RUN_RESERVE_S)))
+        obj = house.extract_json(r.content) if r.ok else None
+        if obj is not None and not isinstance(obj.get("deliverables"), list) and not obj.get("method"):
+            obj = None
+        if obj is not None:
+            c = contract_from_model(obj, self.unit, self.out_posix)
+            if c.deliverables:
+                with self.lock:
+                    self.contract = c
+        body = house.strip_think(r.content or "").strip() if r.ok else ""
+        self.notes = prompts.notes_from_analysis(obj, body if len(body) >= 80 else r.reasoning) if r.ok else None
+        self.log(f"analysis: {r.status} ({r.seconds:.0f}s, {r.completion_tokens} tok, finish={r.finish}, reasoning {len(r.reasoning)} ch); "
+                 f"json={'yes' if obj else 'no'}, notes {len(self.notes or '')} ch, contract={self.contract.source} "
+                 f"{[d.name for d in self.contract.deliverables]}")
 
     def shrink_prompts(self) -> bool:
-        """After a pre-admission refusal (prompt too large for the context window): show the unit
-        with short previews from now on. Returns False when already compact."""
-        if self.pu is not None and self.pu is not self.unit:
-            return False
-        self.pu = compact_unit(self.unit)
+        with self.lock:
+            if self.pu is not None and self.pu is not self.unit:
+                return False
+            self.pu = compact_unit(self.unit)
         self.log("prompt refused as too large; switching to compact previews")
         return True
 
-    def generate_candidates(self) -> list[str]:
-        u = self.pu
-        k = self.c["candidates"]
-        msgs = prompts.code_messages(u, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables)
-        temps = [house.TEMPERATURE, 0.6, 0.9][:k]
-        results: list[str | None] = [None] * k
-        if k == 1:
-            results[0] = self.get_code(msgs, tag="code")
-        else:
-            def work(i: int) -> None:
-                results[i] = self.get_code(msgs, tag=f"code{i}", temperature=temps[i])
-            ths = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(k)]
-            for t in ths:
-                t.start()
-            for t in ths:
-                t.join(max(1.0, self.remaining()))
-        return [c for c in results if c]
+    # ---- stage 2/3: one candidate, written, run and repaired
+    def worker(self, cand: Cand) -> None:
+        if cand.with_notes:
+            self.notes_ready.wait(max(1.0, self.remaining() - 60.0))
+        if self.abort:
+            return
+        notes = self.notes if cand.with_notes else None
+        temp = (house.TEMPERATURE, house.TEMPERATURE, 0.6, 0.8)[cand.idx]
+        msgs = prompts.code_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables)
+        src = self.get_code(msgs, tag=f"code{cand.label}", temperature=temp, notes=notes)
+        if not src:
+            return
+        self.try_cand(cand, src, tag=f"cand{cand.label}")
+        while cand.problems and cand.rounds < self.c["cand_repairs"]:
+            if self.soft_left() <= 0 and self.any_clean():
+                break
+            if not self.client.can_call(reserve=self.client.expected_call_seconds() + RUN_RESERVE_S + 20.0):
+                break
+            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, cand.src, self.report(cand.res, cand.problems),
+                                                        self.run_limit(), notes, self.contract.deliverables),
+                                tag=f"repair{cand.label}{cand.rounds + 1}", temperature=temp, notes=notes)
+            if not new:
+                break
+            cand.rounds += 1
+            self.try_cand(cand, new, tag=f"repair{cand.label}{cand.rounds}")
 
-    def get_code(self, messages: list[dict], *, tag: str, temperature: float = house.TEMPERATURE) -> str | None:
+    def any_clean(self) -> bool:
+        return any(c.clean for c in self.cands)
+
+    def get_code(self, messages: list[dict], *, tag: str, temperature: float = house.TEMPERATURE,
+                 notes: str | None = None) -> str | None:
         """A complete script from one logical call; continuation / compact retry when truncated."""
         cl = self.client
         r = cl.chat(messages, max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag, temperature=temperature)
-        if r.status in TOO_BIG and "repair" not in tag and cl.can_call(reserve=RUN_RESERVE_S + 20):
-            # only the code/compact prompts carry previews; rebuild them from the compact unit
-            with self.lock:
-                self.shrink_prompts()
-            messages = prompts.compact_messages(self.pu, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables)
+        if r.status in TOO_BIG and tag.startswith("code") and cl.can_call(reserve=RUN_RESERVE_S + 20):
+            self.shrink_prompts()
+            messages = prompts.compact_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables)
             r = cl.chat(messages, max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag + "+small", temperature=temperature)
         if not r.ok:
             self.log(f"{tag}: no reply ({r.status})")
@@ -196,8 +259,8 @@ class Solver:
                 self.log(f"{tag}+cont: {r2.status} {r2.seconds:.0f}s finish={r2.finish} compiles={self.compiles(joined)}")
                 if self.compiles(joined):
                     return joined
-        if cl.can_call(reserve=RUN_RESERVE_S + 20) and "repair" not in tag:
-            r3 = cl.chat(prompts.compact_messages(self.pu, self.out_posix, self.contract.plan, self.run_limit(), self.contract.deliverables),
+        if tag.startswith("code") and cl.can_call(reserve=RUN_RESERVE_S + 20):
+            r3 = cl.chat(prompts.compact_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables),
                          max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag + "+compact", temperature=temperature)
             if r3.ok:
                 c3 = house.extract_code(r3.content)
@@ -221,7 +284,6 @@ class Solver:
         """Glue a continuation onto the truncated head, dropping lines the model repeated."""
         h_lines = head.rstrip("\n").split("\n")
         m_lines = more.split("\n")
-        # drop a repeated overlap of up to 12 lines
         best = 0
         for k in range(min(12, len(h_lines), len(m_lines)), 0, -1):
             if [x.rstrip() for x in h_lines[-k:]] == [x.rstrip() for x in m_lines[:k]]:
@@ -229,34 +291,47 @@ class Solver:
                 break
         if best:
             return "\n".join(h_lines + m_lines[best:]) + "\n"
-        # the head's last line was probably cut mid-way: if the continuation starts at column 0 with
-        # a statement, keep the head whole; otherwise append directly
         return head.rstrip("\n") + ("\n" if more[:1] not in (" ", "\t", ")", "]", "}", ",", ".") else "") + more + "\n"
 
-    def first_working(self, codes: list[str]) -> tuple[str, RunResult | None, list[str]]:
-        best: tuple[str, RunResult | None, list[str]] | None = None
-        for i, code in enumerate(codes):
-            if best is not None and self.remaining() < RUN_RESERVE_S + 40:
-                break
-            cur = self.try_code(code, tag=f"cand{i}")
-            if not cur[2]:
-                return cur
-            if best is None or len(cur[2]) < len(best[2]):
-                best = cur
-        return best if best is not None else (codes[0], None, ["did not run"])
+    def runnable(self, src: str, ws: Path) -> str:
+        """The script as it runs: the output directory -> this candidate's workspace, the task's
+        image paths -> the real input paths."""
+        ws_posix = ws.as_posix()
+        code = src
+        if self.out_posix.rstrip("/") not in ("/app/output", "/output"):
+            code = code.replace(self.out_posix.rstrip("/"), ws_posix)
+        return rewrite_paths(code, self.unit, ws_posix)
 
-    def try_code(self, code: str, *, tag: str) -> tuple[str, RunResult | None, list[str]]:
-        code = rewrite_paths(code, self.unit, self.out_posix)
+    def try_cand(self, cand: Cand, src: str, *, tag: str) -> None:
+        ws = workspace(self.out_dir, f"c{cand.idx}")      # fresh: no stale file can pass for a new one
+        cand.dir, cand.src = ws, src
         limit = self.run_limit()
-        started = time.time()
-        res = run_script(code, self.scratch, self.out_dir, timeout=limit, mem_gib=self.c["mem_gib"], threads=self.c["threads"])
-        problems = check_deliverables(self.out_dir, self.contract.deliverables, since=started)
+        if limit <= 30 and self.remaining() < RUN_RESERVE_S + 10:
+            cand.problems = ["no time left to run"]
+            return
+        cand.started = time.time()
+        res = run_script(self.runnable(src, ws), self.scratch, ws, timeout=limit, mem_gib=self.c["mem_gib"],
+                         threads=self.c["threads"], name=f"cand_{cand.idx}.py")
+        cand.res = res
+        problems = check_deliverables(ws, self.contract.deliverables, since=cand.started)
         if not res.ok:
             problems = [res.report()] + problems
+        cand.problems = problems
         self.log(f"{tag}: run {'ok' if res.ok else 'FAILED'} in {res.seconds:.0f}s (limit {limit}s); problems={len(problems)}"
                  + (": " + problems[0][:160].replace("\n", " | ") if problems else ""))
-        self.last_code, self.last_run, self.last_problems = code, res, problems
-        return code, res, problems
+        if not problems:
+            with self.lock:
+                if self.promoted is None:
+                    self._promote(cand, "first clean candidate (draft)")
+
+    def _promote(self, cand: Cand, why: str) -> None:
+        with self.lock:
+            if self.closed or cand.dir is None:
+                return
+            n = promote(cand.dir, self.out_dir)
+            self.promoted = cand
+            self.last_problems = list(cand.problems)
+        self.log(f"promoted {cand.label} ({n} files): {why}")
 
     @staticmethod
     def report(res: RunResult | None, problems: list[str]) -> str:
@@ -268,72 +343,136 @@ class Solver:
             parts.append("Deliverable check:\n- " + "\n- ".join(extra))
         return "\n\n".join(parts)[:6000]
 
-    def review(self, code: str) -> None:
-        cl = self.client
-        need = cl.expected_call_seconds() + RUN_RESERVE_S + 40.0
-        if not cl.can_call(reserve=need):
-            self.log("skip review: not enough time/requests")
-            return
+    # ---- stage 4: choose, judge, fix
+    def recheck(self) -> None:
+        for c in self.cands:
+            if c.dir is None or c.res is None:
+                continue
+            probs = check_deliverables(c.dir, self.contract.deliverables, since=c.started)
+            c.problems = ([c.res.report()] if not c.res.ok else []) + probs
+
+    def select(self) -> None:
+        self.recheck()
+        clean = [c for c in self.cands if c.clean]
+        if not clean:
+            ran = [c for c in self.cands if c.dir is not None and c.src]
+            if not ran:
+                self.log("no candidate produced a runnable script")
+                return
+            best = min(ran, key=lambda c: (len(c.problems), not c.with_notes, c.idx))
+            self._promote(best, "best of the failing candidates")
+            self.repair_more(best)
+            if not best.clean:
+                return
+            clean = [best]
         names = [d.name for d in self.contract.deliverables]
-        size = sum((self.out_dir / n).stat().st_size for n in names if (self.out_dir / n).is_file())
-        if size > BACKUP_MAX_BYTES:
-            self.log("skip review: deliverables too large to back up")
+        fps = {c.label: fingerprint(c.dir, names) for c in clean}
+        chosen = clean[0]
+        unanimous = False
+        if len(clean) >= 2:
+            score = {c.label: 0.0 for c in clean}
+            worst = 1.0
+            for i, a in enumerate(clean):
+                for b in clean[i + 1:]:
+                    s = agreement(fps[a.label], fps[b.label])
+                    score[a.label] += s
+                    score[b.label] += s
+                    worst = min(worst, s)
+                    self.stage_log.append(f"agree {a.label}-{b.label} {s:.3f}")
+            chosen = max(clean, key=lambda c: (round(score[c.label], 3), c.with_notes, -c.idx))
+            unanimous = worst >= UNANIMOUS
+            self.log("agreement: " + ", ".join(self.stage_log[-6:]) + f" -> {chosen.label}" + (" (unanimous)" if unanimous else ""))
+        if self.promoted is not chosen:
+            self._promote(chosen, "most agreed-upon clean candidate")
+        if unanimous or not self.c["judge"]:
             return
-        previews = preview_outputs(self.out_dir, self.contract.deliverables)
-        r = cl.chat(prompts.review_messages(self.pu, self.out_posix, code, previews, self.run_limit()),
-                    max_tokens=house.MAX_OUTPUT_TOKENS, tag="review")
-        if not r.ok:
-            self.log(f"review: no reply ({r.status})")
+        cl = self.client
+        need = max(90.0, cl.expected_call_seconds()) + cl.expected_call_seconds() + RUN_RESERVE_S + 30.0
+        if self.soft_left() <= 0 or not cl.can_call(reserve=need):
+            self.log(f"skip judge: soft {self.soft_left():.0f}s, hard {self.remaining():.0f}s, {cl.left} requests left")
             return
-        body = house.strip_think(r.content).strip()
-        new = house.extract_code(r.content, allow_open=False)
-        if body.upper().rstrip(".") == "OK" or not new or r.truncated:
-            self.log(f"review: {'OK' if body.upper().startswith('OK') else 'no usable code'} ({r.seconds:.0f}s)")
+        shown = sorted(clean, key=lambda c: c.idx)[:3]
+        diff = diff_table({c.label: fps[c.label] for c in shown}) if len(shown) >= 2 else "(only one candidate ran successfully)"
+        payload = [{"label": c.label, "code": c.src, "previews": preview_outputs(c.dir, self.contract.deliverables, budget=5000),
+                    "stdout": (c.res.stdout_tail if c.res else "")[-1500:]} for c in shown]
+        r = cl.chat(prompts.judge_messages(self.pu, self.out_posix, payload, diff, self.notes), max_tokens=house.MAX_OUTPUT_TOKENS,
+                    tag="judge", **self.think_kw())
+        verdict = house.extract_json(r.content) if r.ok else None
+        if not isinstance(verdict, dict):
+            self.log(f"judge: {r.status} ({r.seconds:.0f}s, finish={r.finish}): no verdict; keeping {chosen.label}")
             return
-        if not self.compiles(new):
-            self.log("review: proposed code does not compile; kept the current outputs")
+        best_label = str(verdict.get("best") or "").strip().upper()[:1]
+        errors = [str(e)[:800] for e in (verdict.get("errors") or []) if str(e).strip()][:8]
+        pick = next((c for c in shown if c.label == best_label), None)
+        self.log(f"judge: {r.status} ({r.seconds:.0f}s): best={best_label or '?'} errors={len(errors)}")
+        if pick is not None and pick is not chosen:
+            chosen = pick
+            self._promote(chosen, "judge's pick")
+        if not errors:
             return
-        backup = self.scratch / "backup"
-        shutil.rmtree(backup, ignore_errors=True)
-        backup.mkdir(parents=True, exist_ok=True)
-        for n in names:
-            src = self.out_dir / n
-            if src.is_file():
-                (backup / n).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, backup / n)
-        if self.remaining() < RUN_RESERVE_S + 25:
-            self.log("review: no time left to run the revised script")
+        need = cl.expected_call_seconds() + RUN_RESERVE_S + 15.0
+        if not cl.can_call(reserve=need):
+            self.log("skip fix: not enough time/requests")
             return
-        self.log("review: running the revised script")
-        code2, res2, problems2 = self.try_code(new, tag="review-run")
-        if problems2:
-            for n in names:
-                b = backup / n
-                if b.is_file():
-                    (self.out_dir / n).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(b, self.out_dir / n)
-            self.last_code, self.last_problems = code, []
-            self.log("review: revised script failed; restored the previous outputs")
+        src = self.get_code(prompts.fix_messages(self.pu, self.out_posix, chosen.src, errors, self.run_limit(), self.notes,
+                                                 self.contract.deliverables), tag="fix")
+        if not src:
+            return
+        fixed = Cand(9, "F", with_notes=True)
+        self.cands.append(fixed)
+        self.try_cand(fixed, src, tag="fix-run")
+        if fixed.clean:
+            self._promote(fixed, "judge's defects fixed")
         else:
-            self.log("review: revised outputs kept")
+            self.log("fix: the corrected script did not run clean; kept " + chosen.label)
+
+    def repair_more(self, cand: Cand) -> None:
+        rounds = 0
+        while cand.problems and rounds < self.c["max_repairs"]:
+            if not self.client.can_call(reserve=self.client.expected_call_seconds() + RUN_RESERVE_S + 25.0):
+                self.log(f"stop repairing: {self.client.left} requests left, {self.remaining():.0f}s left")
+                break
+            rounds += 1
+            notes = self.notes if cand.with_notes else None
+            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, cand.src, self.report(cand.res, cand.problems),
+                                                        self.run_limit(), notes, self.contract.deliverables), tag=f"late-repair{rounds}")
+            if not new:
+                break
+            self.try_cand(cand, new, tag=f"late-repair{rounds}")
+            if cand.clean:
+                self._promote(cand, "repaired")
+            elif cand.res is not None and cand.res.ok:
+                self._promote(cand, "repaired run (deliverable problems remain)")
 
     # ---- finalization (always runs)
     def finalize(self) -> dict:
-        if self.finalized:
-            return {}
-        self.finalized = True
+        with self.lock:
+            if self.finalized:
+                return {}
+            self.finalized = True
+            self.closed = True
         log: list[str] = []
         try:
             self.out_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+        try:
+            if self.promoted is None:
+                # nothing promoted yet (alarm / early exit): keep the best partial result, if any
+                ran = [c for c in self.cands if c.dir is not None and c.dir.is_dir() and any(c.dir.iterdir())]
+                if ran:
+                    best = min(ran, key=lambda c: (len(c.problems), c.idx))
+                    n = promote(best.dir, self.out_dir)
+                    self.last_problems = list(best.problems)
+                    log.append(f"late promote {best.label} ({n} files)")
+        except Exception as exc:  # noqa: BLE001
+            log.append(f"late promote failed: {exc!r}")
+        clear_workspaces(self.out_dir)
         names = set()
         try:
             if not self.contract.deliverables and self.unit is not None:
                 self.contract = contract_from_model(None, self.unit, self.out_posix)
             if not self.contract.deliverables:
-                from .outputs import Deliverable
-
                 self.contract.deliverables = [Deliverable("results.json", "json")]
             for d in self.contract.deliverables:
                 names.add(d.name)
@@ -354,6 +493,9 @@ class Solver:
             "house_log": self.client.log if self.client else [],
             "contract": self.contract.source,
             "deliverables": sorted(names),
+            "chosen": self.promoted.label if self.promoted else None,
+            "candidates": [{"label": c.label, "clean": c.clean, "rounds": c.rounds, "problems": len(c.problems)} for c in self.cands],
+            "agreement": self.stage_log,
             "final_problems": self.last_problems,
             "tree": tree_summary(self.out_dir),
             "finalize": log,
