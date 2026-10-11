@@ -278,27 +278,49 @@ def _level_pred(vals: list[float], w: float, window: int = WINDOW) -> float:
     return w * vals[-1] + (1 - w) * (sum(tail) / len(tail))
 
 
+#: One-standard-error rule: among the (weight, window) pairs whose pooled backtest loss is within
+#: this many standard errors (of the paired per-forecast loss difference) of the best pair, take the
+#: most smoothed one - the least weight on the latest reading, then the longest window. A loss gap
+#: inside the backtest's own noise is not evidence for chasing the latest print, and averaging is the
+#: lower-variance forecast.
+LEVEL_ONE_SE = 1.0
+
+
 def fit_level_weight(series: dict[str, Series]) -> tuple[float, int]:
     """(weight on the last value, trailing-mean window), chosen by one-step backtest pooled over
-    the unit's entities (pre-cutoff data only, scale-free). Ties go to (0.5, 6)."""
+    the unit's entities (pre-cutoff data only, scale-free), with the one-standard-error rule
+    towards the smoother forecast. Ties go to (0.5, 6)."""
     if not series:
         return 0.5, WINDOW
     grid = sorted(((w, k) for w in LEVEL_GRID for k in WINDOW_GRID), key=lambda x: (abs(x[0] - 0.5), abs(x[1] - WINDOW)))
+    losses: dict[tuple[float, int], list[float]] = {}
     best, best_loss = (0.5, WINDOW), None
     for w, k in grid:
-        loss, n = 0.0, 0
+        ls: list[float] = []
         for s in series.values():
             v = s.values
             sc = _robust_scale(v)
             for t in range(3, len(v)):
-                loss += abs(v[t] - _level_pred(v[:t], w, k)) / sc
-                n += 1
-        if n == 0:
+                ls.append(abs(v[t] - _level_pred(v[:t], w, k)) / sc)
+        if not ls:
             return 0.5, WINDOW
-        loss /= n
+        losses[(w, k)] = ls
+        loss = sum(ls) / len(ls)
         if best_loss is None or loss < best_loss - 1e-9:
             best, best_loss = (w, k), loss
-    return best
+    ref = losses[best]
+    if len(ref) < 3:
+        return best
+    chosen = best
+    for w, k in sorted(losses, key=lambda x: (x[0], -x[1])):
+        if (w, k) == best:
+            break
+        d = [a - b for a, b in zip(losses[(w, k)], ref)]
+        se = statistics.stdev(d) / math.sqrt(len(d))
+        if statistics.fmean(d) <= LEVEL_ONE_SE * se:
+            chosen = (w, k)
+            break
+    return chosen
 
 
 def level_residual_sd(vals: list[float], w: float, window: int = WINDOW) -> float:

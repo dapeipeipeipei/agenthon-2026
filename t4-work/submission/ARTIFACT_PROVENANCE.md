@@ -225,3 +225,23 @@ documents). No outcome of any kind was used; every constant below was chosen by 
   reason carries no citation. Claims still cite flat-text, manifest-resolvable documents only.
 * **Answer compaction**: two further rounding stages (point within 15 % / 30 % of the band,
   band at most 12 % / 20 % wider) only when the 3,000-byte answer cap is otherwise exceeded.
+
+## Candidate E5 (E4 + one-standard-error rule in the level-model selection, 2026-10-11)
+
+One change to `agent/predict.py::fit_level_weight`, the pooled one-step backtest that picks the
+(weight on the latest reading, trailing-mean window) pair of the series level model from the
+unit's own pre-cutoff history. E4 took the pair with the lowest mean scale-free loss. E5 applies
+the textbook one-standard-error rule: among the pairs whose mean loss is within `LEVEL_ONE_SE = 1.0`
+standard errors (of the paired per-forecast loss difference against the best pair) of the best,
+it takes the most smoothed one (least weight on the latest reading, then the longest window).
+Rationale: a loss gap inside the backtest's own noise is no evidence for chasing the latest print,
+and an average is the lower-variance forecast. The selection still reads pre-cutoff data only.
+
+Disclosure (issue #24): the rule was examined because, on the practice unit
+`t4-cpicomp-202410-us11`, every fixed (weight, window) pair scored at least as well against the
+verified first-release outcomes as the pair E4 selected (0.75, 12). E4's selection is the backtest
+optimum (no bug); its margin over (0.25, 12) is 0.03 loss units against a standard error of 0.08.
+E5 selects (0.25, 12) there; on `t4-auction-btc-202411-us7` the best pair (0.0, 12) is already the
+most smoothed, so nothing changes. All other public units do not use the level model and are
+byte-identical. Constant: 1.0 standard error (convention, not tuned; 0.5 and 2.0 move cpicomp in
+the same direction).
