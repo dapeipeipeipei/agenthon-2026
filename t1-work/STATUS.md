@@ -5,21 +5,37 @@
 两道由假 House 给出真实解的题（`t1-EXAMPLE-bs-greeks-pde`、`t1-zero-coupon-bootstrapping`）**通过各自的官方 checker**，
 证明「计划 → 生成 → 运行 → 自检 → 复审 → 落盘」整条链是通的。**真实答题质量只有上传 Dev 才知道**（House 只能从评测容器里访问）。
 
-## 10-10 v3 进行中（分支 `t1/v3`，WIP，未出镜像）
+## 10-11 v3（分支 `t1/v3` / `cand/t1-v3`）
 
-**970099（v1）平台结果 0.1047**：run 页面（`/api/submissions/970099/get_details/` → detailed_result）显示 **86 题全部 exit 0、输出全部被接受**，
-9 题通过（bs-greeks-pde、cir-bond-pricing、double-sort、earnings-surprise-calculator、interest-rate-cap-floor、merton-jump-diffusion、
-momentum-backtest、pca-factor-portfolio、variance-swap-replication），其余 77 题全是 `domain_gate_failed`（答案错），**无 no_output / 超时 / not_reached / crash**。
-→ 问题是**答题质量**，不是路径/输出树/时钟。
+**平台结果**（CodaBench `/api/submissions/<id>/get_details/` → `detailed_result`，需登录）：
 
-依据（issue #17/#28/#30/#31、hub#2 Final 限制）：同模型 33/86 的队每题 14–24 次请求、单题中位 183–258 s（最长 950 s）；我们每题约 4–6 次请求、
-思考全关、单候选通过自检即止。Final：每题时限 = card `timeout_sec`（600–2400 s），全卷 24 h，题数不公布。
+| 提交 | 版本 | 分数 | 结果码 | 通过的题 |
+|---|---|---|---|---|
+| 970099 | v1 `ec2fc7d5` | 0.1047 | 9 scored / 77 `domain_gate_failed` / 0 其他 | bs-greeks-pde、cir-bond-pricing、double-sort、earnings-surprise-calculator、interest-rate-cap-floor、merton-jump-diffusion、momentum-backtest、pca-factor-portfolio、variance-swap-replication |
+| 970876 | v2 `928abdcd` | 0.1047 | 9 scored / 77 `domain_gate_failed` / 0 其他 | 同上，但少 merton-jump-diffusion、多 sma-crossover-spy |
 
-v3 方案（进行中）：思考开的分析调用（合同+方法+可验证检查）‖ 无分析直出候选；分析后再出 2 个候选（思考关）；每个候选独立子目录运行+修复；
-候选间数值一致性投票（`agent/compare.py`）；不一致时思考开的裁判调用 + 思考关的修正调用；首个可用答案立即落盘（草稿），之后择优替换；
-预算 = min(510 s, card−60 s)，软截止 330 s 后不再开启可选阶段；请求上限 23。
-已完成：house.py（思考开关、reasoning_content、内容为空也算回复）、runner.py（脚本名参数）、compare.py、prompts.py。
-待做：loop.py 重写、mock/selftest 适配、本地 86 题、CI、描述文件。
+两版都是 **86/86 exit 0、输出全部被接受**，0 个 no_output / 超时 / not_reached / crash → 输入路径、输出目录、时钟都没问题，
+**丢分全在答案错**；v2 的提示词/鲁棒性修复对分数没有影响。同模型 33/86 的队：每题 14–24 次请求、单题中位 183–258 s（#17/#30）；
+我们 v1/v2 每题约 4–6 次请求、思考全关、单候选跑通即止。
+
+**v3 做法**（`agent/loop.py`、`agent/compare.py`）：
+1. 分析调用 **开思考**（合同 + 精确方法/公式/约定 + 输出必须满足的检查项，JSON）；同时并行候选 A（不看分析、直接写，关思考）。
+2. 分析回来后候选 B、C（关思考，带分析，温度 0.1 / 0.6）。
+3. 每个候选在独立工作区 `_jp_c<i>`（输出目录下）运行，各自最多 2 轮修复；第一个跑通的**立刻落盘**（草稿）。
+4. 跑通的候选逐值比对（相对 1e-3）：全体一致（≥0.97）→ 直接结束；否则取最多数一致者，再做 **开思考的裁判调用**（看各候选代码/输出/差异表/CHECK 行，
+   选最佳 + 列确定性缺陷）→ 关思考的修正调用 → 修正版跑通才替换。
+5. 收尾：删工作区 → 缺的交付物写桩 → 输出树清理（v2 的全部防护保留）；收尾开始后不再启动任何子进程。
+6. 预算：min(510 s, card `timeout_sec` − 60 s)，软截止 min(330 s, 0.68×预算) 之后不再开可选阶段；请求上限 23；子进程内存 24 GiB（并行 3 个）。
+   Dev：86 题典型 ~250–350 s/题 ≈ 7–9 h < 12 h；Final（每题 600–2400 s、全卷 24 h）同一镜像同样安全。
+7. 思考回复处理：`reasoning_content` 字段或内联 `<think>`；思考吃光 token、content 为空的回复也算回复（不再当 bad_envelope 重试多扣请求），
+   用推理文本当分析笔记。
+
+**镜像**：`ghcr.io/dapeipeipeipei/jinpei-t1@sha256:3d1537831ee728b67d887301101f8e9ee95f25f31179e7a3c98fe85ac10abcdb`
+（CI run 38110974955，`cand/t1-v3` @ 6bad2d7：镜像内 86/86、oracle 过 checker、10 种退化模式全过；匿名拉取 PASS，360.5 MB）。
+描述文件 `submission/submission.v3.json`（Dev）/ `submission.v3.final.json`（Final），已封签校验；打包 `pack_all.py t1-v3` / `t1-v3.final`。
+
+**本地（假 House）**：86/86 exit 0、输出树全合规；两道 oracle 仍过 checker；good/disagree/reasoning/flaky/truncated/think 全过；
+延迟模拟（思考 70 s / 代码 40 s，disagree 模式走完 裁判+修正）单题 241 s；极端（140 s / 110 s）单题 251 s，软截止正确跳过裁判。
 
 ## 10-08 独立对抗性复审（分支 `t1/review`，未合并、未出镜像）
 
