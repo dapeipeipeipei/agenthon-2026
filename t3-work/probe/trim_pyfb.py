@@ -65,9 +65,7 @@ def run_all(tag: str) -> tuple[set[str], set[str], dict[str, str]]:
         cfg.write_text(json.dumps(scen))
         jobs.append((name, ["simulate", "--config", str(cfg), "--out", str(work / name / "trace.parquet")], work / name))
         if k < 2 and name in ("syn-extra-keys", "syn-no-latency-config"):
-            sub = batch_dir / f"sub_{k:02d}"
-            sub.mkdir()
-            (sub / "scenario.json").write_text(json.dumps(scen))
+            (batch_dir / f"sub_{k:02d}.json").write_text(json.dumps(scen))
             k += 1
     jobs.append(("batch", ["simulate-batch", "--batch-dir", str(batch_dir), "--out-dir", str(work / "batch-out")], work / "batch-out"))
     for name, args, out in jobs:

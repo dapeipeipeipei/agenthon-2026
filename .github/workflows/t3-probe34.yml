@@ -56,7 +56,7 @@ jobs:
       - name: Build P1 and P2
         run: |
           docker buildx build --platform linux/amd64 --load --build-arg TRIM=0 -t t3-p1:ci -f t3-work/Dockerfile.probe-p34 t3-work
-          docker buildx build --platform linux/amd64 --load --progress=plain --build-arg TRIM=1 -t t3-p2:ci -f t3-work/Dockerfile.probe-p34 t3-work 2>&1 | grep -E "before:|after:|modules imported|trim check|^#[0-9]+ [0-9.]+ [0-9.]+[MGK]|ERROR|error|rc=|Traceback|outputs changed|no longer" || true
+          docker buildx build --platform linux/amd64 --load --progress=plain --build-arg TRIM=1 -t t3-p2:ci -f t3-work/Dockerfile.probe-p34 t3-work 2>&1 | grep -E "before:|after:|modules imported|trim check|^#[0-9]+ [0-9.]+ [0-9.]+[MGK]|ERROR|error|rc=|Traceback|SystemExit|Error|outputs changed|no longer" || true
           docker image inspect t3-p2:ci >/dev/null
           docker pull -q "$STATIC"; docker pull -q "$BASELINE"
           for i in t3-p1:ci t3-p2:ci "$STATIC" "$BASELINE"; do
