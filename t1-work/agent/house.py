@@ -2,13 +2,17 @@
 
 Contract (Agenthon2026-public/docs/HOUSE-MODEL.md): POST $MODEL_ENDPOINT/v1/chat/completions,
 `Authorization: Bearer $MODEL_TOKEN`, `model = $MODEL_NAME`, through the injected proxy variables
-(urllib's default opener honours http(s)_proxy / no_proxy). Thinking is disabled per request with
-`chat_template_kwargs.enable_thinking = false` (thinking tokens count against the 4,000-token cap,
-issue #28). Sampling settings are constants in this file (SUBMISSION_CLI.md rule 4); the seed is a
-constant too (QFBENCH_SEED is fresh on every rerun, so it would not repeat).
+(urllib's default opener honours http(s)_proxy / no_proxy). Thinking is set per request with
+`chat_template_kwargs.enable_thinking` (thinking tokens count against the 4,000-token cap, issue
+#28): v3 turns it ON for the analysis and judge calls (no code in the reply, so the reasoning has
+room) and OFF for every call whose reply is a script. A reasoning reply may come back as
+`message.reasoning_content` (separate field) or inline `<think>...</think>`; both are kept in
+`Reply.reasoning`, and a reply that spent all its tokens thinking (content null) is still a reply.
+Sampling settings are constants in this file (SUBMISSION_CLI.md rule 4); the seed is a constant
+too (QFBENCH_SEED is fresh on every rerun, so it would not repeat).
 
 Budget: the House admits at most 25 requests per unit. `Client.max_requests` is what we allow
-ourselves (default 18, leaving spare slots); a request is counted as soon as it is sent, whether
+ourselves (default 23 in v3, leaving spare slots); a request is counted as soon as it is sent, whether
 or not it is answered, exactly like the route charges it. No automatic retries except one for an
 HTTP 429/5xx or a transport failure, when time and budget allow.
 """
@@ -25,6 +29,7 @@ from dataclasses import dataclass, field
 
 MAX_OUTPUT_TOKENS = 4000
 TEMPERATURE = 0.1          # fixed in code (rule 4); low but not 0 to escape degenerate loops
+THINK_TEMPERATURE = 0.6    # reasoning calls (fixed too)
 TOP_P = 0.95
 SEED = 20261013            # constant on purpose: QFBENCH_SEED changes between runs
 
@@ -54,6 +59,7 @@ class Reply:
     finish: str = ""            # finish_reason as reported
     completion_tokens: int = -1
     seconds: float = 0.0
+    reasoning: str = ""         # thinking text (reasoning_content field or inline <think>)
 
     @property
     def ok(self) -> bool:
@@ -99,7 +105,7 @@ class Client:
             return True
 
     # ---- transport
-    def _post(self, messages: list[dict], max_tokens: int, timeout: float, temperature: float) -> Reply:
+    def _post(self, messages: list[dict], max_tokens: int, timeout: float, temperature: float, think: bool = False) -> Reply:
         endpoint = os.environ["MODEL_ENDPOINT"].rstrip("/") + "/v1/chat/completions"
         body = {
             "model": os.environ["MODEL_NAME"],
@@ -108,7 +114,7 @@ class Client:
             "temperature": temperature,
             "top_p": TOP_P,
             "seed": SEED,
-            "chat_template_kwargs": {"enable_thinking": False},
+            "chat_template_kwargs": {"enable_thinking": bool(think)},
         }
         req = urllib.request.Request(
             endpoint,
@@ -131,18 +137,30 @@ class Client:
         try:
             payload = json.loads(raw.decode("utf-8", "replace"))
             choice = payload["choices"][0]
-            content = choice.get("message", {}).get("content")
+            msg = choice.get("message") or {}
+            content = msg.get("content")
+            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+            if not isinstance(reasoning, str):
+                reasoning = ""
             if not isinstance(content, str):
-                return Reply(None, "bad_envelope", seconds=secs)
+                if not reasoning:
+                    return Reply(None, "bad_envelope", seconds=secs)
+                content = ""        # all tokens went to thinking: still an answered (charged) request
+            inline = _THINK_BODY.findall(content)
+            if inline:
+                reasoning = (reasoning + "\n" + "\n".join(inline)).strip()
+            elif "<think>" in content and "</think>" not in content:
+                reasoning = (reasoning + "\n" + content.split("<think>", 1)[1]).strip()
             finish = str(choice.get("finish_reason") or "")
             usage = payload.get("usage") or {}
             ct = int(usage.get("completion_tokens", -1) or -1)
-            return Reply(content, "ok", finish=finish, completion_tokens=ct, seconds=secs)
+            return Reply(content, "ok", finish=finish, completion_tokens=ct, seconds=secs, reasoning=reasoning)
         except Exception:  # noqa: BLE001
             return Reply(None, "bad_envelope", seconds=secs)
 
     def chat(self, messages: list[dict], *, max_tokens: int = MAX_OUTPUT_TOKENS, tag: str = "",
-             temperature: float = TEMPERATURE, retry: bool = True) -> Reply:
+             temperature: float = TEMPERATURE, retry: bool = True, think: bool = False,
+             timeout: float | None = None) -> Reply:
         """One logical call. Never raises. A retry (one) only on 429/5xx/transport with time left."""
         for attempt in range(2 if retry else 1):
             left = self.remaining()
@@ -152,11 +170,12 @@ class Client:
             if not self._take():
                 self.log.append({"tag": tag, "status": "no_budget"})
                 return Reply(None, "no_budget")
-            timeout = min(self.call_timeout, left - 5.0)
-            r = self._post(messages, max_tokens, timeout, temperature)
+            limit = min(timeout or self.call_timeout, left - 5.0)
+            r = self._post(messages, max_tokens, limit, temperature, think)
             self.durations.append(r.seconds)
             self.log.append({"tag": tag, "status": r.status, "finish": r.finish, "tokens": r.completion_tokens,
-                             "seconds": round(r.seconds, 1), "attempt": attempt})
+                             "seconds": round(r.seconds, 1), "attempt": attempt, "think": think,
+                             "reasoning_chars": len(r.reasoning)})
             if r.ok:
                 return r
             # 407 = refused at the proxy before admission (seen in bursts of parallel requests, issue #30):
@@ -171,6 +190,7 @@ class Client:
 # --------------------------------------------------------------------------- reply parsing
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
+_THINK_BODY = re.compile(r"<think>(.*?)</think>", re.S)
 _FENCE = re.compile(r"```(?:python|py|Python)?[ \t]*\r?\n(.*?)```", re.S)
 _OPEN_FENCE = re.compile(r"```(?:python|py|Python)?[ \t]*\r?\n(.*)\Z", re.S)
 

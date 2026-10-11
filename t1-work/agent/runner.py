@@ -104,9 +104,10 @@ def _clean_stderr(text: str, scratch: Path) -> str:
 
 
 def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib: float = 40.0,
-               threads: int = 8) -> RunResult:
+               threads: int = 8, name: str = "solution.py") -> RunResult:
+    """`name`: the script file in `scratch` (candidates run concurrently, each with its own file)."""
     scratch.mkdir(parents=True, exist_ok=True)
-    script = scratch / "solution.py"
+    script = scratch / name
     script.write_text(code, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MODEL_", "QFBENCH_"))}
     env.pop("PYTHONPATH", None)          # the agent package is not for the script (we run with -s, not -I:

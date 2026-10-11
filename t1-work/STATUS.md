@@ -5,6 +5,22 @@
 两道由假 House 给出真实解的题（`t1-EXAMPLE-bs-greeks-pde`、`t1-zero-coupon-bootstrapping`）**通过各自的官方 checker**，
 证明「计划 → 生成 → 运行 → 自检 → 复审 → 落盘」整条链是通的。**真实答题质量只有上传 Dev 才知道**（House 只能从评测容器里访问）。
 
+## 10-10 v3 进行中（分支 `t1/v3`，WIP，未出镜像）
+
+**970099（v1）平台结果 0.1047**：run 页面（`/api/submissions/970099/get_details/` → detailed_result）显示 **86 题全部 exit 0、输出全部被接受**，
+9 题通过（bs-greeks-pde、cir-bond-pricing、double-sort、earnings-surprise-calculator、interest-rate-cap-floor、merton-jump-diffusion、
+momentum-backtest、pca-factor-portfolio、variance-swap-replication），其余 77 题全是 `domain_gate_failed`（答案错），**无 no_output / 超时 / not_reached / crash**。
+→ 问题是**答题质量**，不是路径/输出树/时钟。
+
+依据（issue #17/#28/#30/#31、hub#2 Final 限制）：同模型 33/86 的队每题 14–24 次请求、单题中位 183–258 s（最长 950 s）；我们每题约 4–6 次请求、
+思考全关、单候选通过自检即止。Final：每题时限 = card `timeout_sec`（600–2400 s），全卷 24 h，题数不公布。
+
+v3 方案（进行中）：思考开的分析调用（合同+方法+可验证检查）‖ 无分析直出候选；分析后再出 2 个候选（思考关）；每个候选独立子目录运行+修复；
+候选间数值一致性投票（`agent/compare.py`）；不一致时思考开的裁判调用 + 思考关的修正调用；首个可用答案立即落盘（草稿），之后择优替换；
+预算 = min(510 s, card−60 s)，软截止 330 s 后不再开启可选阶段；请求上限 23。
+已完成：house.py（思考开关、reasoning_content、内容为空也算回复）、runner.py（脚本名参数）、compare.py、prompts.py。
+待做：loop.py 重写、mock/selftest 适配、本地 86 题、CI、描述文件。
+
 ## 10-08 独立对抗性复审（分支 `t1/review`，未合并、未出镜像）
 
 依据：主办方 issue 全文（track1 #1–32、hub #1–8）、README/SUBMISSION_CLI/HOUSE-MODEL/DEVELOPMENT-RUNTIME/starter pack、
