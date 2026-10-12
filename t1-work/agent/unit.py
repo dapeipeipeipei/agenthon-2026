@@ -445,3 +445,78 @@ def regex_deliverables(instruction: str) -> list[str]:
         if name not in found:
             found.append(name)
     return found
+
+
+_JSON_BLOCK = re.compile(r"```[ \t]*(?:json|JSON|jsonc)?[ \t]*\r?\n(.*?)```", re.S)
+_KEY = re.compile(r'"([A-Za-z][A-Za-z0-9_]{1,60})"\s*:')
+
+
+def skeleton_keys(instruction: str, names: list[str]) -> dict[str, list[str]]:
+    """v4: the JSON keys the task's own output skeletons show, per JSON deliverable.
+
+    A fenced block that starts with `{` is attributed to the JSON deliverable named closest before
+    it (within 700 characters); only literal snake_case/camelCase identifiers count (placeholders
+    such as `<TICKER>`, upper-case data labels and numeric keys are skipped), so the check is a
+    floor: a key the task prints in the output layout must appear somewhere in the written file."""
+    jnames = [n for n in names if n.lower().endswith(".json")]
+    out: dict[str, list[str]] = {}
+    if not jnames:
+        return out
+    for m in _JSON_BLOCK.finditer(instruction):
+        body = m.group(1)
+        if not body.lstrip().startswith("{"):
+            continue
+        pre = instruction[max(0, m.start() - 700):m.start()]
+        best, pos = None, -1
+        for n in jnames:
+            i = pre.rfind(Path(n).name)
+            if i > pos:
+                best, pos = n, i
+        if best is None:
+            continue
+        # an "input" heading between the name and the block means the block describes an input
+        between = pre[pos:]
+        if re.search(r"^#+[^\n]*\binput", between, re.I | re.M):
+            continue
+        keys = out.setdefault(best, [])
+        for k in _KEY.findall(body):
+            if k.isupper() or not re.search(r"[a-z]", k) or k in keys:
+                continue
+            keys.append(k)
+    return {k: v for k, v in out.items() if v}
+
+
+def csv_layout_tokens(instruction: str, names: list[str]) -> dict[str, list[str]]:
+    """v4: identifiers the task lists right after a CSV deliverable's name under a "columns" phrase
+    (column names, sometimes also the categorical values those columns must hold). Used as a soft
+    floor: each must appear as a whole word somewhere in the written file (header or cells)."""
+    out: dict[str, list[str]] = {}
+    for n in names:
+        if not n.lower().endswith(".csv"):
+            continue
+        base = Path(n).name
+        for m in re.finditer(re.escape(base), instruction):
+            win = instruction[m.end():m.end() + 700]
+            cut = len(win)
+            for o in names:
+                ob = Path(o).name
+                if ob == base:
+                    continue
+                i = win.find(ob)
+                if 0 <= i < cut:
+                    cut = i
+            win = win[:cut]
+            c = re.search(r"columns?\b[^\n`]{0,60}?:?", win, re.I)
+            if not c:
+                continue
+            seg = win[c.end():c.end() + 400]
+            toks: list[str] = []
+            for t in re.findall(r"`([^`\n]{1,300})`", seg):
+                for x in re.split(r"\s*,\s*", t):
+                    x = x.strip()
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,40}", x) and x not in toks:
+                        toks.append(x)
+            if len(toks) >= 2:
+                out[n] = toks
+                break
+    return out

@@ -24,16 +24,17 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import threading
 import time
 from pathlib import Path
 
 from . import house, prompts
 from .compare import agreement, clear_workspaces, diff_table, fingerprint, promote, workspace
-from .outputs import (Contract, Deliverable, check_deliverables, contract_from_model, preview_outputs,
+from .outputs import (Contract, Deliverable, check_deliverables, check_skeletons, contract_from_model, preview_outputs,
                       rewrite_paths, sanitize_tree, tree_summary, write_stub)
 from .runner import RunResult, run_script
-from .unit import Unit, compact_unit, load_unit
+from .unit import Unit, compact_unit, csv_layout_tokens, load_unit, skeleton_keys
 
 FINAL_RESERVE_S = 15.0        # stubs + sanitation
 RUN_RESERVE_S = 20.0          # a run must leave at least this much before the deadline
@@ -58,7 +59,41 @@ def cfg() -> dict:
         "judge": house.env_int("JP_JUDGE", 1) == 1,
         "mem_gib": house.env_float("JP_MEM_GIB", 24.0),
         "threads": house.env_int("JP_THREADS", 6),
+        # v4 switches (all on by default; 0 restores the v3 behaviour for A/B runs)
+        "noop_retry": house.env_int("JP_NOOP_RETRY", 1) == 1,      # a repair that returns an already-tried script is re-asked differently
+        "skeleton": house.env_int("JP_SKELETON", 1) == 1,          # soft check: keys of the task's JSON layout present
+        "code_context": house.env_int("JP_CODE_CONTEXT", 1) == 1,  # failing source lines quoted in the run report
+        "cand_seeds": house.env_int("JP_CAND_SEEDS", 1) == 1,      # a distinct sampling seed per candidate
+        "syntax_repair": house.env_int("JP_SYNTAX_REPAIR", 1) == 1,  # a non-parsing complete script is repaired, not rewritten compact
     }
+
+
+def _norm_code(src: str | None) -> str:
+    """Script identity for the no-op check: blank lines and trailing spaces ignored."""
+    return "\n".join(ln.rstrip() for ln in (src or "").splitlines() if ln.strip())
+
+
+_TB_LINE = re.compile(r'File "[^"]*cand_\d+\.py", line (\d+)')
+
+
+def code_context(src: str | None, report: str, around: int = 3, max_sites: int = 3) -> str:
+    """The script lines a traceback points at (numbered), so a repair can see where it failed."""
+    if not src or not report:
+        return ""
+    lines = src.splitlines()
+    sites: list[int] = []
+    for m in _TB_LINE.finditer(report):
+        n = int(m.group(1))
+        if 1 <= n <= len(lines) and n not in sites:
+            sites.append(n)
+    if not sites:
+        return ""
+    sites = sites[-max_sites:]
+    out = []
+    for n in sites:
+        lo, hi = max(1, n - around), min(len(lines), n + around - 1)
+        out.append("\n".join(f"{'>>' if i == n else '  '} {i:4d} | {lines[i - 1]}" for i in range(lo, hi + 1)))
+    return "Source lines the traceback points at (>> marks the failing line):\n" + "\n...\n".join(out)
 
 
 class Cand:
@@ -72,6 +107,8 @@ class Cand:
         self.problems: list[str] = ["did not run"]
         self.started = 0.0
         self.rounds = 0
+        self.soft: list[str] = []            # v4: layout problems that do not make the candidate unusable
+        self.seen: set[str] = set()          # v4: normalised scripts already tried by this candidate
 
     @property
     def clean(self) -> bool:
@@ -103,6 +140,7 @@ class Solver:
         self.stage_log: list[str] = []
         self.finalized = False
         self.arm_alarm = None       # set by cli on POSIX: re-arm the hard alarm to the final budget
+        self.skel: dict[str, list[str]] = {}
 
     # ---- helpers
     def log(self, msg: str) -> None:
@@ -143,6 +181,7 @@ class Solver:
             except Exception:  # noqa: BLE001
                 pass
         self.contract = contract_from_model(None, u, self.out_posix)
+        self.update_skel()
         self.log(f"unit {u.unit_id}: card timeout {u.timeout_sec:.0f}s, budget {budget:.0f}s (soft {self.soft_deadline - self.t0:.0f}s), "
                  f"{len(u.files)} data files, {len(u.canaries)} canary ids, mapping {len(u.mapping)} paths, "
                  f"text deliverables={[d.name for d in self.contract.deliverables]}")
@@ -191,11 +230,33 @@ class Solver:
             if c.deliverables:
                 with self.lock:
                     self.contract = c
+                self.update_skel()
         body = house.strip_think(r.content or "").strip() if r.ok else ""
         self.notes = prompts.notes_from_analysis(obj, body if len(body) >= 80 else r.reasoning) if r.ok else None
         self.log(f"analysis: {r.status} ({r.seconds:.0f}s, {r.completion_tokens} tok, finish={r.finish}, reasoning {len(r.reasoning)} ch); "
                  f"json={'yes' if obj else 'no'}, notes {len(self.notes or '')} ch, contract={self.contract.source} "
                  f"{[d.name for d in self.contract.deliverables]}")
+
+    def update_skel(self) -> None:
+        if not self.c["skeleton"] or self.unit is None:
+            return
+        try:
+            names = [d.name for d in self.contract.deliverables]
+            sk = skeleton_keys(self.unit.instruction, names)
+            sk.update(csv_layout_tokens(self.unit.instruction, names))
+        except Exception:  # noqa: BLE001
+            sk = {}
+        with self.lock:
+            self.skel = sk
+            for d in self.contract.deliverables:
+                toks = sk.get(d.name)
+                if toks and "names from the task's layout" not in d.spec:
+                    what = "keys" if d.name.lower().endswith(".json") else "columns/labels"
+                    d.spec = (d.spec + f" | {what}: names from the task's layout (use verbatim): " + ", ".join(toks[:60])).strip(" |")
+
+    def cand_seed(self, cand: "Cand", bump: int = 0) -> int:
+        base = house.SEED + (101 * cand.idx if self.c["cand_seeds"] else 0)
+        return base + (7919 * bump if self.c["noop_retry"] else 0)
 
     def shrink_prompts(self) -> bool:
         with self.lock:
@@ -214,31 +275,73 @@ class Solver:
         notes = self.notes if cand.with_notes else None
         temp = (house.TEMPERATURE, house.TEMPERATURE, 0.6, 0.8)[cand.idx]
         msgs = prompts.code_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables)
-        src = self.get_code(msgs, tag=f"code{cand.label}", temperature=temp, notes=notes)
+        src = self.get_code(msgs, tag=f"code{cand.label}", temperature=temp, notes=notes, seed=self.cand_seed(cand))
         if not src:
             return
         self.try_cand(cand, src, tag=f"cand{cand.label}")
-        while cand.problems and cand.rounds < self.c["cand_repairs"]:
+        soft_rounds = 0
+        while (cand.problems or (cand.soft and soft_rounds < 1)) and cand.rounds < self.c["cand_repairs"]:
             if self.soft_left() <= 0 and self.any_clean():
                 break
             if not self.client.can_call(reserve=self.client.expected_call_seconds() + RUN_RESERVE_S + 20.0):
                 break
-            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, cand.src, self.report(cand.res, cand.problems),
-                                                        self.run_limit(), notes, self.contract.deliverables),
-                                tag=f"repair{cand.label}{cand.rounds + 1}", temperature=temp, notes=notes)
+            soft_only = not cand.problems
+            new = self.repair_code(cand, notes, temp, tag=f"repair{cand.label}{cand.rounds + 1}")
             if not new:
                 break
             cand.rounds += 1
-            self.try_cand(cand, new, tag=f"repair{cand.label}{cand.rounds}")
+            if soft_only:
+                soft_rounds += 1
+                self.try_soft_fix(cand, new, tag=f"repair{cand.label}{cand.rounds}")
+            else:
+                self.try_cand(cand, new, tag=f"repair{cand.label}{cand.rounds}")
+
+    def repair_code(self, cand: Cand, notes: str | None, temp: float, *, tag: str) -> str | None:
+        """One repair of `cand`; a reply that only repeats an already-tried script (a fixed point at a
+        constant seed and low temperature) is re-asked once with a different seed, a higher
+        temperature and an explicit note, and dropped if it repeats again."""
+        rep = self.report(cand.res, cand.problems + cand.soft, cand.src)
+        msgs = prompts.repair_messages(self.pu, self.out_posix, cand.src, rep, self.run_limit(), notes, self.contract.deliverables)
+        new = self.get_code(msgs, tag=tag, temperature=temp, notes=notes, seed=self.cand_seed(cand, cand.rounds + 1))
+        if not new or not self.c["noop_retry"]:
+            return new
+        cand.seen.add(_norm_code(cand.src))
+        if _norm_code(new) not in cand.seen:
+            return new
+        if not self.client.can_call(reserve=self.client.expected_call_seconds() + RUN_RESERVE_S + 20.0):
+            return None
+        self.log(f"{tag}: the reply repeats a script already tried; asking again with a different seed")
+        msgs[-1]["content"] += prompts.NOOP_NOTE
+        new = self.get_code(msgs, tag=tag + "+again", temperature=max(0.7, temp), notes=notes,
+                            seed=self.cand_seed(cand, 50 + cand.rounds))
+        if not new or _norm_code(new) in cand.seen:
+            self.log(f"{tag}: still no change; giving up on this repair")
+            return None
+        return new
+
+    def try_soft_fix(self, cand: Cand, src: str, *, tag: str) -> None:
+        """A layout repair of a candidate that already runs clean: tried in a side workspace and
+        adopted only if it still runs clean with fewer layout problems."""
+        trial = Cand(cand.idx, cand.label, cand.with_notes)
+        trial.seen = cand.seen
+        self.try_cand(trial, src, tag=tag + "(layout)", ws_name=f"c{cand.idx}s", promote_ok=False)
+        if trial.clean and len(trial.soft) < len(cand.soft):
+            cand.dir, cand.src, cand.res, cand.problems, cand.soft, cand.started = (
+                trial.dir, trial.src, trial.res, trial.problems, trial.soft, trial.started)
+            self.log(f"{tag}: layout fix adopted ({len(cand.soft)} layout problems left)")
+            if self.promoted is cand:
+                self._promote(cand, "layout fix")
+        else:
+            self.log(f"{tag}: layout fix not adopted")
 
     def any_clean(self) -> bool:
         return any(c.clean for c in self.cands)
 
     def get_code(self, messages: list[dict], *, tag: str, temperature: float = house.TEMPERATURE,
-                 notes: str | None = None) -> str | None:
+                 notes: str | None = None, seed: int = house.SEED) -> str | None:
         """A complete script from one logical call; continuation / compact retry when truncated."""
         cl = self.client
-        r = cl.chat(messages, max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag, temperature=temperature)
+        r = cl.chat(messages, max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag, temperature=temperature, seed=seed)
         if r.status in TOO_BIG and tag.startswith("code") and cl.can_call(reserve=RUN_RESERVE_S + 20):
             self.shrink_prompts()
             messages = prompts.compact_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables)
@@ -250,6 +353,11 @@ class Solver:
         self.log(f"{tag}: {r.status} {r.seconds:.0f}s {r.completion_tokens} tok finish={r.finish} code={'yes' if code else 'no'}"
                  + (" TRUNCATED" if r.truncated else ""))
         if code and not r.truncated and self.compiles(code):
+            return code
+        if code and not r.truncated and self.c["syntax_repair"] and len(code) > 400:
+            # v4: a complete reply that does not parse is run as it is: the SyntaxError (with the
+            # quoted source line) goes to the repair, instead of a "too long, write it compact" rewrite
+            self.log(f"{tag}: the script does not parse; it goes to repair with the SyntaxError")
             return code
         if r.truncated and code and cl.can_call(reserve=RUN_RESERVE_S + 20):
             r2 = cl.chat(prompts.continue_messages(messages, code), max_tokens=house.MAX_OUTPUT_TOKENS, tag=tag + "+cont", temperature=temperature)
@@ -302,8 +410,10 @@ class Solver:
             code = code.replace(self.out_posix.rstrip("/"), ws_posix)
         return rewrite_paths(code, self.unit, ws_posix)
 
-    def try_cand(self, cand: Cand, src: str, *, tag: str) -> None:
-        ws = workspace(self.out_dir, f"c{cand.idx}")      # fresh: no stale file can pass for a new one
+    def try_cand(self, cand: Cand, src: str, *, tag: str, ws_name: str | None = None, promote_ok: bool = True) -> None:
+        if self.c["noop_retry"] and cand.src:
+            cand.seen.add(_norm_code(cand.src))
+        ws = workspace(self.out_dir, ws_name or f"c{cand.idx}")      # fresh: no stale file can pass for a new one
         cand.dir, cand.src = ws, src
         limit = self.run_limit()
         if limit <= 30 and self.remaining() < RUN_RESERVE_S + 10:
@@ -317,9 +427,11 @@ class Solver:
         if not res.ok:
             problems = [res.report()] + problems
         cand.problems = problems
+        cand.soft = check_skeletons(ws, self.skel) if self.skel and res.ok else []
         self.log(f"{tag}: run {'ok' if res.ok else 'FAILED'} in {res.seconds:.0f}s (limit {limit}s); problems={len(problems)}"
+                 + (f" layout={len(cand.soft)}" if cand.soft else "")
                  + (": " + problems[0][:160].replace("\n", " | ") if problems else ""))
-        if not problems:
+        if not problems and promote_ok:
             with self.lock:
                 if self.promoted is None:
                     self._promote(cand, "first clean candidate (draft)")
@@ -333,15 +445,18 @@ class Solver:
             self.last_problems = list(cand.problems)
         self.log(f"promoted {cand.label} ({n} files): {why}")
 
-    @staticmethod
-    def report(res: RunResult | None, problems: list[str]) -> str:
+    def report(self, res: RunResult | None, problems: list[str], src: str | None = None) -> str:
         parts = []
         if res is not None:
             parts.append(res.report())
+            if self.c["code_context"] and not res.ok:
+                ctx = code_context(src, res.stderr_tail)
+                if ctx:
+                    parts.append(ctx)
         extra = [p for p in problems if res is None or p != res.report()]
         if extra:
             parts.append("Deliverable check:\n- " + "\n- ".join(extra))
-        return "\n\n".join(parts)[:6000]
+        return "\n\n".join(parts)[:7000]
 
     # ---- stage 4: choose, judge, fix
     def recheck(self) -> None:
@@ -350,6 +465,7 @@ class Solver:
                 continue
             probs = check_deliverables(c.dir, self.contract.deliverables, since=c.started)
             c.problems = ([c.res.report()] if not c.res.ok else []) + probs
+            c.soft = check_skeletons(c.dir, self.skel) if self.skel and c.res.ok else []
 
     def select(self) -> None:
         self.recheck()
@@ -393,7 +509,9 @@ class Solver:
             return
         shown = sorted(clean, key=lambda c: c.idx)[:3]
         diff = diff_table({c.label: fps[c.label] for c in shown}) if len(shown) >= 2 else "(only one candidate ran successfully)"
-        payload = [{"label": c.label, "code": c.src, "previews": preview_outputs(c.dir, self.contract.deliverables, budget=5000),
+        payload = [{"label": c.label, "code": c.src,
+                    "previews": preview_outputs(c.dir, self.contract.deliverables, budget=5000)
+                    + ("\nAUTOMATED LAYOUT CHECK: " + "; ".join(c.soft) if c.soft else ""),
                     "stdout": (c.res.stdout_tail if c.res else "")[-1500:]} for c in shown]
         r = cl.chat(prompts.judge_messages(self.pu, self.out_posix, payload, diff, self.notes), max_tokens=house.MAX_OUTPUT_TOKENS,
                     tag="judge", **self.think_kw())
@@ -434,8 +552,8 @@ class Solver:
                 break
             rounds += 1
             notes = self.notes if cand.with_notes else None
-            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, cand.src, self.report(cand.res, cand.problems),
-                                                        self.run_limit(), notes, self.contract.deliverables), tag=f"late-repair{rounds}")
+            cand.rounds += 1
+            new = self.repair_code(cand, notes, house.TEMPERATURE, tag=f"late-repair{rounds}")
             if not new:
                 break
             self.try_cand(cand, new, tag=f"late-repair{rounds}")

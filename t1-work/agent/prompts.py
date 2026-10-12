@@ -214,3 +214,9 @@ def notes_from_analysis(obj: dict | None, text: str, limit: int = 9000) -> str |
     if len(t) > limit:
         t = "(reasoning notes, truncated)\n" + t[-limit:]
     return t
+
+
+NOOP_NOTE = ("\n\nIMPORTANT: your previous answer returned the script UNCHANGED (or identical to a version that already failed), "
+             "so the same failure would happen again. Read the error and the quoted source lines above, find the line that "
+             "causes it, and change the code so that the failure cannot recur (e.g. different data access, a guard, a different "
+             "algorithmic step). Return the whole corrected script.")
