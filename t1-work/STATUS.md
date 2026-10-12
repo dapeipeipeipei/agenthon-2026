@@ -5,6 +5,39 @@
 两道由假 House 给出真实解的题（`t1-EXAMPLE-bs-greeks-pde`、`t1-zero-coupon-bootstrapping`）**通过各自的官方 checker**，
 证明「计划 → 生成 → 运行 → 自检 → 复审 → 落盘」整条链是通的。**真实答题质量只有上传 Dev 才知道**（House 只能从评测容器里访问）。
 
+## 10-12 v3f（决赛版；分支 `t1/final` / `cand/t1-v3f`）
+
+**决赛限制**（hub#2 10-12 帖、track1#31）：一次上传；整卷 **24 h**（86,400 s，含开头一次拉镜像，排队不算）；
+每题 card `[agent].timeout_sec` **600–2400 s**（容器创建也算在内）；**题数不公布、无上界**；运行时**不提供**剩余阶段时间/剩余题数；
+House 25 请求/题、4000 输出 token、上下文 262,144；未开跑的题记 `not_reached`=0；输出/日志隐藏；镜像要保持可拉到 10-25 23:59 AoE。
+
+**预算公式**（`agent/loop.py: stage_cap/unit_budget`）：
+
+    stage_cap = (86400 − 1800 预留) / 150 题(假设) − 30 s 容器开销 = 534 s
+    budget    = min(stage_cap, card − max(120, 0.10·card))      → card 600: 480 s；card ≥ 654: 534 s
+    soft      = min(420, 0.72·budget)                            → 346 / 384 s 之后不再开可选阶段
+    硬闹钟    = budget + 30 s（原 45 s）；card 缺失/读不出 → 按 600 s（原 1800）
+
+150 题全部顶格也装得进 24 h；若题数 ≤ 86，实际只用 ~6–10 h。请求上限 24（留 1）；候选 5 个并行（线程 16//k=3、RLIMIT_AS 20 GiB）；
+有干净候选后修复轮至少给裁判留 4 个请求；裁判→修正最多 2 轮（第 2 轮只在修正改变了输出时做，裁旧 vs 新），修正跑不通再修 1 次。
+全部崩溃/输出树防护保持不变。环境变量 `JP_STAGE_SEC/JP_ROSTER_ASSUME/JP_STAGE_RESERVE_SEC/JP_UNIT_OVERHEAD_SEC/JP_UNIT_BUDGET_SEC` 可覆盖（平台不传 env，即用默认）。
+
+**假 House 慢延迟模拟**（思考 60–90 s、代码 30–60 s 均匀随机；`JP_TEST_CARD_TIMEOUT` 模拟决赛 card；86 题全量，16 并发）：
+
+| 场景 | 题数 | exit 0 / 输出树合规 | 单题用时 中位 / p90 / 最大 | 距 card 最小余量 | 请求 中位 / 最大 |
+|---|---|---|---|---|---|
+| disagree（全走裁判+修正），card 600 | 86 | 86 / 86 | 251 / 320 / 404 s | 196 s | 9 / 21 |
+| good（全票一致早停），card 2400 | 86 | 86 / 86 | 130 / 142 / 462 s | 1938 s | 6 / 21 |
+| 极端延迟（思考 120–150、代码 90–120），disagree，card 600 | 8 | 8 / 8 | 248 / 263 / 360 s | 240 s | 6 / 12 |
+
+（第一轮有 40 个子进程在 05:28 UTC 被另一会话的进程匹配误杀，rc=−1；这些题已原样重跑，表中为合并结果。）
+CI run 38207329342：镜像内 86/86、oracle 过 checker、10 种退化模式全过，新增「决赛节奏」步（card 600 + 慢 House + disagree，断言 ≤540 s、≤24 请求）：146/363/146 s。
+
+**镜像** `ghcr.io/dapeipeipeipei/jinpei-t1@sha256:4415b800d92d66668e67a37b7c29d145ed9fba2b6884976e7319f8575d1ae7ef`
+（tag `ab39c47d5dc1`/`ci`，digest 取自注册表 `docker-content-digest`；匿名拉取 PASS，360.5 MB）。
+描述文件 `submission/submission.v3f.final.json`（`agenthon2026-coding-final`）/ `submission.v3f.json`（Dev 孪生，Dev 已截止只做对照），已封签校验。
+注意：Dev 卡 1200–5400 s 下 budget 也是 534 s，86 题顶格 ≈ 48.5k s > 12 h，Dev 孪生仅在平均用时下安全。
+
 ## 10-11 v3（分支 `t1/v3` / `cand/t1-v3`）
 
 **平台结果**（CodaBench `/api/submissions/<id>/get_details/` → `detailed_result`，需登录）：

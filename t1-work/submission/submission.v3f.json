@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.1.0",
+  "interface_version": "2.0",
+  "competition_id": "agenthon2026-coding-dev",
+  "team_id": "team-00000000000000000000000000000000",
+  "track": "coding",
+  "phase": "dev",
+  "category": "api",
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "dapeipeipeipei/jinpei-t1",
+    "digest": "sha256:4415b800d92d66668e67a37b7c29d145ed9fba2b6884976e7319f8575d1ae7ef"
+  },
+  "image_access": "public",
+  "models": [
+    {
+      "name": "nvidia/nemotron-3-super-120b-a12b",
+      "version": "rl-030326-fp8",
+      "revision": "rl-030326-fp8",
+      "training_cutoff": "unpublished",
+      "access": "api"
+    }
+  ],
+  "license": "Apache-2.0",
+  "descriptor_digest": "sha256:28a8dc7ec56697e9d6053bb4aab343b9928a076654155901bf6ca6320ecec7d9"
+}
