@@ -142,9 +142,9 @@ def repair_messages(u: Unit, out_dir: str, code: str, report: str, run_limit: in
 {report}
 
 === YOUR JOB NOW ===
-Fix the script so that it runs without error within {run_limit} seconds and writes every deliverable exactly as the task specifies. Fix the root cause (wrong path, wrong column, wrong shape, numerical blow-up, slow loop), not just the symptom; re-check file names, keys and columns against the task text while you are at it. Keep what already works.
+Fix the script so that it runs without error within {run_limit} seconds and writes every deliverable exactly as the task specifies. Fix the root cause (wrong path, wrong column, wrong shape, numerical blow-up, slow loop), not just the symptom; re-check file names, keys and columns against the task text while you are at it. Keep what already works. The script MUST differ from the current one where the failure arises: returning it unchanged repeats the failure.
 
-Reply with exactly one ```python code block containing the whole corrected script, and no text before or after it."""
+Reply with exactly one ```python code block containing the whole corrected script, and no text before or after it. Its first line must be a comment `# FIX: <the root cause in a few words and what you changed>`."""
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
@@ -214,3 +214,25 @@ def notes_from_analysis(obj: dict | None, text: str, limit: int = 9000) -> str |
     if len(t) > limit:
         t = "(reasoning notes, truncated)\n" + t[-limit:]
     return t
+
+
+NOOP_NOTE = ("\n\nIMPORTANT: your previous answer returned the script UNCHANGED (or identical to a version that already failed), "
+             "so the same failure would happen again. Read the error and the quoted source lines above, find the line that "
+             "causes it, and change the code so that the failure cannot recur (e.g. different data access, a guard, a different "
+             "algorithmic step). Return the whole corrected script.")
+
+
+REWRITE_MARK = "A PREVIOUS ATTEMPT AT THIS TASK FAILED"
+
+
+def rewrite_messages(u: Unit, out_dir: str, notes: str | None, run_limit: int, deliverables: list | None,
+                     failure: str) -> list[dict]:
+    """v4: a fresh script (the failing one is NOT shown, so it cannot simply be copied back) with
+    the failure it must avoid."""
+    msgs = code_messages(u, out_dir, notes, run_limit, deliverables)
+    msgs[-1]["content"] = msgs[-1]["content"].replace(
+        "=== YOUR JOB NOW ===",
+        f"=== {REWRITE_MARK} ===\n{failure[:3500]}\n\nAsked to fix it, the model returned the same script again. "
+        "Do not reproduce that approach blindly: write a NEW script from scratch that cannot fail this way "
+        "(check column names and shapes against the data previews, guard the failing step).\n\n=== YOUR JOB NOW ===", 1)
+    return msgs

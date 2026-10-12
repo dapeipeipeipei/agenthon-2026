@@ -459,3 +459,49 @@ def tree_summary(out_dir: Path) -> dict:
             except OSError:
                 pass
     return {"files": n, "bytes": total}
+
+
+def _all_keys(obj, out: set, depth: int = 0) -> None:
+    if depth > 40:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.add(str(k))
+            _all_keys(v, out, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj[:200]:
+            _all_keys(v, out, depth + 1)
+
+
+def check_skeletons(out_dir: Path, expect: dict[str, list[str]]) -> list[str]:
+    """v4 soft check: keys the task's own JSON layout shows that the written file lacks (any depth).
+    Soft = fed back to the model in repairs and to the judge, but a candidate is not unusable for it."""
+    problems: list[str] = []
+    for name, keys in (expect or {}).items():
+        p = out_dir / name
+        if not p.is_file():
+            continue
+        if name.lower().endswith(".csv"):
+            try:
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    text = "".join(fh.readline() for _ in range(400))
+            except OSError:
+                continue
+            words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
+            miss = [k for k in keys if k not in words]
+            if miss:
+                problems.append(f"{name}: names the task lists for this file's columns/values do not appear in it: {', '.join(miss[:20])}"
+                                " -- use exactly the task's column names, order and labels")
+            continue
+        try:
+            obj = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except Exception:  # noqa: BLE001
+            continue
+        have: set = set()
+        _all_keys(obj, have)
+        miss = [k for k in keys if k not in have]
+        if miss:
+            problems.append(f"{name}: keys shown in the task's JSON layout are MISSING from the file: {', '.join(miss[:20])}"
+                            + (f" (+{len(miss) - 20} more)" if len(miss) > 20 else "")
+                            + " -- use exactly the task's key names and nesting")
+    return problems

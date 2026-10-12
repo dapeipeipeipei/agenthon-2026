@@ -105,7 +105,8 @@ class Client:
             return True
 
     # ---- transport
-    def _post(self, messages: list[dict], max_tokens: int, timeout: float, temperature: float, think: bool = False) -> Reply:
+    def _post(self, messages: list[dict], max_tokens: int, timeout: float, temperature: float, think: bool = False,
+              seed: int = SEED) -> Reply:
         endpoint = os.environ["MODEL_ENDPOINT"].rstrip("/") + "/v1/chat/completions"
         body = {
             "model": os.environ["MODEL_NAME"],
@@ -113,7 +114,7 @@ class Client:
             "max_tokens": int(min(max_tokens, MAX_OUTPUT_TOKENS)),
             "temperature": temperature,
             "top_p": TOP_P,
-            "seed": SEED,
+            "seed": int(seed),
             "chat_template_kwargs": {"enable_thinking": bool(think)},
         }
         req = urllib.request.Request(
@@ -160,7 +161,7 @@ class Client:
 
     def chat(self, messages: list[dict], *, max_tokens: int = MAX_OUTPUT_TOKENS, tag: str = "",
              temperature: float = TEMPERATURE, retry: bool = True, think: bool = False,
-             timeout: float | None = None) -> Reply:
+             timeout: float | None = None, seed: int = SEED) -> Reply:
         """One logical call. Never raises. A retry (one) only on 429/5xx/transport with time left."""
         for attempt in range(2 if retry else 1):
             left = self.remaining()
@@ -171,7 +172,7 @@ class Client:
                 self.log.append({"tag": tag, "status": "no_budget"})
                 return Reply(None, "no_budget")
             limit = min(timeout or self.call_timeout, left - 5.0)
-            r = self._post(messages, max_tokens, limit, temperature, think)
+            r = self._post(messages, max_tokens, limit, temperature, think, seed)
             self.durations.append(r.seconds)
             self.log.append({"tag": tag, "status": r.status, "finish": r.finish, "tokens": r.completion_tokens,
                              "seconds": round(r.seconds, 1), "attempt": attempt, "think": think,
