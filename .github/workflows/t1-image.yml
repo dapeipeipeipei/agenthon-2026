@@ -122,6 +122,19 @@ jobs:
               | tee -a t1-ci-out/summary.txt
           done
 
+      - name: Final pacing in the image (card 600 s, slow House, judge+fix rounds; must end >= 60 s before the card)
+        run: |
+          python t1-work/harness/run_units.py --docker-image t1-local:ci --mode disagree --budget 0 --jobs 3             --agent-env JP_TEST_CARD_TIMEOUT=600 --think-delay 60 --think-delay-max 90 --code-delay 30 --code-delay-max 60             --out-root t1-ci-out/final-pacing             --units t1-zero-coupon-bootstrapping t1-EXAMPLE-bs-greeks-pde t1-bollinger-backtest-aapl | tee -a t1-ci-out/summary.txt
+          python - <<'PY'
+          import json
+          rows = json.load(open("t1-ci-out/final-pacing/results.json"))
+          for r in rows:
+              assert r["ok"] and r["rc"] == 0, r["unit"]
+              assert r["seconds"] <= 540, f'{r["unit"]}: {r["seconds"]} s > 600 - 60'
+              assert (r["requests"] or 0) <= 24, f'{r["unit"]}: {r["requests"]} requests'
+          print("final pacing ok:", [(r["unit"], r["seconds"], r["requests"]) for r in rows])
+          PY
+
       - name: Push to GHCR
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |

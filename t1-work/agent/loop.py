@@ -16,9 +16,19 @@ unit's House allowance and time on getting the numbers right:
    pick only if it runs clean.
 5. Finalize always: workspaces removed, stubs for missing deliverables, output tree sanitised.
 
-Time: one hard deadline `budget` = min(JP_UNIT_BUDGET_SEC, card timeout - JP_CARD_MARGIN_SEC), and
-a soft deadline after which no optional stage (late repairs of a non-best candidate, judge, fix)
-starts. Requests: at most JP_MAX_REQUESTS (default 23 of the 25 the House admits).
+v3f (Final build): up to 5 parallel candidates, a request reserve kept for the judge, and up to
+two judge -> fix rounds (the second only when the fix changed the outputs, to adjudicate old vs new).
+
+Time (see `unit_budget`): one hard deadline
+
+    budget = min(stage_cap, card_timeout - max(JP_CARD_MARGIN_SEC=120, 0.10 * card_timeout))
+    stage_cap = (JP_STAGE_SEC=86400 - JP_STAGE_RESERVE_SEC=1800) / JP_ROSTER_ASSUME=150 - JP_UNIT_OVERHEAD_SEC=30
+
+(JP_UNIT_BUDGET_SEC, when set, replaces stage_cap) and a soft deadline min(JP_SOFT_BUDGET_SEC, 0.72 *
+budget) after which no optional stage starts. The Final gives each unit 600-2400 s on its card and
+the whole run 24 h; the roster size is unpublished and nothing tells a running unit how much stage
+time is left (track1#31, hub#2), so the cap assumes up to 150 units all hitting it. Requests: at most
+JP_MAX_REQUESTS (default 24 of the 25 the House admits).
 """
 from __future__ import annotations
 
@@ -42,22 +52,41 @@ UNANIMOUS = 0.97
 LABELS = "ABCDEFGH"
 
 
+def stage_cap() -> float:
+    """Per-unit cap so that the whole Final roster fits the stage clock even if every unit hits it."""
+    stage = house.env_float("JP_STAGE_SEC", 86400.0)
+    reserve = house.env_float("JP_STAGE_RESERVE_SEC", 1800.0)      # image pull + platform slack
+    roster = max(1.0, house.env_float("JP_ROSTER_ASSUME", 150.0))
+    overhead = house.env_float("JP_UNIT_OVERHEAD_SEC", 30.0)       # container create/teardown per unit
+    return max(120.0, (stage - reserve) / roster - overhead)
+
+
+def unit_budget(card_timeout: float, c: dict | None = None) -> float:
+    c = c or cfg()
+    margin = max(c["card_margin"], 0.10 * card_timeout)
+    return max(60.0, min(c["unit_budget"], card_timeout - margin))
+
+
 def cfg() -> dict:
+    k = max(1, min(5, house.env_int("JP_CANDIDATES", 5)))
     return {
-        "unit_budget": house.env_float("JP_UNIT_BUDGET_SEC", 510.0),
-        "soft_budget": house.env_float("JP_SOFT_BUDGET_SEC", 330.0),
-        "card_margin": house.env_float("JP_CARD_MARGIN_SEC", 60.0),
-        "max_requests": house.env_int("JP_MAX_REQUESTS", 23),
+        "unit_budget": house.env_float("JP_UNIT_BUDGET_SEC", stage_cap()),
+        "soft_budget": house.env_float("JP_SOFT_BUDGET_SEC", 420.0),
+        "soft_frac": house.env_float("JP_SOFT_FRAC", 0.72),
+        "card_margin": house.env_float("JP_CARD_MARGIN_SEC", 120.0),
+        "max_requests": max(1, min(24, house.env_int("JP_MAX_REQUESTS", 24))),
+        "judge_reserve": house.env_int("JP_JUDGE_RESERVE", 4),
+        "judge_rounds": max(0, min(3, house.env_int("JP_JUDGE_ROUNDS", 2))),
         "call_timeout": house.env_float("JP_CALL_TIMEOUT_SEC", 150.0),
         "think_timeout": house.env_float("JP_THINK_TIMEOUT_SEC", 200.0),
         "run_timeout": house.env_float("JP_RUN_TIMEOUT_SEC", 180.0),
         "cand_repairs": house.env_int("JP_CAND_REPAIRS", 2),
         "max_repairs": house.env_int("JP_MAX_REPAIRS", 6),
-        "candidates": max(1, min(4, house.env_int("JP_CANDIDATES", 3))),
+        "candidates": k,
         "think": house.env_int("JP_THINK", 1) == 1,
         "judge": house.env_int("JP_JUDGE", 1) == 1,
-        "mem_gib": house.env_float("JP_MEM_GIB", 24.0),
-        "threads": house.env_int("JP_THREADS", 6),
+        "mem_gib": house.env_float("JP_MEM_GIB", min(24.0, 100.0 / k)),     # k scripts may run at once (128 GiB unit)
+        "threads": house.env_int("JP_THREADS", max(3, 16 // k)),
     }
 
 
@@ -134,9 +163,9 @@ class Solver:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.unit = load_unit(self.task_dir)
         u = self.pu = self.unit
-        budget = min(self.c["unit_budget"], max(120.0, u.timeout_sec - self.c["card_margin"]))
+        budget = unit_budget(u.timeout_sec, self.c)
         self.deadline = self.t0 + budget
-        self.soft_deadline = self.t0 + min(self.c["soft_budget"], 0.68 * budget)
+        self.soft_deadline = self.t0 + min(self.c["soft_budget"], self.c["soft_frac"] * budget)
         if self.arm_alarm is not None:
             try:
                 self.arm_alarm(budget)
@@ -212,7 +241,7 @@ class Solver:
         if self.abort:
             return
         notes = self.notes if cand.with_notes else None
-        temp = (house.TEMPERATURE, house.TEMPERATURE, 0.6, 0.8)[cand.idx]
+        temp = (house.TEMPERATURE, house.TEMPERATURE, 0.6, 0.35, 0.8)[min(cand.idx, 4)]
         msgs = prompts.code_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables)
         src = self.get_code(msgs, tag=f"code{cand.label}", temperature=temp, notes=notes)
         if not src:
@@ -221,6 +250,8 @@ class Solver:
         while cand.problems and cand.rounds < self.c["cand_repairs"]:
             if self.soft_left() <= 0 and self.any_clean():
                 break
+            if self.any_clean() and self.c["judge"] and self.client.left <= self.c["judge_reserve"]:
+                break          # keep requests for the judge -> fix stage
             if not self.client.can_call(reserve=self.client.expected_call_seconds() + RUN_RESERVE_S + 20.0):
                 break
             new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, cand.src, self.report(cand.res, cand.problems),
@@ -369,6 +400,7 @@ class Solver:
         fps = {c.label: fingerprint(c.dir, names) for c in clean}
         chosen = clean[0]
         unanimous = False
+        score: dict[str, float] = {}
         if len(clean) >= 2:
             score = {c.label: 0.0 for c in clean}
             worst = 1.0
@@ -386,45 +418,73 @@ class Solver:
             self._promote(chosen, "most agreed-upon clean candidate")
         if unanimous or not self.c["judge"]:
             return
+        # judge -> fix rounds. Round 1 audits the clean candidates (most agreed-upon first); a later
+        # round runs only when the previous fix changed the outputs, and adjudicates old vs fixed.
+        ranked = [chosen] + sorted((c for c in clean if c is not chosen), key=lambda c: (-score.get(c.label, 0.0), c.idx))             if len(clean) >= 2 else [chosen]
+        shown = ranked[:4]
+        fix_labels = iter("FGH")
+        for rnd in range(1, self.c["judge_rounds"] + 1):
+            got = self.judge_and_fix(rnd, chosen, shown, fps, next(fix_labels, "H"))
+            if got is None:
+                return
+            fixed, base = got
+            fps[fixed.label] = fingerprint(fixed.dir, names)
+            same = agreement(fps[fixed.label], fps[base.label]) >= 0.999
+            self.stage_log.append(f"fix{rnd} {fixed.label} vs {base.label} {'same' if same else 'changed'}")
+            prev, chosen = base, fixed
+            if same:
+                return
+            shown = [prev, fixed]
+
+    def judge_and_fix(self, rnd: int, chosen: Cand, shown: list[Cand], fps: dict, fix_label: str) -> tuple[Cand, Cand] | None:
+        """One judge call (thinking ON) over `shown`, then one fix call on its pick. Returns the fixed
+        candidate when it ran clean and was promoted, else None (the current best stays in place)."""
         cl = self.client
         need = max(90.0, cl.expected_call_seconds()) + cl.expected_call_seconds() + RUN_RESERVE_S + 30.0
-        if self.soft_left() <= 0 or not cl.can_call(reserve=need):
-            self.log(f"skip judge: soft {self.soft_left():.0f}s, hard {self.remaining():.0f}s, {cl.left} requests left")
-            return
-        shown = sorted(clean, key=lambda c: c.idx)[:3]
+        if self.soft_left() <= 0 or cl.left < 2 or not cl.can_call(reserve=need):
+            self.log(f"skip judge{rnd}: soft {self.soft_left():.0f}s, hard {self.remaining():.0f}s, {cl.left} requests left")
+            return None
+        shown = sorted(shown, key=lambda c: c.idx)
         diff = diff_table({c.label: fps[c.label] for c in shown}) if len(shown) >= 2 else "(only one candidate ran successfully)"
         payload = [{"label": c.label, "code": c.src, "previews": preview_outputs(c.dir, self.contract.deliverables, budget=5000),
                     "stdout": (c.res.stdout_tail if c.res else "")[-1500:]} for c in shown]
         r = cl.chat(prompts.judge_messages(self.pu, self.out_posix, payload, diff, self.notes), max_tokens=house.MAX_OUTPUT_TOKENS,
-                    tag="judge", **self.think_kw())
+                    tag=f"judge{rnd}", **self.think_kw())
         verdict = house.extract_json(r.content) if r.ok else None
         if not isinstance(verdict, dict):
-            self.log(f"judge: {r.status} ({r.seconds:.0f}s, finish={r.finish}): no verdict; keeping {chosen.label}")
-            return
+            self.log(f"judge{rnd}: {r.status} ({r.seconds:.0f}s, finish={r.finish}): no verdict; keeping {chosen.label}")
+            return None
         best_label = str(verdict.get("best") or "").strip().upper()[:1]
         errors = [str(e)[:800] for e in (verdict.get("errors") or []) if str(e).strip()][:8]
         pick = next((c for c in shown if c.label == best_label), None)
-        self.log(f"judge: {r.status} ({r.seconds:.0f}s): best={best_label or '?'} errors={len(errors)}")
+        self.log(f"judge{rnd}: {r.status} ({r.seconds:.0f}s): best={best_label or '?'} errors={len(errors)}")
         if pick is not None and pick is not chosen:
             chosen = pick
-            self._promote(chosen, "judge's pick")
+            self._promote(chosen, f"judge{rnd}'s pick")
         if not errors:
-            return
+            return None
         need = cl.expected_call_seconds() + RUN_RESERVE_S + 15.0
         if not cl.can_call(reserve=need):
-            self.log("skip fix: not enough time/requests")
-            return
+            self.log(f"skip fix{rnd}: not enough time/requests")
+            return None
         src = self.get_code(prompts.fix_messages(self.pu, self.out_posix, chosen.src, errors, self.run_limit(), self.notes,
-                                                 self.contract.deliverables), tag="fix")
+                                                 self.contract.deliverables), tag=f"fix{rnd}")
         if not src:
-            return
-        fixed = Cand(9, "F", with_notes=True)
+            return None
+        fixed = Cand(9 + rnd, fix_label, with_notes=True)
         self.cands.append(fixed)
-        self.try_cand(fixed, src, tag="fix-run")
+        self.try_cand(fixed, src, tag=f"fix{rnd}-run")
+        if not fixed.clean and fixed.src and cl.can_call(reserve=cl.expected_call_seconds() + RUN_RESERVE_S + 20.0)                 and self.soft_left() > 0:
+            new = self.get_code(prompts.repair_messages(self.pu, self.out_posix, fixed.src, self.report(fixed.res, fixed.problems),
+                                                        self.run_limit(), self.notes, self.contract.deliverables), tag=f"fix{rnd}-repair")
+            if new:
+                fixed.rounds += 1
+                self.try_cand(fixed, new, tag=f"fix{rnd}-repair-run")
         if fixed.clean:
-            self._promote(fixed, "judge's defects fixed")
-        else:
-            self.log("fix: the corrected script did not run clean; kept " + chosen.label)
+            self._promote(fixed, f"judge{rnd}'s defects fixed")
+            return fixed, chosen
+        self.log(f"fix{rnd}: the corrected script did not run clean; kept " + chosen.label)
+        return None
 
     def repair_more(self, cand: Cand) -> None:
         rounds = 0

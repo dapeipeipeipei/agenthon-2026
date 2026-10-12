@@ -87,10 +87,19 @@ def load_unit(task_dir: Path) -> Unit:
     except Exception:  # noqa: BLE001
         card = {}
     unit_id = str((card.get("task") or {}).get("id") or task_dir.name)
+    # Final cards: 600-2400 s (hub#2, 2026-10-12). A card without a readable value gets the Final's
+    # minimum, never more. JP_TEST_CARD_TIMEOUT exists only for the local harness (simulate Final cards).
     try:
-        timeout = float((card.get("agent") or {}).get("timeout_sec") or 1800.0)
+        timeout = float((card.get("agent") or {}).get("timeout_sec") or 600.0)
     except (TypeError, ValueError):
-        timeout = 1800.0
+        timeout = 600.0
+    if not (timeout > 0):
+        timeout = 600.0
+    try:
+        if os.environ.get("JP_TEST_CARD_TIMEOUT"):
+            timeout = float(os.environ["JP_TEST_CARD_TIMEOUT"])
+    except ValueError:
+        pass
     canaries = set()
     g = (card.get("contamination") or {}).get("canary_guid")
     if isinstance(g, str) and UUID_RE.fullmatch(g.strip()):

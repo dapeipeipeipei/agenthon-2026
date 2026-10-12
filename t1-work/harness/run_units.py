@@ -146,6 +146,9 @@ def main() -> int:
     ap.add_argument("--agent-env", nargs="*", default=[], help="extra KEY=VALUE for the agent")
     ap.add_argument("--think-delay", type=float, default=0.0, help="mock latency of thinking-on replies (s)")
     ap.add_argument("--code-delay", type=float, default=0.0, help="mock latency of other replies (s)")
+    ap.add_argument("--think-delay-max", type=float, default=0.0, help="with --think-delay: uniform latency range")
+    ap.add_argument("--code-delay-max", type=float, default=0.0, help="with --code-delay: uniform latency range")
+    ap.add_argument("--jobs", type=int, default=1, help="units run concurrently (latency simulations)")
     ap.add_argument("--mock-host", default=None, help="bind address of the mock (default 127.0.0.1; 0.0.0.0 for docker)")
     args = ap.parse_args()
 
@@ -160,7 +163,7 @@ def main() -> int:
     out_root = Path(args.out_root).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
 
-    env = {"JP_UNIT_BUDGET_SEC": str(args.budget)}
+    env = {"JP_UNIT_BUDGET_SEC": str(args.budget)} if args.budget > 0 else {}   # --budget 0: the agent's own formula
     for kv in args.agent_env:
         k, _, v = kv.partition("=")
         env[k] = v
@@ -169,7 +172,8 @@ def main() -> int:
         host = args.mock_host or ("0.0.0.0" if args.docker_image else "127.0.0.1")
         if args.mode != "down":
             mh.MODE["m"] = args.mode
-            mh.DELAY.update({"think": args.think_delay, "code": args.code_delay})
+            mh.DELAY.update({"think": args.think_delay, "code": args.code_delay,
+                             "think_max": args.think_delay_max, "code_max": args.code_delay_max})
             srv = mh.start(0, host)
             port = srv.server_address[1]
         else:
@@ -177,13 +181,14 @@ def main() -> int:
         reach = "host.docker.internal" if args.docker_image else "127.0.0.1"
         env.update({"MODEL_ENDPOINT": f"http://{reach}:{port}", "MODEL_TOKEN": mh.TOKEN, "MODEL_NAME": "mock-house"})
 
-    results = []
-    bad = 0
     print(f"{'unit':52s} {'rc':>3s} {'secs':>6s} {'req':>3s} {'files':>5s}  verdict")
-    for u in units:
+    import concurrent.futures as cf
+
+    def one(u: Path) -> dict:
         out = out_root / u.name
-        mh.SEEN.clear()
-        rc, secs, so, se = run_one(u, out, env, args.docker_image, args.budget)
+        if args.jobs <= 1:
+            mh.SEEN.clear()
+        rc, secs, so, se = run_one(u, out, env, args.docker_image, args.budget if args.budget > 0 else 2400.0)
         summary = None
         m = re.search(r"^JP_SUMMARY (\{.*\})$", so, re.M)
         if m:
@@ -192,10 +197,9 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 summary = None
         probs = tree_problems(out)
-        # deliverables the task text names (the floor the organizers' conformance.sh checks)
         want = regex_deliverables((u / "instruction.md").read_text(encoding="utf-8", errors="replace"))
         have = [n for n in want if (out / n).is_file()]
-        reqs = summary.get("requests") if summary else len(mh.SEEN)
+        reqs = summary.get("requests") if summary else (len(mh.SEEN) if args.jobs <= 1 else None)
         n_files = sum(1 for _r, _d, fs in os.walk(out) for _ in fs)
         verdict = []
         if rc != 0:
@@ -209,12 +213,15 @@ def main() -> int:
         if summary and summary.get("final_problems"):
             verdict.append("unresolved: " + str(summary["final_problems"][0])[:70].replace("\n", " "))
         ok = not any(v.startswith(("CRASH", "TREE", "NONE")) or "requests" in v for v in verdict)
-        bad += 0 if ok else 1
         (out_root / f"{u.name}.log").write_text(so[-20000:] + "\n--- stderr ---\n" + se[-8000:], encoding="utf-8")
-        results.append({"unit": u.name, "rc": rc, "seconds": round(secs, 1), "requests": reqs, "files": n_files,
-                        "ok": ok, "verdict": verdict, "deliverables_named": want, "deliverables_written": have,
-                        "summary": summary})
         print(f"{u.name:52s} {rc:3d} {secs:6.1f} {str(reqs):>3s} {n_files:5d}  {'ok' if ok else 'FAIL'} {' | '.join(verdict)}", flush=True)
+        return {"unit": u.name, "rc": rc, "seconds": round(secs, 1), "requests": reqs, "files": n_files,
+                "ok": ok, "verdict": verdict, "deliverables_named": want, "deliverables_written": have,
+                "summary": summary}
+
+    with cf.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
+        results = list(ex.map(one, units))
+    bad = sum(0 if r["ok"] else 1 for r in results)
     (out_root / "results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     n = len(results)
     print(f"\nunits {n}   ok {n - bad}   failed {bad}   mode={args.mode if not args.offline else 'offline'}"

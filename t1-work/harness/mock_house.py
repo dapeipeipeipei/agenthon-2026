@@ -34,6 +34,7 @@ import argparse
 import json
 import re
 import sys
+import random
 import threading
 import os
 import time
@@ -259,6 +260,9 @@ class H(BaseHTTPRequestHandler):
             SEEN.append(rec)
         think = bool((body.get("chat_template_kwargs") or {}).get("enable_thinking"))
         d = DELAY["think"] if think else DELAY["code"]
+        hi = DELAY.get("think_max" if think else "code_max") or 0.0
+        if hi > d:
+            d = random.uniform(d, hi)       # latency range (simulated slow House)
         if d > 0:
             time.sleep(d)
         status, content, finish = reply_for(body)

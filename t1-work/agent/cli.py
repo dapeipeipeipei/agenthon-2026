@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 
 VERB = "solve"
-ALARM_GRACE_S = 45.0
+ALARM_GRACE_S = 30.0
 
 
 class _Alarm(Exception):
