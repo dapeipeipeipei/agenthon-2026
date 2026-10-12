@@ -5,6 +5,22 @@
 两道由假 House 给出真实解的题（`t1-EXAMPLE-bs-greeks-pde`、`t1-zero-coupon-bootstrapping`）**通过各自的官方 checker**，
 证明「计划 → 生成 → 运行 → 自检 → 复审 → 落盘」整条链是通的。**真实答题质量只有上传 Dev 才知道**（House 只能从评测容器里访问）。
 
+## 10-12 v4f（最终决赛版 = v3f 调度 + v4 答案质量；分支 `t1/v4f` / `cand/t1-v4f`）
+
+**合并**：`t1/final`(c0b6b7d) ← `t1/v4-quality`(801ae16)。唯一冲突在 `loop.py: cfg()`：保留 v3f 按候选数缩放的 `mem_gib=min(24,100/k)`、`threads=max(3,16//k)`（5 个并行候选），
+并加入 v4 开关 `JP_NOOP_RETRY/JP_SKELETON/JP_CODE_CONTEXT/JP_CAND_SEEDS/JP_SYNTAX_REPAIR`（默认全开）。自动合并部分已核对：
+v4 的版式软检查（`AUTOMATED LAYOUT CHECK`）进入每一轮 `judge_and_fix()` 的裁判载荷；`repair_more/try_cand/get_code/report` 保持 v4 行为；
+5 个候选各用独立种子（`SEED + 101·idx`，修复轮再 `+7919·round`）；`judge_and_fix` 内的修正再修复也带上软问题和 traceback 源码行。预算/≤24 请求/2 轮裁判不变。
+
+**本地（源码，假 House）**：selftest ok；86 题 good 模式 86/86 exit 0、输出树合规；两道 oracle 过官方 checker（bs-greeks-pde 14/15 pass、zero-coupon 6/6）；
+退化模式 flaky/truncated/think/garbage/500/429/401/413/slow/down/offline 全部 3/3。
+**决赛节奏**（disagree、card 600、思考 60–90 s、代码 30–60 s、86 题 16 并发）：86/86，单题 中位 284 / p90 324 / 最大 389 s，距 card 最小余量 211 s；请求 中位 13 / 最大 20。
+
+**镜像** `ghcr.io/dapeipeipeipei/jinpei-t1@sha256:51e3e3a61175e9e451c2f690f2c3b0403d07a656f6641dfa011a388ee21ea2f2`
+（CI run 38217731440 @ 5e0b812，tag `5e0b8120f24a`/`ci`；digest 取自注册表 `docker-content-digest`；匿名拉取 PASS，360.5 MB）。
+CI：镜像内 86/86、oracle 过 checker、10 种退化模式全过、决赛节奏 137/340/136 s（≤540）、请求 6/18/6。
+描述文件 `submission/submission.v4f.final.json`（`agenthon2026-coding-final`）/ `submission.v4f.json`（Dev 孪生），已封签校验。
+
 ## 10-12 v3f（决赛版；分支 `t1/final` / `cand/t1-v3f`）
 
 **决赛限制**（hub#2 10-12 帖、track1#31）：一次上传；整卷 **24 h**（86,400 s，含开头一次拉镜像，排队不算）；
