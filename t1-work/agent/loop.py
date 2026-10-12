@@ -310,9 +310,9 @@ class Solver:
             return new
         if not self.client.can_call(reserve=self.client.expected_call_seconds() + RUN_RESERVE_S + 20.0):
             return None
-        self.log(f"{tag}: the reply repeats a script already tried; asking again with a different seed")
-        msgs[-1]["content"] += prompts.NOOP_NOTE
-        new = self.get_code(msgs, tag=tag + "+again", temperature=max(0.7, temp), notes=notes,
+        self.log(f"{tag}: the reply repeats a script already tried; asking for a fresh script that avoids the failure")
+        msgs = prompts.rewrite_messages(self.pu, self.out_posix, notes, self.run_limit(), self.contract.deliverables, rep)
+        new = self.get_code(msgs, tag=tag + "+fresh", temperature=max(0.6, temp), notes=notes,
                             seed=self.cand_seed(cand, 50 + cand.rounds))
         if not new or _norm_code(new) in cand.seen:
             self.log(f"{tag}: still no change; giving up on this repair")
