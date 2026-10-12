@@ -1,0 +1,242 @@
+# Track 3 P6 (t3-work/Dockerfile.p6): P1's hot path (static binary, FROM scratch) + P3's
+# NVIDIA_DRIVER_CAPABILITIES=utility + P5's trimmed/packed Python fallback as ONE xz tarball that the
+# fallback launcher unpacks on demand under the output directory. Checks:
+#   * image shape (label 2.0, USER 65534, no VOLUME/ENTRYPOINT, env), file count and bytes;
+#   * all 71 public units with the platform flags: rows + sidecar arithmetic, tables equal to the
+#     current static image's, official g0/g1; a second pass with the fallback disabled proves no
+#     public unit falls back;
+#   * synthetic suite (kernel edges + fallback, simulate vs simulate-py, table-level) in P6 and in
+#     P3 (untrimmed fallback); the Python-engine outputs of the two must be byte-identical;
+#   * the fallback scenarios (and a batch of them) run as units with the full platform flags
+#     (read-only rootfs, noexec /tmp, cap-drop ALL, uid 65534): byte-identical to P3 under the same
+#     flags, and nothing but the engine's files left in /output;
+#   * push, anonymous pull check (digest from the registry's docker-content-digest header).
+name: t3-p6
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [t3/p6]
+    paths:
+      - ".github/workflows/t3-p6.yml"
+      - "t3-work/Dockerfile.p6"
+      - "t3-work/probe/simulate-py-p6"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/dapeipeipeipei/jinpei-t3
+  STATIC: ghcr.io/dapeipeipeipei/jinpei-t3@sha256:c3b318b87418b4ed229fc03017583fb9c63d1046adc4338b2d9c21d0efb1545e
+  P3: ghcr.io/dapeipeipeipei/jinpei-t3@sha256:2c861e4565991115007e0e7ad8183de10ae88325848403d7955799498bb2cb0d
+  P1: ghcr.io/dapeipeipeipei/jinpei-t3@sha256:3b0f66a40a655dec6deafb725ce38fa7b652f0e830d0b4b486a84ef178d6c5bf
+  TOOLKIT: "qfbench2-common @ https://github.com/Agenthon-2026/Agenthon2026-public/archive/refs/tags/v2.6.0.tar.gz#subdirectory=common"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  p6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Agenthon-2026/track3-simulation-public
+          ref: main
+          path: track3-simulation-public
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install toolkit v2.6.0 + Track 3 scorer
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$TOOLKIT" "pyarrow>=15" "pandas>=2"
+          pip install --no-deps -e track3-simulation-public
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build P6
+        run: |
+          set +e
+          docker buildx build --platform linux/amd64 --load --progress=plain -t t3-p6:ci -f t3-work/Dockerfile.p6 t3-work > build.log 2>&1
+          rc=$?
+          set -e
+          grep -E "before:|after:|modules imported|trim check|packed|pack check|strip|outputs changed|no longer|TRIMERR|fallback tree|P6 image|fallback scenarios|launcher\+unpack|batch of|nothing left|ERROR|Traceback|Error|differ|cmp:" build.log || true
+          if [ $rc != 0 ]; then tail -n 80 build.log; exit 1; fi
+          docker image inspect t3-p6:ci >/dev/null
+          docker pull -q "$STATIC"; docker pull -q "$P3"; docker pull -q "$P1"
+          for i in t3-p6:ci "$P1" "$P3" "$STATIC"; do
+            echo "$i size=$(docker image inspect "$i" --format '{{ .Size }}') layers=$(docker image inspect "$i" --format '{{ len .RootFS.Layers }}') user=$(docker image inspect "$i" --format '{{ .Config.User }}') env=$(docker image inspect "$i" --format '{{ json .Config.Env }}')"
+          done | tee image-shapes.txt
+          i=t3-p6:ci
+          test "$(docker image inspect $i --format '{{ index .Config.Env }}' | grep -c NVIDIA_DRIVER_CAPABILITIES=utility)" = "1"
+          test "$(docker image inspect $i --format '{{ index .Config.Env }}' | grep -c NVIDIA_VISIBLE_DEVICES)" = "0"
+          test "$(docker image inspect $i --format '{{ index .Config.Labels "qfbench2.interface_version" }}')" = "2.0"
+          test "$(docker image inspect $i --format '{{ index .Config.Labels "qfbench2.track" }}')" = "simulation"
+          test "$(docker image inspect $i --format '{{ .Config.User }}')" = "65534:65534"
+          test "$(docker image inspect $i --format '{{ json .Config.Volumes }}')" = "null"
+          test "$(docker image inspect $i --format '{{ json .Config.Entrypoint }}')" = "null"
+          docker run --rm --network=none --read-only --user 65534:65534 $i simulate --help | head -2
+          docker run --rm --network=none --read-only --user 65534:65534 $i simulate-batch --help | head -2
+          docker run --rm --network=none --read-only $i | head -2
+          # what is in the image: regular files, names, bytes (docker export = the container's rootfs view)
+          for v in "p6=t3-p6:ci" "p1=$P1" "p3=$P3" "static=$STATIC"; do
+            cid=$(docker create "${v#*=}"); docker export "$cid" > rootfs.tar; docker rm "$cid" >/dev/null
+            python - "${v%%=*}" <<'PY' | tee -a image-contents.txt
+          import sys, tarfile
+          t = tarfile.open("rootfs.tar")
+          m = t.getmembers()
+          reg = [x for x in m if x.isreg()]
+          hard = [x for x in m if x.islnk()]
+          print(f"{sys.argv[1]:7s} entries={len(m):6d} regular_files={len(reg):6d} hardlinks={len(hard):3d} "
+                f"dirs={sum(x.isdir() for x in m):5d} symlinks={sum(x.issym() for x in m):5d} bytes={sum(x.size for x in reg):11d}")
+          if sys.argv[1] == "p6":
+              for x in m:
+                  print(f"    {x.type.decode() if isinstance(x.type, bytes) else x.type} {x.mode:o} {x.size:11d} {x.name}" + (f" -> {x.linkname}" if x.linkname else ""))
+          PY
+            rm -f rootfs.tar
+          done
+
+      - name: Current static image on all 71 units (reference tables)
+        run: |
+          mkdir -p ci-out
+          python t3-work/tools/ci_run_units.py --image "$STATIC" --units track3-simulation-public/units --out-root ci-out/static --timeout 300 | tail -3
+
+      - name: P6 on all 71 units (platform flags)
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-p6:ci --units track3-simulation-public/units --out-root ci-out/p6 --timeout 300 2>&1 | tee ci-out/run-p6.txt | tail -3
+          grep -q "^71/71 ran" ci-out/run-p6.txt
+          python t3-work/tools/check_hashes.py --rows-only --units track3-simulation-public/units --out-root ci-out/p6 --timing ci-out/p6/timing.json | tail -3
+          python t3-work/tools/check_content.py --units track3-simulation-public/units --out-root ci-out/p6 --ref-root ci-out/static | tail -3
+          test -z "$(find ci-out/p6 -name '.jpsim-fb*' | head -1)"
+
+      - name: "P6 on all 71 units with the fallback disabled (proves no public unit falls back)"
+        run: |
+          python t3-work/tools/ci_run_units.py --image t3-p6:ci --units track3-simulation-public/units --out-root ci-out/p6-nofb --timeout 300 --env JPSIM_PY_VERB=/nonexistent 2>&1 | tee ci-out/run-p6-nofb.txt | tail -2
+          grep -q "^71/71 ran" ci-out/run-p6-nofb.txt
+
+      - name: Official g0/g1 gates on P6 outputs
+        run: |
+          python - <<'PY'
+          import pathlib
+          from qfbench2_track_simulation import scoring
+          units = pathlib.Path("track3-simulation-public/units")
+          bad = []
+          out = pathlib.Path("ci-out") / "p6"
+          n = 0
+          for u in sorted(units.iterdir()):
+              ctx = {"unit_dir": str(u), "output_dir": str(out / u.name)}
+              scoring.build_developer_verifier(ctx)
+              for name, gate in scoring._GATES[:2]:
+                  r = gate(ctx)
+                  if not r.passed:
+                      bad.append((u.name, name, r.detail)); break
+              n += 1
+          print(f"g0/g1 on {n} units; failures:", bad or "none")
+          raise SystemExit(1 if bad or n != 71 else 0)
+          PY
+
+      - name: "Synthetic suite in P6 (kernel edges + on-demand unpacked fallback, table-level)"
+        run: |
+          python t3-work/tools/synthetic_check.py --out "$PWD/ci-out/syn6" --pythonpath t3-work/engine --image t3-p6:ci --content | tee ci-out/synthetic-p6.txt
+          test -z "$(find ci-out/syn6 -name '.jpsim-fb*' | head -1)"
+
+      - name: "Synthetic suite in P3 (untrimmed fallback); Python-engine outputs P6 == P3 byte for byte"
+        run: |
+          python t3-work/tools/synthetic_check.py --out "$PWD/ci-out/syn3" --pythonpath t3-work/engine --image "$P3" --content | tee ci-out/synthetic-p3.txt
+          python - <<'PY'
+          import hashlib, pathlib
+          a, b = pathlib.Path("ci-out/syn6"), pathlib.Path("ci-out/syn3")
+          def files(r):
+              return {str(p.relative_to(r)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(r.rglob("*.parquet"))
+                      if p.relative_to(r).parts[0] in ("py1", "py2", "k")}
+          fa, fb = files(a), files(b)
+          diff = sorted(k for k in fa.keys() | fb.keys() if fa.get(k) != fb.get(k))
+          print(f"parquet files: P6 {len(fa)}, P3 {len(fb)}; differing: {diff or 'none'}")
+          raise SystemExit(1 if diff or not fa else 0)
+          PY
+
+      - name: "Fallback units under the full platform flags (read-only, noexec /tmp, cap-drop, uid 65534): P6 vs P3"
+        run: |
+          python - <<'PY'
+          import importlib.util, json, pathlib
+          spec = importlib.util.spec_from_file_location("syn", "t3-work/tools/synthetic_check.py")
+          syn = importlib.util.module_from_spec(spec); spec.loader.exec_module(syn)
+          root = pathlib.Path("syn-units"); root.mkdir()
+          fbs = [(n, sc) for n, sc, fb, can in syn.make_scenarios() if fb and can]
+          for n, sc in fbs:
+              (root / n).mkdir(); (root / n / "scenario.json").write_text(json.dumps(sc, indent=2))
+          b = root / "syn-fb-batch"; (b / "scenarios").mkdir(parents=True)
+          for i, (n, sc) in enumerate(fbs):
+              (b / "scenarios" / f"sub_{i:02d}.json").write_text(json.dumps(dict(sc, scenario_id=f"bbbbbbbb-0000-4000-8000-00000000000{i}"), indent=2))
+          (b / "batch.json").write_text(json.dumps({"n": len(fbs)}))
+          print("fallback units:", sorted(p.name for p in root.iterdir()))
+          PY
+          python t3-work/tools/ci_run_units.py --image t3-p6:ci --units syn-units --out-root ci-out/fb6 --timeout 600 2>&1 | tee ci-out/run-fb6.txt
+          python t3-work/tools/ci_run_units.py --image "$P3" --units syn-units --out-root ci-out/fb3 --timeout 600 2>&1 | tee ci-out/run-fb3.txt
+          n=$(ls syn-units | wc -l)
+          grep -q "^$n/$n ran" ci-out/run-fb6.txt
+          grep -q "^$n/$n ran" ci-out/run-fb3.txt
+          python - <<'PY'
+          import hashlib, pathlib
+          a, b = pathlib.Path("ci-out/fb6"), pathlib.Path("ci-out/fb3")
+          def listing(r):
+              return sorted(str(p.relative_to(r)) for p in r.rglob("*") if not p.name.startswith("timing"))
+          la, lb = listing(a), listing(b)
+          print("P6 output trees:", la)
+          assert la == lb, ("output trees differ", la, lb)
+          assert not [x for x in la if ".jpsim-fb" in x], "fallback unpack directory left behind"
+          diff = [x for x in la if x.endswith(".parquet") and
+                  hashlib.sha256((a / x).read_bytes()).digest() != hashlib.sha256((b / x).read_bytes()).digest()]
+          print(f"parquet files {sum(x.endswith('.parquet') for x in la)}; differing P6 vs P3: {diff or 'none'}")
+          raise SystemExit(1 if diff else 0)
+          PY
+
+      - name: Push P6 and verify the anonymous pull
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          tag="${GITHUB_SHA::12}-p6"
+          docker tag t3-p6:ci "$IMAGE:$tag"; docker tag t3-p6:ci "$IMAGE:ci-p6"
+          docker push -q "$IMAGE:$tag"; docker push -q "$IMAGE:ci-p6"
+          docker logout ghcr.io
+          tok=$(curl -fsS "https://ghcr.io/token?scope=repository:dapeipeipeipei/jinpei-t3:pull" | python -c "import sys, json; print(json.load(sys.stdin)['token'])")
+          acc="application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json"
+          code=$(curl -s -o manifest.json -w '%{http_code}' -D headers.txt -H "Authorization: Bearer $tok" -H "Accept: $acc" "https://ghcr.io/v2/dapeipeipeipei/jinpei-t3/manifests/$tag")
+          dig=$(grep -i '^docker-content-digest:' headers.txt | tr -d '\r' | awk '{print $2}')
+          echo "anonymous manifest GET $tag -> HTTP $code; P6_TAG=$tag P6_DIGEST=$dig" | tee digests.txt
+          python -c "import json; m = json.load(open('manifest.json')); print('layers (compressed bytes):', [l['size'] for l in m['layers']])" | tee -a digests.txt
+          test "$code" = 200
+          blob=$(python -c "import json; print(json.load(open('manifest.json'))['layers'][0]['digest'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -L -H "Authorization: Bearer $tok" "https://ghcr.io/v2/dapeipeipeipei/jinpei-t3/blobs/$blob")" = 200
+          docker rmi "$IMAGE:$tag" "$IMAGE:ci-p6" >/dev/null
+          docker pull -q "$IMAGE@$dig"
+          echo "anonymous pull by digest ok"
+
+      - name: "Fixed cost (warm, docker run --rm and phases): P1 / P3 / P6 / static"
+        run: |
+          python t3-work/tools/fixed_cost_bench.py --units track3-simulation-public/units --out ci-out/bench --reps 5 \
+            --only t3-s001-price-time-priority t3-eq-deterministic-baseline t3-as01-base-mix t3-sf-01-baseline-regime t3-mp05-cancel-churn-newest \
+            --variant "p1=$P1" --variant "p3=$P3" --variant "p6=t3-p6:ci" --variant "static=$STATIC" | tee ci-out/bench.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          { echo '```'; cat digests.txt image-shapes.txt image-contents.txt 2>/dev/null | head -60; tail -n 14 ci-out/bench.txt 2>/dev/null; tail -n 14 ci-out/synthetic-p6.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: t3-p6-ci
+          path: |
+            build.log
+            image-shapes.txt
+            image-contents.txt
+            digests.txt
+            ci-out/*.txt
+            ci-out/p6/timing*.json
+            ci-out/static/timing*.json
+            ci-out/bench/*.json
+          retention-days: 30

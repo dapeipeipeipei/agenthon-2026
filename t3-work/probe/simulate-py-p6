@@ -1,0 +1,50 @@
+#!/opt/jpfb/busybox sh
+# P6 Python engine verb (fallback; the static `simulate` execs this for out-of-scope scenarios).
+# Installed as /usr/local/bin/simulate-py and (hard link) /usr/local/bin/simulate-batch-py.
+#
+# The whole relocated Python fallback (interpreter, its shared libraries, numpy/scipy/pyarrow and
+# the engine) is ONE file in the image, /opt/jpfb/fallback.tar.xz. Only when this launcher runs is it
+# unpacked, into a private directory next to the output (the output mount is the one writable
+# place that allows mapping executable code; /tmp is noexec), run from there through its own ELF
+# loader, and removed again before this launcher exits, so the unit's output tree only holds what
+# the engine wrote.
+set -u
+set -o pipefail
+B=/opt/jpfb/busybox
+case "${0##*/}" in
+  simulate-batch-py) verb=simulate-batch ;;
+  *) verb=simulate ;;
+esac
+# the output location named on the command line (--out <file> / --out-dir <dir>)
+out=
+prev=
+for a in "$@"; do
+  case "$prev" in
+    --out) out=$($B dirname "$a") ;;
+    --out-dir) out=$a ;;
+  esac
+  case "$a" in
+    --out=*) out=$($B dirname "${a#--out=}") ;;
+    --out-dir=*) out=${a#--out-dir=} ;;
+  esac
+  prev=$a
+done
+base=${JPSIM_FB_DIR:-${out:-/output}}
+$B mkdir -p "$base" || { echo "simulate-py: cannot create $base" >&2; exit 1; }
+D=$base/.jpsim-fb.$$
+trap '$B rm -rf "$D"' EXIT
+$B mkdir "$D" || { echo "simulate-py: cannot create $D" >&2; exit 1; }
+if ! $B xz -dc /opt/jpfb/fallback.tar.xz | $B tar -x -C "$D"; then
+  echo "simulate-py: unpacking the Python fallback into $D failed" >&2
+  exit 1
+fi
+export LD_LIBRARY_PATH="$D/pyfb/lib" PYTHONHOME="$D/pyfb" PYTHONPATH="$D/jpsim" LANG=C.UTF-8 \
+       PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONUTF8=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 HOME=/tmp
+"$D/pyfb/lib/ld-linux-x86-64.so.2" --library-path "$D/pyfb/lib" "$D/pyfb/bin/python3.11" -O -m jpsim.cli "$verb" "$@"
+rc=$?
+if [ "$rc" = 126 ]; then
+  echo "simulate-py: cannot execute the unpacked fallback under $base (mounted noexec?)" >&2
+fi
+$B rm -rf "$D"
+trap - EXIT
+exit "$rc"
