@@ -1,0 +1,13 @@
+# 12-unit A/B subset: the 10 units the House passed on the platform (v1/v2) + 2 short curve/option units
+t1-bs-greeks-pde
+t1-cir-bond-pricing
+t1-double-sort
+t1-earnings-surprise-calculator
+t1-interest-rate-cap-floor
+t1-merton-jump-diffusion
+t1-momentum-backtest
+t1-pca-factor-portfolio
+t1-sma-crossover-spy
+t1-variance-swap-replication
+t1-zero-coupon-bootstrapping
+t1-lookback-options
