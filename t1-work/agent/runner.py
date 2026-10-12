@@ -102,7 +102,11 @@ def _clean_stderr(text: str, scratch: Path) -> str:
     text = text.replace(scratch.as_posix(), "").replace(str(scratch), "")
     lines = [ln for ln in text.splitlines() if not re.search(r"(FutureWarning|DeprecationWarning|UserWarning: )", ln)
              or "Error" in ln]
-    return "\n".join(lines)
+    out: list[str] = []
+    for ln in lines:                       # a warning inside a loop repeats the same lines thousands of times
+        if ln not in out[-6:]:
+            out.append(ln)
+    return "\n".join(out)
 
 
 def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib: float = 40.0,
@@ -122,6 +126,8 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
         "NUMBA_NUM_THREADS": str(threads), "NUMEXPR_NUM_THREADS": str(threads), "POLARS_MAX_THREADS": str(threads),
         "LOKY_MAX_CPU_COUNT": str(threads), "ARROW_IO_THREADS": str(threads), "RAYON_NUM_THREADS": str(threads),
         "MPLBACKEND": "Agg",
+        # deprecation chatter (pandas positional __getitem__ in a loop, ...) must not bury the traceback
+        "PYTHONWARNINGS": "ignore::FutureWarning,ignore::DeprecationWarning,ignore::PendingDeprecationWarning",
         "HOME": env.get("HOME") or scratch.as_posix(),
         "MPLCONFIGDIR": env.get("MPLCONFIGDIR") or (scratch / "mpl").as_posix(),
         "NUMBA_CACHE_DIR": env.get("NUMBA_CACHE_DIR") or (scratch / "numba").as_posix(),
@@ -162,7 +168,7 @@ def run_script(code: str, scratch: Path, out_dir: Path, timeout: float, mem_gib:
         ACTIVE.pop(p.pid, None)
     secs = time.monotonic() - t0
     return RunResult(returncode=None if timed_out else p.returncode, seconds=secs,
-                     stdout_tail=_tail(out or b""), stderr_tail=_clean_stderr(_tail(err or b""), scratch),
+                     stdout_tail=_tail(out or b""), stderr_tail=_clean_stderr(_tail(err or b"", 60_000), scratch)[-TAIL_CHARS:],
                      timed_out=timed_out)
 
 
