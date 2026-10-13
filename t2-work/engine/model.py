@@ -665,3 +665,18 @@ PROFILES["v5a_h"] = replace(PROFILES["v5a"], name="v5a_h", v5_f4_width=1.5)
 PROFILES["v5b"] = replace(PROFILES["v5a"], name="v5b", v5_house=True, v5_house_q_max=0.6,
                           v5_house_split_fams=("F1", "F2", "F3", "F4"))
 PROFILES["v5b_h"] = replace(PROFILES["v5b"], name="v5b_h", v5_f4_width=1.5)
+# v5c (2026-10-13, t2-work/pseudo_final.py): the ranked Final cards are built after
+# the close by fixed rules (UST + G10 FX, horizons 2-12 business days, F4 = live risk channel or a
+# scheduled event in the window, no promised shock; track2 #4 comment 6103652999). On an unbiased
+# pseudo-Final (24k cards, as-of every 5 business days 2005-2024, 5 seeds; and the Final's own
+# late-October slot of 2005-2024) every widening / stress-side row tuned on the event-selected
+# practice cards loses to M0: F4 skew w2.0 +0.84, rev3 +0.43, skew w1.5 +0.53, F2 w1.25 +0.03.
+# v5c = M0's backbone (trailing-300 window sd, width 1, no mixture, no skew) in every family with
+# half of the trailing drift (drift 0.5 wins in every family: F1 -0.005, F2 -0.006, F3 -0.006,
+# F4 -0.008 vs drift 1; F3 already used it). Unknown family -> the M0-like default row.
+PROFILES["v5c"] = replace(PROFILES["v5a"], name="v5c",
+                          v4_family=(("default", 1.0, 0.0, 1.0, 0.0, False, 1.0),
+                                     ("F1", 1.0, 0.0, 1.0, 0.0, False, 0.5),
+                                     ("F2", 1.0, 0.0, 1.0, 0.0, False, 0.5),
+                                     ("F3", 1.0, 0.0, 1.0, 0.0, False, 0.5),
+                                     ("F4", 1.0, 0.0, 1.0, 0.0, False, 0.5)))
